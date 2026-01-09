@@ -17,6 +17,14 @@ class PengeDash {
         this.updateTheme();
         setInterval(() => this.updateTheme(), 60000); // Check every minute
 
+        // Setup offline detection
+        this.setupOfflineDetection();
+
+        // If starting offline, load cached data immediately
+        if (!navigator.onLine) {
+            this.loadCachedData();
+        }
+
         // Bind refresh button
         document.getElementById('refresh-btn').addEventListener('click', () => this.refreshAll());
 
@@ -104,6 +112,125 @@ class PengeDash {
         dashboard.addEventListener('touchend', () => {
             pulling = false;
         }, { passive: true });
+    }
+
+    // ==================== OFFLINE DETECTION & CACHING ====================
+    setupOfflineDetection() {
+        this.isOnline = navigator.onLine;
+        this.updateOfflineBanner();
+
+        window.addEventListener('online', () => {
+            this.isOnline = true;
+            this.updateOfflineBanner();
+            // Auto-refresh when back online
+            this.refreshAll();
+        });
+
+        window.addEventListener('offline', () => {
+            this.isOnline = false;
+            this.updateOfflineBanner();
+            // Load cached data when offline
+            this.loadCachedData();
+        });
+    }
+
+    updateOfflineBanner() {
+        const banner = document.getElementById('offline-banner');
+        if (!banner) return;
+
+        if (!this.isOnline) {
+            const cachedTime = localStorage.getItem('pengedash-cache-time');
+            if (cachedTime) {
+                const ago = this.getTimeAgo(new Date(parseInt(cachedTime)));
+                banner.querySelector('.offline-text').textContent = `Offline - data from ${ago}`;
+            }
+            banner.style.display = 'flex';
+        } else {
+            banner.style.display = 'none';
+        }
+    }
+
+    cacheData(key, data) {
+        try {
+            localStorage.setItem(`pengedash-${key}`, JSON.stringify(data));
+            localStorage.setItem('pengedash-cache-time', Date.now().toString());
+        } catch (e) {
+            // Handle QuotaExceededError - clear old cache and retry
+            if (e.name === 'QuotaExceededError' || e.code === 22) {
+                console.warn('Storage quota exceeded, clearing old cache...');
+                this.clearOldCache();
+                try {
+                    localStorage.setItem(`pengedash-${key}`, JSON.stringify(data));
+                    localStorage.setItem('pengedash-cache-time', Date.now().toString());
+                } catch (e2) {
+                    console.error('Cache storage failed after cleanup:', e2);
+                }
+            } else {
+                console.warn('Cache storage failed:', e);
+            }
+        }
+    }
+
+    getCachedData(key) {
+        try {
+            const data = localStorage.getItem(`pengedash-${key}`);
+            return data ? JSON.parse(data) : null;
+        } catch (e) {
+            console.warn('Cache retrieval failed:', e);
+            return null;
+        }
+    }
+
+    clearOldCache() {
+        // Remove all pengedash cache entries to free up space
+        const keysToRemove = [];
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && key.startsWith('pengedash-') && key !== 'pengedash-destinations' && key !== 'pengedash-favorite-journeys') {
+                keysToRemove.push(key);
+            }
+        }
+        keysToRemove.forEach(key => localStorage.removeItem(key));
+        console.log('Cleared', keysToRemove.length, 'cache entries');
+    }
+
+    loadCachedData() {
+        // Load weather from cache
+        const cachedWeather = this.getCachedData('weather');
+        if (cachedWeather) {
+            this.displayWeather(cachedWeather);
+            this.displayHourlyForecast(cachedWeather);
+            if (cachedWeather.daily) {
+                this.displaySunTimes(cachedWeather);
+            }
+            // Validate weather_code exists and is a number before applying background
+            if (cachedWeather.current?.weather_code !== undefined &&
+                typeof cachedWeather.current.weather_code === 'number') {
+                this.applyWeatherBackground(cachedWeather.current.weather_code);
+            }
+        }
+
+        // Load buses from cache
+        const cachedBuses = this.getCachedData('buses');
+        if (cachedBuses) {
+            this.displayBuses(cachedBuses.east, cachedBuses.west);
+        }
+
+        // Load trains from cache
+        const cachedTrains = this.getCachedData('trains');
+        if (cachedTrains) {
+            ['PNW', 'PNE', 'BKB', 'ANR'].forEach(stationCode => {
+                if (cachedTrains[stationCode]) {
+                    this.displayStationDepartures(stationCode, cachedTrains[stationCode]);
+                }
+            });
+        }
+
+        // Load line status from cache
+        const cachedLines = this.getCachedData('lines');
+        if (cachedLines) {
+            this.displayLineStatus(cachedLines);
+        }
     }
 
     updateTheme() {
@@ -393,18 +520,33 @@ class PengeDash {
 
         try {
             const { lat, lon } = CONFIG.LOCATION;
-            // Open-Meteo: Free, no API key required - now with hourly forecast
-            const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m&hourly=temperature_2m,precipitation_probability,weather_code&timezone=Europe/London&forecast_hours=12`;
+            // Open-Meteo: Free, no API key required - now with hourly forecast + sunrise/sunset
+            const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m&hourly=temperature_2m,precipitation_probability,weather_code&daily=sunrise,sunset&timezone=Europe/London&forecast_hours=12`;
 
             const response = await fetch(url);
             const data = await response.json();
 
+            // Cache the weather data
+            this.cacheData('weather', data);
+
             this.displayWeather(data);
             this.displayHourlyForecast(data);
+            this.displaySunTimes(data);
+            this.applyWeatherBackground(data.current.weather_code);
             updateTime.textContent = this.getTimeAgo(new Date());
         } catch (error) {
             console.error('Weather fetch error:', error);
-            this.displayMockWeather();
+            // Try to load from cache first
+            const cachedWeather = this.getCachedData('weather');
+            if (cachedWeather) {
+                this.displayWeather(cachedWeather);
+                this.displayHourlyForecast(cachedWeather);
+                if (cachedWeather.daily) this.displaySunTimes(cachedWeather);
+                if (cachedWeather.current) this.applyWeatherBackground(cachedWeather.current.weather_code);
+                updateTime.textContent = 'Cached';
+            } else {
+                this.displayMockWeather();
+            }
         }
     }
 
@@ -596,6 +738,93 @@ class PengeDash {
         adviceEl.className = `clothing-advice ${tempClass}`;
     }
 
+    // ==================== SUNRISE/SUNSET ====================
+    displaySunTimes(data) {
+        const sunTimesEl = document.getElementById('sun-times');
+        const daylightEl = document.getElementById('daylight-remaining');
+
+        if (!sunTimesEl || !data.daily) return;
+
+        const sunrise = new Date(data.daily.sunrise[0]);
+        const sunset = new Date(data.daily.sunset[0]);
+        const now = new Date();
+
+        const sunriseStr = sunrise.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        const sunsetStr = sunset.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+
+        sunTimesEl.innerHTML = `
+            <span class="sun-icon">🌅</span>
+            <span class="sun-time">${sunriseStr}</span>
+            <span class="sun-divider">·</span>
+            <span class="sun-icon">🌇</span>
+            <span class="sun-time">${sunsetStr}</span>
+        `;
+
+        // Calculate daylight remaining
+        if (daylightEl) {
+            if (now < sunrise) {
+                // Before sunrise
+                const minsToSunrise = Math.round((sunrise - now) / 60000);
+                const hrs = Math.floor(minsToSunrise / 60);
+                const mins = minsToSunrise % 60;
+                daylightEl.textContent = `☀️ Sunrise in ${hrs}h ${mins}m`;
+                daylightEl.className = 'daylight-badge before-sunrise';
+            } else if (now > sunset) {
+                // After sunset
+                daylightEl.textContent = '🌙 Sun has set';
+                daylightEl.className = 'daylight-badge after-sunset';
+            } else {
+                // During the day
+                const minsRemaining = Math.round((sunset - now) / 60000);
+                const hrs = Math.floor(minsRemaining / 60);
+                const mins = minsRemaining % 60;
+                daylightEl.textContent = `☀️ ${hrs}h ${mins}m daylight left`;
+                daylightEl.className = 'daylight-badge during-day';
+            }
+        }
+    }
+
+    // ==================== DYNAMIC WEATHER BACKGROUNDS ====================
+    applyWeatherBackground(weatherCode) {
+        const weatherCard = document.querySelector('.weather-card');
+        if (!weatherCard) return;
+
+        // Remove any existing weather classes
+        weatherCard.classList.remove('weather-sunny', 'weather-cloudy', 'weather-rainy', 'weather-snow', 'weather-night', 'weather-storm');
+
+        const hour = new Date().getHours();
+        const isNight = hour >= 20 || hour < 6;
+
+        if (isNight) {
+            weatherCard.classList.add('weather-night');
+            return;
+        }
+
+        // Apply weather-based background
+        if (weatherCode === 0 || weatherCode === 1) {
+            // Clear / Mostly clear
+            weatherCard.classList.add('weather-sunny');
+        } else if (weatherCode >= 2 && weatherCode <= 3) {
+            // Partly cloudy / Overcast
+            weatherCard.classList.add('weather-cloudy');
+        } else if (weatherCode === 45 || weatherCode === 48) {
+            // Fog
+            weatherCard.classList.add('weather-cloudy');
+        } else if ((weatherCode >= 51 && weatherCode <= 67) || (weatherCode >= 80 && weatherCode <= 82)) {
+            // Drizzle / Rain / Rain showers
+            weatherCard.classList.add('weather-rainy');
+        } else if (weatherCode >= 71 && weatherCode <= 86) {
+            // Snow
+            weatherCard.classList.add('weather-snow');
+        } else if (weatherCode >= 95) {
+            // Thunderstorm
+            weatherCard.classList.add('weather-storm');
+        } else {
+            // Default
+            weatherCard.classList.add('weather-cloudy');
+        }
+    }
+
     // ==================== DARWIN TRAINS (All stations via backend) ====================
     async fetchDarwinTrains() {
         try {
@@ -608,7 +837,8 @@ class PengeDash {
                 return;
             }
 
-            // Process each station
+            // Process each station and build cache
+            const trainsCache = {};
             ['PNW', 'PNE', 'BKB', 'ANR'].forEach(stationCode => {
                 const stationData = data.stations[stationCode];
                 if (stationData && stationData.departures) {
@@ -623,15 +853,31 @@ class PengeDash {
                     })).filter(d => d.mins !== null && d.mins >= 0);
 
                     this.stationData[stationCode.toLowerCase()] = departures;
+                    trainsCache[stationCode] = departures;
                     this.displayStationDepartures(stationCode, departures);
                 }
             });
 
+            // Cache train data
+            this.cacheData('trains', trainsCache);
+
             document.getElementById('anerley-updated').textContent = this.getTimeAgo(new Date());
         } catch (error) {
             console.error('Darwin fetch error:', error);
-            // Fallback to TfL for Anerley (Overground)
-            this.fetchAnerleyTfL();
+            // Try cached data first
+            const cachedTrains = this.getCachedData('trains');
+            if (cachedTrains && Object.keys(cachedTrains).length > 0) {
+                ['PNW', 'PNE', 'BKB', 'ANR'].forEach(stationCode => {
+                    if (cachedTrains[stationCode]) {
+                        this.stationData[stationCode.toLowerCase()] = cachedTrains[stationCode];
+                        this.displayStationDepartures(stationCode, cachedTrains[stationCode]);
+                    }
+                });
+                document.getElementById('anerley-updated').textContent = 'Cached';
+            } else {
+                // Fallback to TfL for Anerley (Overground)
+                this.fetchAnerleyTfL();
+            }
         }
     }
 
@@ -899,11 +1145,21 @@ class PengeDash {
                 fetchStop(westStop)
             ]);
 
+            // Cache bus data
+            this.cacheData('buses', { east: eastArrivals, west: westArrivals });
+
             this.displayBuses(eastArrivals, westArrivals);
             document.getElementById('buses-updated').textContent = this.getTimeAgo(new Date());
         } catch (error) {
             console.error('Bus fetch error:', error);
-            this.displayMockBuses();
+            // Try cached data first
+            const cachedBuses = this.getCachedData('buses');
+            if (cachedBuses) {
+                this.displayBuses(cachedBuses.east, cachedBuses.west);
+                document.getElementById('buses-updated').textContent = 'Cached';
+            } else {
+                this.displayMockBuses();
+            }
         }
     }
 
@@ -1005,12 +1261,23 @@ class PengeDash {
             const response = await fetch(url);
             const data = await response.json();
 
+            // Cache line status
+            this.cacheData('lines', data);
+
             this.displayLineStatus(data);
             this.checkServiceAlerts(data);
             document.getElementById('lines-updated').textContent = this.getTimeAgo(new Date());
         } catch (error) {
             console.error('Line status fetch error:', error);
-            container.innerHTML = '<div class="no-data">Unable to load line status</div>';
+            // Try cached data first
+            const cachedLines = this.getCachedData('lines');
+            if (cachedLines) {
+                this.displayLineStatus(cachedLines);
+                this.checkServiceAlerts(cachedLines);
+                document.getElementById('lines-updated').textContent = 'Cached';
+            } else {
+                container.innerHTML = '<div class="no-data">Unable to load line status</div>';
+            }
         }
     }
 

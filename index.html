@@ -16,6 +16,11 @@
 </head>
 <body>
     <div class="dashboard" id="dashboard">
+        <!-- Offline Banner (hidden when online) -->
+        <div class="offline-banner" id="offline-banner" role="alert" aria-live="assertive" aria-atomic="true" style="display: none;">
+            <span class="offline-icon" aria-hidden="true">📡</span>
+            <span class="offline-text">Offline - showing cached data</span>
+        </div>
         <!-- Service Alerts Banner (hidden when no alerts) -->
         <div class="service-alert" id="service-alert" style="display: none;">
             <span class="alert-icon">⚠️</span>
@@ -73,6 +78,17 @@
                         <span class="value" id="wind">-- mph</span>
                     </div>
                 </div>
+            </div>
+            <!-- Sunrise/Sunset -->
+            <div class="sun-times-row">
+                <div class="sun-times" id="sun-times">
+                    <span class="sun-icon">🌅</span>
+                    <span class="sun-time">--:--</span>
+                    <span class="sun-divider">·</span>
+                    <span class="sun-icon">🌇</span>
+                    <span class="sun-time">--:--</span>
+                </div>
+                <div class="daylight-badge during-day" id="daylight-remaining">Loading...</div>
             </div>
             <!-- Clothing Recommendation -->
             <div class="clothing-advice" id="clothing-advice">

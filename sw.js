@@ -1,19 +1,26 @@
 // Penge Dash SE20 - Service Worker
-const CACHE_NAME = 'penge-dash-v1';
+const CACHE_VERSION = 'v2';
+const CACHE_NAME = `penge-dash-${CACHE_VERSION}`;
 const STATIC_ASSETS = [
     '/',
     '/index.html',
     '/styles.css',
     '/app.js',
     '/config.js',
-    '/manifest.json'
+    '/manifest.json',
+    '/icon-192.png',
+    '/icon-512.png',
+    '/icon.svg'
 ];
 
 // Install - cache static assets
 self.addEventListener('install', event => {
     event.waitUntil(
         caches.open(CACHE_NAME)
-            .then(cache => cache.addAll(STATIC_ASSETS))
+            .then(cache => {
+                console.log('[SW] Caching static assets');
+                return cache.addAll(STATIC_ASSETS);
+            })
             .then(() => self.skipWaiting())
     );
 });
@@ -24,39 +31,96 @@ self.addEventListener('activate', event => {
         caches.keys().then(keys => {
             return Promise.all(
                 keys.filter(key => key !== CACHE_NAME)
-                    .map(key => caches.delete(key))
+                    .map(key => {
+                        console.log('[SW] Deleting old cache:', key);
+                        return caches.delete(key);
+                    })
             );
         }).then(() => self.clients.claim())
     );
 });
 
-// Fetch - network first, fallback to cache
+// Fetch - stale-while-revalidate for static, network-first for API
 self.addEventListener('fetch', event => {
     // Skip non-GET requests
     if (event.request.method !== 'GET') return;
 
-    // For API requests, try network only (no caching)
-    if (event.request.url.includes('api.tfl.gov.uk') ||
-        event.request.url.includes('api.openweathermap.org')) {
-        event.respondWith(fetch(event.request));
+    const url = new URL(event.request.url);
+
+    // For API requests, try network first with cache fallback
+    if (url.hostname.includes('api.tfl.gov.uk') ||
+        url.hostname.includes('api.open-meteo.com') ||
+        url.hostname.includes('railway-tlmc.onrender.com')) {
+        event.respondWith(
+            fetch(event.request)
+                .then(response => {
+                    // Clone and cache the response
+                    const clone = response.clone();
+                    caches.open(CACHE_NAME).then(cache => {
+                        cache.put(event.request, clone);
+                    });
+                    return response;
+                })
+                .catch(async () => {
+                    // Network failed, try cache
+                    const cached = await caches.match(event.request);
+                    if (cached) {
+                        console.log('[SW] Serving cached API response:', event.request.url);
+                        return cached;
+                    }
+                    // Return empty response if nothing cached
+                    return new Response(JSON.stringify({ error: 'offline' }), {
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                })
+        );
         return;
     }
 
-    // For static assets, use cache-first strategy
+    // For fonts (Google Fonts), cache with stale-while-revalidate
+    if (url.hostname.includes('fonts.googleapis.com') ||
+        url.hostname.includes('fonts.gstatic.com')) {
+        event.respondWith(
+            caches.match(event.request).then(cached => {
+                const fetching = fetch(event.request).then(response => {
+                    const clone = response.clone();
+                    caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+                    return response;
+                }).catch(() => cached);
+
+                return cached || fetching;
+            })
+        );
+        return;
+    }
+
+    // For static assets, use cache-first with network fallback
     event.respondWith(
         caches.match(event.request)
             .then(cached => {
-                const networked = fetch(event.request)
-                    .then(response => {
-                        // Update cache with fresh version
-                        const clone = response.clone();
-                        caches.open(CACHE_NAME)
-                            .then(cache => cache.put(event.request, clone));
-                        return response;
-                    })
-                    .catch(() => cached);
+                if (cached) {
+                    // Return cached, but also fetch in background to update
+                    fetch(event.request).then(response => {
+                        caches.open(CACHE_NAME).then(cache => {
+                            cache.put(event.request, response);
+                        });
+                    }).catch(() => {});
+                    return cached;
+                }
 
-                return cached || networked;
+                // Not in cache, fetch from network
+                return fetch(event.request).then(response => {
+                    const clone = response.clone();
+                    caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+                    return response;
+                });
             })
     );
+});
+
+// Handle messages from main thread
+self.addEventListener('message', event => {
+    if (event.data === 'skipWaiting') {
+        self.skipWaiting();
+    }
 });

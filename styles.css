@@ -259,6 +259,180 @@ body {
     font-weight: 400;
 }
 
+/* Sunrise/Sunset Row */
+.sun-times-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 14px;
+    padding: 10px 14px;
+    background: var(--bg-card-alt);
+    border-radius: 10px;
+}
+
+.sun-times {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.sun-icon {
+    font-size: 14px;
+}
+
+.sun-time {
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.sun-divider {
+    color: var(--text-muted);
+    margin: 0 4px;
+}
+
+.daylight-badge {
+    padding: 4px 10px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.daylight-badge.during-day {
+    background: rgba(234, 179, 8, 0.15);
+    color: #ca8a04;
+}
+
+.daylight-badge.before-sunrise {
+    background: rgba(67, 97, 238, 0.15);
+    color: var(--accent-blue);
+}
+
+.daylight-badge.after-sunset {
+    background: rgba(139, 92, 246, 0.15);
+    color: #8b5cf6;
+}
+
+/* Dynamic Weather Backgrounds */
+.weather-card.weather-sunny {
+    background: linear-gradient(135deg, #fef3c7 0%, #fde68a 50%, #fcd34d 100%);
+    border-color: #fbbf24;
+}
+
+.weather-card.weather-sunny .temp,
+.weather-card.weather-sunny .weather-condition,
+.weather-card.weather-sunny .card-header h2 {
+    color: #92400e;
+}
+
+.weather-card.weather-sunny .weather-detail .label {
+    color: #a16207;
+}
+
+.weather-card.weather-sunny .weather-detail .value {
+    color: #78350f;
+}
+
+.weather-card.weather-cloudy {
+    background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 50%, #cbd5e1 100%);
+    border-color: #94a3b8;
+}
+
+.weather-card.weather-rainy {
+    background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 50%, #93c5fd 100%);
+    border-color: #60a5fa;
+}
+
+.weather-card.weather-rainy .temp,
+.weather-card.weather-rainy .weather-condition,
+.weather-card.weather-rainy .card-header h2 {
+    color: #1e40af;
+}
+
+.weather-card.weather-rainy .weather-detail .label {
+    color: #1d4ed8;
+}
+
+.weather-card.weather-rainy .weather-detail .value {
+    color: #1e3a8a;
+}
+
+.weather-card.weather-snow {
+    background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 50%, #bae6fd 100%);
+    border-color: #7dd3fc;
+}
+
+.weather-card.weather-snow .temp,
+.weather-card.weather-snow .weather-condition,
+.weather-card.weather-snow .card-header h2 {
+    color: #0369a1;
+}
+
+.weather-card.weather-night {
+    background: linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #4338ca 100%);
+    border-color: #6366f1;
+}
+
+.weather-card.weather-night .temp,
+.weather-card.weather-night .weather-condition,
+.weather-card.weather-night .card-header h2 {
+    color: #e0e7ff;
+}
+
+.weather-card.weather-night .weather-detail .label {
+    color: #a5b4fc;
+}
+
+.weather-card.weather-night .weather-detail .value {
+    color: #c7d2fe;
+}
+
+.weather-card.weather-night .update-time,
+.weather-card.weather-night .air-quality-badge {
+    color: #a5b4fc;
+}
+
+.weather-card.weather-night .sun-times-row {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.weather-card.weather-night .sun-time {
+    color: #e0e7ff;
+}
+
+.weather-card.weather-night .clothing-advice {
+    background: rgba(255, 255, 255, 0.1);
+    color: #e0e7ff;
+}
+
+.weather-card.weather-night .forecast-hour {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.weather-card.weather-night .forecast-time,
+.weather-card.weather-night .forecast-temp {
+    color: #e0e7ff;
+}
+
+.weather-card.weather-storm {
+    background: linear-gradient(135deg, #374151 0%, #4b5563 50%, #6b7280 100%);
+    border-color: #9ca3af;
+}
+
+.weather-card.weather-storm .temp,
+.weather-card.weather-storm .weather-condition,
+.weather-card.weather-storm .card-header h2 {
+    color: #f9fafb;
+}
+
+.weather-card.weather-storm .weather-detail .label {
+    color: #d1d5db;
+}
+
+.weather-card.weather-storm .weather-detail .value {
+    color: #f3f4f6;
+}
+
 /* TfL Bus Icon */
 .tfl-bus-icon {
     display: inline-block;
@@ -1088,6 +1262,28 @@ body {
     font-size: 20px;
     font-weight: 700;
     color: var(--accent-green);
+}
+
+/* Offline Banner */
+.offline-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    background: linear-gradient(135deg, #64748b 0%, #475569 100%);
+    color: white;
+    border-radius: 12px;
+    margin-bottom: 12px;
+    animation: fadeIn 0.3s ease;
+}
+
+.offline-icon {
+    font-size: 18px;
+}
+
+.offline-text {
+    font-size: 13px;
+    font-weight: 500;
 }
 
 /* Service Alert Banner */
