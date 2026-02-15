@@ -392,8 +392,8 @@ class PengeDash {
             departuresEl.innerHTML = filtered.map((dep, i) => `
                 <div class="modal-departure">
                     <div class="modal-departure-info">
-                        <span class="modal-departure-dest">${dep.dest}</span>
-                        <span class="modal-departure-platform">Platform ${dep.platform}</span>
+                        <span class="modal-departure-dest">${this.escapeHtml(dep.dest)}</span>
+                        ${dep.platform && dep.platform !== '-' ? `<span class="modal-departure-platform">P${this.escapeHtml(dep.platform)}</span>` : ''}
                     </div>
                     <span class="modal-departure-time">${dep.mins} min</span>
                 </div>
@@ -556,13 +556,18 @@ class PengeDash {
         const feelsLike = Math.round(current.apparent_temperature);
         const windSpeed = Math.round(current.wind_speed_10m * 0.621371); // km/h to mph
 
+        // Get rain probability for current hour
+        const currentHour = new Date().getHours();
+        const rainChance = data.hourly?.precipitation_probability?.[currentHour] || 0;
+        const { icon, condition } = this.getWeatherFromCode(current.weather_code);
+
+        // Store weather data for smart journey insights
+        this.currentWeather = { temp, feelsLike, rainChance, condition, windSpeed, hourlyData: data.hourly };
+
         document.getElementById('temp').textContent = `${temp}°`;
         document.getElementById('feels-like').textContent = `${feelsLike}°`;
         document.getElementById('wind').textContent = `${windSpeed} mph`;
 
-        // Get rain probability for current hour
-        const currentHour = new Date().getHours();
-        const rainChance = data.hourly?.precipitation_probability?.[currentHour] || 0;
         document.getElementById('rain-chance').textContent = `${rainChance}%`;
 
         // Rain hint - make the percentage more meaningful
@@ -580,7 +585,6 @@ class PengeDash {
         }
 
         // Weather icon and condition from WMO code
-        const { icon, condition } = this.getWeatherFromCode(current.weather_code);
         document.getElementById('weather-icon').textContent = icon;
         document.getElementById('weather-condition').textContent = condition;
 
@@ -922,10 +926,10 @@ class PengeDash {
         const stationNames = { 'pnw': 'Penge West', 'pne': 'Penge East', 'bkb': 'Birkbeck', 'anr': 'Anerley' };
 
         container.innerHTML = departures.slice(0, 6).map(dep => `
-            <div class="departure ${dep.cancelled ? 'cancelled' : ''}" onclick="pengeDash.openModal('${stationId}', '${stationNames[stationId]}', '${dep.dest}')">
+            <div class="departure ${dep.cancelled ? 'cancelled' : ''}" onclick="pengeDash.openModal('${this.escapeAttr(stationId)}', '${this.escapeAttr(stationNames[stationId])}', '${this.escapeAttr(dep.dest)}')">
                 <div class="departure-info">
-                    <span class="departure-destination">${dep.dest}${dep.cancelled ? ' ❌' : ''}${dep.delayed ? ' ⚠️' : ''}</span>
-                    <span class="departure-platform">Platform ${dep.platform}</span>
+                    ${dep.platform && dep.platform !== '-' ? `<span class="departure-platform">P${this.escapeHtml(dep.platform)}</span>` : ''}
+                    <span class="departure-destination">${this.escapeHtml(dep.dest)}${dep.cancelled ? ' ❌' : ''}${dep.delayed ? ' ⚠️' : ''}</span>
                 </div>
                 <div class="departure-time">
                     <span class="departure-due ${dep.mins <= 3 ? 'urgent' : ''}">${dep.mins} min</span>
@@ -955,7 +959,8 @@ class PengeDash {
             const departures = data.map(dep => ({
                 dest: dep.destinationName || dep.towards,
                 platform: dep.platformName || '-',
-                mins: Math.floor(dep.timeToStation / 60)
+                mins: Math.floor(dep.timeToStation / 60),
+                currentLocation: dep.currentLocation || ''
             })).sort((a, b) => a.mins - b.mins);
 
             // Store all data for modal
@@ -984,18 +989,23 @@ class PengeDash {
         }
 
         container.innerHTML = departures.map((dep, index) => {
-            // Estimate stops away (Overground ~3 mins between stops)
-            const stopsAway = Math.max(1, Math.round(dep.mins / 3));
-            const stopsText = dep.mins <= 1 ? 'Arriving' : `~${stopsAway} stop${stopsAway > 1 ? 's' : ''}`;
+            // Use real currentLocation from TfL API, fall back to estimated stops
+            let locationText;
+            if (dep.currentLocation) {
+                locationText = dep.currentLocation;
+            } else {
+                const stopsAway = Math.max(1, Math.round(dep.mins / 3));
+                locationText = dep.mins <= 1 ? 'Arriving' : `~${stopsAway} stop${stopsAway > 1 ? 's' : ''}`;
+            }
 
             // Only show hype for first departure
             const hype = index === 0 ? this.getDepartureHype(dep.mins) : null;
 
             return `
-                <div class="departure" onclick="pengeDash.openModal('anr', 'Anerley', '${dep.dest}')">
+                <div class="departure" onclick="pengeDash.openModal('anr', 'Anerley', '${this.escapeAttr(dep.dest)}')">
                     <div class="departure-info">
-                        <span class="departure-destination">${dep.dest}</span>
-                        <span class="departure-location">${stopsText}</span>
+                        <span class="departure-destination">${this.escapeHtml(dep.dest)}</span>
+                        <span class="departure-location">${this.escapeHtml(locationText)}</span>
                     </div>
                     <div class="departure-time">
                         <span class="departure-due ${dep.mins <= 3 ? 'urgent' : ''}">${dep.mins} min</span>
@@ -1037,10 +1047,10 @@ class PengeDash {
         }
 
         container.innerHTML = departures.map(dep => `
-            <div class="departure" onclick="pengeDash.openModal('${stationId}', '${stationNames[stationId]}', '${dep.dest}')">
+            <div class="departure" onclick="pengeDash.openModal('${this.escapeAttr(stationId)}', '${this.escapeAttr(stationNames[stationId])}', '${this.escapeAttr(dep.dest)}')">
                 <div class="departure-info">
-                    <span class="departure-destination">${dep.dest}</span>
-                    <span class="departure-platform">Platform ${dep.platform}</span>
+                    ${dep.platform && dep.platform !== '-' ? `<span class="departure-platform">P${this.escapeHtml(dep.platform)}</span>` : ''}
+                    <span class="departure-destination">${this.escapeHtml(dep.dest)}</span>
                 </div>
                 <div class="departure-time">
                     <span class="departure-due">${dep.mins} min</span>
@@ -1107,10 +1117,10 @@ class PengeDash {
         const displayData = data.slice(0, 3);
 
         container.innerHTML = displayData.map(dep => `
-            <div class="departure" onclick="pengeDash.openModal('${stationId}', '${stationNames[stationId]}', '${dep.dest}')">
+            <div class="departure" onclick="pengeDash.openModal('${this.escapeAttr(stationId)}', '${this.escapeAttr(stationNames[stationId])}', '${this.escapeAttr(dep.dest)}')">
                 <div class="departure-info">
-                    <span class="departure-destination">${dep.dest}</span>
-                    <span class="departure-platform">Platform ${dep.platform}</span>
+                    ${dep.platform ? `<span class="departure-platform">P${this.escapeHtml(dep.platform)}</span>` : ''}
+                    <span class="departure-destination">${this.escapeHtml(dep.dest)}</span>
                 </div>
                 <div class="departure-time">
                     <span class="departure-due">${dep.mins} min</span>
@@ -1167,6 +1177,9 @@ class PengeDash {
         const eastContainer = document.getElementById('bus-arrivals-east');
         const westContainer = document.getElementById('bus-arrivals-west');
 
+        // Store bus data for smart journey insights
+        this.busArrivalData = [...(eastArrivals || []), ...(westArrivals || [])];
+
         // Helper to render bus list
         const renderBuses = (container, arrivals) => {
             if (!arrivals || arrivals.length === 0) {
@@ -1181,17 +1194,22 @@ class PengeDash {
 
             container.innerHTML = sorted.map(bus => {
                 const mins = Math.floor(bus.timeToStation / 60);
-                // Estimate stops away (buses ~2 mins between stops)
-                const stopsAway = Math.max(1, Math.round(mins / 2));
-                const stopsText = mins <= 1 ? 'Arriving' : `~${stopsAway} stop${stopsAway > 1 ? 's' : ''}`;
+                // Use real currentLocation from TfL API, fall back to estimated stops
+                let locationText;
+                if (bus.currentLocation) {
+                    locationText = bus.currentLocation;
+                } else {
+                    const stopsAway = Math.max(1, Math.round(mins / 2));
+                    locationText = mins <= 1 ? 'Arriving' : `~${stopsAway} stop${stopsAway > 1 ? 's' : ''}`;
+                }
 
                 return `
                     <div class="bus-arrival">
                         <div class="bus-route">
-                            <span class="bus-number">${bus.lineName}</span>
+                            <span class="bus-number">${this.escapeHtml(bus.lineName)}</span>
                             <div class="bus-info">
-                                <span class="bus-destination">${bus.destinationName}</span>
-                                <span class="bus-location">${stopsText}</span>
+                                <span class="bus-destination">${this.escapeHtml(bus.destinationName)}</span>
+                                <span class="bus-location">${this.escapeHtml(locationText)}</span>
                             </div>
                         </div>
                         <span class="bus-time">${mins} min</span>
@@ -1283,6 +1301,15 @@ class PengeDash {
 
     displayLineStatus(lines) {
         const container = document.getElementById('line-statuses');
+
+        // Store line status data for smart journey insights
+        this.lineStatusData = {};
+        lines.forEach(line => {
+            const status = line.lineStatuses[0]?.statusSeverityDescription || 'Unknown';
+            this.lineStatusData[line.id] = status;
+            // Also store by name for matching
+            if (line.name) this.lineStatusData[line.name.toLowerCase()] = status;
+        });
 
         const lineNames = {
             'london-overground': { name: 'Overground', class: 'overground' },
@@ -1439,10 +1466,10 @@ class PengeDash {
                 <div class="traffic-disruption ${severityClass}">
                     <div class="disruption-header">
                         <span class="disruption-icon">${icon}</span>
-                        <span class="disruption-severity ${severityClass}">${d.severity || 'Info'}</span>
+                        <span class="disruption-severity ${severityClass}">${this.escapeHtml(d.severity || 'Info')}</span>
                     </div>
-                    <div class="disruption-location">${d.location || 'Unknown'}</div>
-                    <div class="disruption-desc">${shortDesc}</div>
+                    <div class="disruption-location">${this.escapeHtml(d.location || 'Unknown')}</div>
+                    <div class="disruption-desc">${this.escapeHtml(shortDesc)}</div>
                 </div>
             `;
         }).join('');
@@ -1466,13 +1493,10 @@ class PengeDash {
         return '🚗';
     }
 
-    // ==================== JOURNEY PLANNER ====================
+    // ==================== JOURNEY PLANNER (CityMapper-style) ====================
     setupJourneyPlanner() {
         // Default destinations
-        this.defaultDestinations = ['Victoria', 'London Bridge', 'East Croydon', 'Bromley South', 'Canary Wharf'];
-        this.editMode = false;
-
-        // Journey origin mode: 'home' or 'here'
+        this.defaultDestinations = ['Victoria', 'London Br', 'E.Croydon', 'Bromley S', 'Canary Whf'];
         this.journeyOrigin = 'home';
         this.currentLocation = null;
         this.fetchingLocation = false;
@@ -1481,36 +1505,24 @@ class PengeDash {
         this.loadDestinations();
         this.renderDestinationChips();
 
-        // Load favorite journeys
-        this.favoriteJourneys = [];
-        this.loadFavoriteJourneys();
-        this.renderFavoriteJourneys();
-        this.setupFavoriteJourneyHandlers();
+        // From field tap → toggle origin
+        const fromRow = document.getElementById('journey-from-row');
+        if (fromRow) {
+            fromRow.addEventListener('click', (e) => {
+                // Don't toggle if swap button was clicked
+                if (e.target.closest('.journey-origin-swap')) return;
+                this.toggleOrigin();
+            });
+        }
 
-        // Setup origin toggle
-        this.setupOriginToggle();
-
-        // Edit button
-        document.getElementById('edit-destinations-btn').addEventListener('click', () => {
-            this.toggleEditMode();
-        });
-
-        // Add destination button
-        document.getElementById('add-dest-btn').addEventListener('click', () => {
-            this.addDestination();
-        });
-
-        // Cancel/Done button
-        document.getElementById('cancel-edit-btn').addEventListener('click', () => {
-            this.toggleEditMode();
-        });
-
-        // Enter key in add destination input
-        document.getElementById('new-destination-input').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                this.addDestination();
-            }
-        });
+        // Swap button
+        const swapBtn = document.getElementById('origin-swap-btn');
+        if (swapBtn) {
+            swapBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.toggleOrigin();
+            });
+        }
 
         // Search button
         document.getElementById('journey-search-btn').addEventListener('click', () => {
@@ -1525,9 +1537,124 @@ class PengeDash {
         // Enter key in search input
         document.getElementById('destination-input').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
+                this.hideAutocomplete();
                 document.getElementById('journey-search-btn').click();
             }
         });
+
+        // Setup autocomplete
+        this.setupAutocomplete();
+    }
+
+    // ==================== AUTOCOMPLETE ====================
+    setupAutocomplete() {
+        const input = document.getElementById('destination-input');
+        const dropdown = document.getElementById('autocomplete-dropdown');
+        if (!input || !dropdown) return;
+
+        this._acDebounceTimer = null;
+
+        input.addEventListener('input', () => {
+            clearTimeout(this._acDebounceTimer);
+            const query = input.value.trim();
+
+            if (query.length < 2) {
+                this.hideAutocomplete();
+                return;
+            }
+
+            this._acDebounceTimer = setTimeout(() => {
+                this.fetchAutocompleteSuggestions(query);
+            }, 300);
+        });
+
+        // Hide on Escape
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                this.hideAutocomplete();
+            }
+        });
+
+        // Hide on blur (delay to allow click on dropdown item)
+        input.addEventListener('blur', () => {
+            setTimeout(() => this.hideAutocomplete(), 200);
+        });
+    }
+
+    async fetchAutocompleteSuggestions(query) {
+        try {
+            let url = `https://api.tfl.gov.uk/StopPoint/Search?query=${encodeURIComponent(query)}&modes=tube,bus,national-rail,overground,dlr,elizabeth-line&maxResults=5`;
+            if (CONFIG.TFL_APP_KEY) {
+                url += `&app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}`;
+            }
+
+            const response = await fetch(url);
+            const data = await response.json();
+
+            if (data.matches && data.matches.length > 0) {
+                this.renderAutocomplete(data.matches);
+            } else {
+                this.hideAutocomplete();
+            }
+        } catch (error) {
+            console.error('Autocomplete fetch error:', error);
+            this.hideAutocomplete();
+        }
+    }
+
+    renderAutocomplete(results) {
+        const dropdown = document.getElementById('autocomplete-dropdown');
+        if (!dropdown) return;
+
+        const modeIcons = {
+            'tube': '🚇', 'bus': '🚌', 'national-rail': '🚂',
+            'overground': '🚆', 'dlr': '🚈', 'elizabeth-line': '🟣'
+        };
+
+        dropdown.innerHTML = results.map(result => {
+            const modes = (result.modes || [])
+                .map(m => modeIcons[m] || '')
+                .filter(Boolean)
+                .join(' ');
+
+            return `
+                <div class="autocomplete-item" data-name="${this.escapeAttr(result.name)}">
+                    <div class="ac-name">${this.escapeHtml(result.name)}</div>
+                    ${modes ? `<div class="ac-modes">${modes}</div>` : ''}
+                </div>
+            `;
+        }).join('');
+
+        dropdown.classList.add('visible');
+
+        // Click handlers on items
+        dropdown.querySelectorAll('.autocomplete-item').forEach(item => {
+            item.addEventListener('mousedown', (e) => {
+                e.preventDefault(); // Prevent blur from firing first
+                const name = item.dataset.name;
+                const input = document.getElementById('destination-input');
+                input.value = name;
+                this.hideAutocomplete();
+                document.querySelectorAll('.destination-chip').forEach(c => c.classList.remove('active'));
+                this.planJourney(name);
+            });
+        });
+    }
+
+    hideAutocomplete() {
+        const dropdown = document.getElementById('autocomplete-dropdown');
+        if (dropdown) {
+            dropdown.classList.remove('visible');
+            dropdown.innerHTML = '';
+        }
+    }
+
+    toggleOrigin() {
+        if (this.journeyOrigin === 'home') {
+            this.setJourneyOrigin('here');
+        } else {
+            this.setJourneyOrigin('home');
+        }
     }
 
     loadDestinations() {
@@ -1545,87 +1672,68 @@ class PengeDash {
 
     renderDestinationChips() {
         const container = document.getElementById('journey-quick-picks');
+        if (!container) return;
 
-        container.innerHTML = this.destinations.map(dest => `
-            <button class="destination-chip" data-destination="${dest}">
-                ${dest}
-                <span class="delete-btn" data-destination="${dest}">&times;</span>
-            </button>
+        const chipsHtml = this.destinations.map(dest => `
+            <button class="destination-chip" data-destination="${this.escapeHtml(dest)}">${this.escapeHtml(dest)}</button>
         `).join('');
 
-        // Bind click events to chips
-        container.querySelectorAll('.destination-chip').forEach(chip => {
-            chip.addEventListener('click', (e) => {
-                // Don't trigger if clicking delete button
-                if (e.target.classList.contains('delete-btn')) return;
-                if (this.editMode) return;
+        container.innerHTML = chipsHtml + `<button class="add-chip" id="add-dest-chip">+</button>`;
 
-                document.querySelectorAll('.destination-chip').forEach(c => c.classList.remove('active'));
+        // Use single delegated handler (avoids listener leak on re-render)
+        // Remove old handler if exists
+        if (this._chipHandler) container.removeEventListener('click', this._chipHandler);
+
+        this._chipHandler = (e) => {
+            const chip = e.target.closest('.destination-chip');
+            const addBtn = e.target.closest('.add-chip');
+
+            if (chip) {
+                container.querySelectorAll('.destination-chip').forEach(c => c.classList.remove('active'));
                 chip.classList.add('active');
                 document.getElementById('destination-input').value = '';
                 this.planJourney(chip.dataset.destination);
-            });
-        });
+            } else if (addBtn) {
+                const dest = prompt('Add destination:');
+                if (dest && dest.trim()) {
+                    const trimmed = dest.trim();
+                    if (!this.destinations.some(d => d.toLowerCase() === trimmed.toLowerCase())) {
+                        this.destinations.push(trimmed);
+                        this.saveDestinations();
+                        this.renderDestinationChips();
+                    }
+                }
+            }
+        };
+        container.addEventListener('click', this._chipHandler);
 
-        // Bind delete buttons
-        container.querySelectorAll('.delete-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.removeDestination(btn.dataset.destination);
-            });
-        });
-    }
+        // Long-press to delete on mobile (delegated)
+        if (this._chipTouchStart) container.removeEventListener('touchstart', this._chipTouchStart);
+        if (this._chipTouchEnd) container.removeEventListener('touchend', this._chipTouchEnd);
+        if (this._chipTouchMove) container.removeEventListener('touchmove', this._chipTouchMove);
 
-    toggleEditMode() {
-        this.editMode = !this.editMode;
-        const container = document.getElementById('journey-quick-picks');
-        const editBtn = document.getElementById('edit-destinations-btn');
-        const addForm = document.getElementById('add-destination-form');
+        let pressTimer;
+        this._chipTouchStart = (e) => {
+            const chip = e.target.closest('.destination-chip');
+            if (!chip) return;
+            pressTimer = setTimeout(() => {
+                if (confirm(`Remove "${chip.dataset.destination}"?`)) {
+                    this.removeDestination(chip.dataset.destination);
+                }
+            }, 600);
+        };
+        this._chipTouchEnd = () => clearTimeout(pressTimer);
+        this._chipTouchMove = () => clearTimeout(pressTimer);
 
-        if (this.editMode) {
-            container.classList.add('edit-mode');
-            editBtn.classList.add('active');
-            addForm.style.display = 'flex';
-            document.getElementById('new-destination-input').focus();
-        } else {
-            container.classList.remove('edit-mode');
-            editBtn.classList.remove('active');
-            addForm.style.display = 'none';
-            document.getElementById('new-destination-input').value = '';
-        }
-    }
-
-    addDestination() {
-        const input = document.getElementById('new-destination-input');
-        const destination = input.value.trim();
-
-        if (!destination) return;
-
-        // Check if already exists
-        if (this.destinations.some(d => d.toLowerCase() === destination.toLowerCase())) {
-            input.value = '';
-            return;
-        }
-
-        this.destinations.push(destination);
-        this.saveDestinations();
-        this.renderDestinationChips();
-
-        // Keep edit mode active
-        document.getElementById('journey-quick-picks').classList.add('edit-mode');
-        input.value = '';
-        input.focus();
+        container.addEventListener('touchstart', this._chipTouchStart, { passive: true });
+        container.addEventListener('touchend', this._chipTouchEnd);
+        container.addEventListener('touchmove', this._chipTouchMove);
     }
 
     removeDestination(destination) {
         this.destinations = this.destinations.filter(d => d !== destination);
         this.saveDestinations();
         this.renderDestinationChips();
-
-        // Keep edit mode active
-        if (this.editMode) {
-            document.getElementById('journey-quick-picks').classList.add('edit-mode');
-        }
     }
 
     async planJourney(destination) {
@@ -1707,7 +1815,7 @@ class PengeDash {
             }
 
             if (data.journeys && data.journeys.length > 0) {
-                this.displayJourney(data.journeys, destination);
+                this.displayRouteOptions(data.journeys, destination);
                 updateTime.textContent = this.getTimeAgo(new Date());
             } else {
                 resultsContainer.innerHTML = `
@@ -1729,99 +1837,314 @@ class PengeDash {
         }
     }
 
-    displayJourney(journeys, destination) {
+    displayRouteOptions(journeys, destination) {
         const container = document.getElementById('journey-results');
-        const mainJourney = journeys[0];
 
-        // Calculate times
-        const departureTime = new Date(mainJourney.startDateTime);
-        const arrivalTime = new Date(mainJourney.arrivalDateTime);
-        const duration = mainJourney.duration;
+        // Build route cards for each journey option
+        const routeCards = journeys.map((journey, index) => {
+            const primaryMode = this.getPrimaryMode(journey);
+            const modeIcon = this.getJourneyModeIcon(primaryMode.mode);
+            const modeClass = this.getRouteModeClass(primaryMode);
+            const duration = journey.duration;
+            const depTime = new Date(journey.startDateTime);
+            const arrTime = new Date(journey.arrivalDateTime);
+            const depStr = depTime.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+            const arrStr = arrTime.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 
-        const departureStr = departureTime.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-        const arrivalStr = arrivalTime.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+            // Route summary
+            const summary = this.getRouteSummary(journey);
 
-        // Calculate when to leave (walk time to first station)
-        const firstLeg = mainJourney.legs[0];
-        const leaveBy = new Date(departureTime.getTime() - (firstLeg.duration || 0) * 60000);
-        const leaveByStr = leaveBy.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+            // Smart insights
+            const smartInsights = this.getSmartInsight(journey);
+            const weatherInsight = this.getWeatherInsight(primaryMode.mode, duration);
+            const disruptionInsights = this.getDisruptionInsight(journey);
 
-        // Build route legs HTML
-        const legsHtml = mainJourney.legs.map(leg => {
-            const mode = leg.mode?.id || 'walking';
-            const icon = this.getJourneyModeIcon(mode);
-            const lineName = leg.routeOptions?.[0]?.name || leg.instruction?.detailed || '';
-            const lineId = this.getLineClass(lineName);
+            const allInsights = [...smartInsights, ...disruptionInsights];
+            if (weatherInsight) allInsights.push(weatherInsight);
 
-            let instruction = leg.instruction?.summary || leg.instruction?.detailed || '';
-
-            // Clean up instruction
-            if (mode === 'walking') {
-                instruction = `Walk to ${leg.arrivalPoint?.commonName || 'destination'}`;
-            } else if (mode === 'bus') {
-                instruction = `${lineName} bus to ${leg.arrivalPoint?.commonName || ''}`;
-            } else {
-                instruction = `${lineName} to ${leg.arrivalPoint?.commonName || ''}`;
-            }
-
-            const durationMins = leg.duration || 0;
-
-            return `
-                <div class="journey-leg">
-                    <div class="leg-icon">${icon}</div>
-                    <div class="leg-details">
-                        <div class="leg-instruction">
-                            ${instruction}
-                            ${lineId && mode !== 'walking' ? `<span class="leg-line-badge ${lineId}">${lineName}</span>` : ''}
-                        </div>
-                        <div class="leg-time">${this.formatLegTime(leg)}</div>
-                    </div>
-                    <div class="leg-duration">${durationMins} min</div>
+            const insightsHtml = allInsights.length > 0 ? `
+                <div class="route-card-smart">
+                    ${allInsights.map(i => `<div class="smart-insight ${i.type}">${i.text}</div>`).join('')}
                 </div>
-            `;
-        }).join('');
+            ` : '';
 
-        // Build alternatives HTML (show next 2 options)
-        let alternativesHtml = '';
-        if (journeys.length > 1) {
-            const alts = journeys.slice(1, 3).map(journey => {
-                const depTime = new Date(journey.startDateTime);
-                const arrTime = new Date(journey.arrivalDateTime);
-                const depStr = depTime.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-                const arrStr = arrTime.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+            // Full leg detail (hidden, shown on tap)
+            const legsHtml = journey.legs.map(leg => {
+                const mode = leg.mode?.id || 'walking';
+                const icon = this.getJourneyModeIcon(mode);
+                const lineName = leg.routeOptions?.[0]?.name || leg.instruction?.detailed || '';
+                const lineId = this.getLineClass(lineName);
+                let instruction = leg.instruction?.summary || leg.instruction?.detailed || '';
 
-                // Get route summary
-                const modes = journey.legs
-                    .filter(l => l.mode?.id !== 'walking')
-                    .map(l => l.routeOptions?.[0]?.name || this.getJourneyModeIcon(l.mode?.id))
-                    .join(' → ');
+                if (mode === 'walking') {
+                    instruction = `Walk to ${leg.arrivalPoint?.commonName || 'destination'}`;
+                } else if (mode === 'bus') {
+                    instruction = `${lineName} bus to ${leg.arrivalPoint?.commonName || ''}`;
+                } else {
+                    instruction = `${lineName} to ${leg.arrivalPoint?.commonName || ''}`;
+                }
+
+                const durationMins = leg.duration || 0;
 
                 return `
-                    <div class="journey-alt">
-                        <span class="alt-route">${modes || 'Alternative route'}</span>
-                        <span class="alt-time">${depStr} → ${arrStr}</span>
+                    <div class="journey-leg">
+                        <div class="leg-icon">${icon}</div>
+                        <div class="leg-details">
+                            <div class="leg-instruction">
+                                ${instruction}
+                                ${lineId && mode !== 'walking' ? `<span class="leg-line-badge ${lineId}">${lineName}</span>` : ''}
+                            </div>
+                            <div class="leg-time">${this.formatLegTime(leg)}</div>
+                        </div>
+                        <div class="leg-duration">${durationMins} min</div>
                     </div>
                 `;
             }).join('');
 
-            alternativesHtml = `
-                <div class="journey-alternatives">
-                    <div class="journey-alternatives-header">Other options</div>
-                    ${alts}
+            return `
+                <div class="route-card ${modeClass}" data-index="${index}">
+                    <div class="route-card-header">
+                        <span class="route-mode-icon">${modeIcon}</span>
+                        <span class="route-summary">${summary}</span>
+                        <span class="route-duration">${duration} min</span>
+                    </div>
+                    <div class="route-card-meta">Departs ${depStr} · Arrives ${arrStr}</div>
+                    ${insightsHtml}
+                    <div class="route-card-detail">
+                        <div class="journey-route">${legsHtml}</div>
+                    </div>
                 </div>
             `;
-        }
+        }).join('');
+
+        // Add walking option if destination is relatively close
+        const walkingCard = this.getWalkingOption(destination, journeys[0]);
 
         container.innerHTML = `
-            <div class="journey-summary">
-                <div class="journey-headline">Leave by ${leaveByStr} → Arrive ${arrivalStr}</div>
-                <div class="journey-subtitle">${duration} min journey to ${destination}</div>
+            <div class="route-options-header">Getting there</div>
+            <div class="route-options">
+                ${routeCards}
+                ${walkingCard}
             </div>
-            <div class="journey-route">
-                ${legsHtml}
-            </div>
-            ${alternativesHtml}
         `;
+
+        // Bind tap-to-expand on route cards
+        container.querySelectorAll('.route-card').forEach(card => {
+            card.addEventListener('click', () => {
+                const wasActive = card.classList.contains('active');
+                // Collapse all
+                container.querySelectorAll('.route-card').forEach(c => c.classList.remove('active'));
+                // Toggle this one
+                if (!wasActive) {
+                    card.classList.add('active');
+                    // Scroll into view
+                    setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 100);
+                }
+            });
+        });
+    }
+
+    getPrimaryMode(journey) {
+        // Find the main non-walking leg
+        const nonWalkingLegs = journey.legs.filter(l => l.mode?.id !== 'walking');
+        if (nonWalkingLegs.length === 0) return { mode: 'walking', line: '' };
+
+        // If multiple different modes, it's mixed
+        const modes = new Set(nonWalkingLegs.map(l => l.mode?.id));
+        if (modes.size > 1) {
+            return { mode: 'mixed', line: '' };
+        }
+
+        const mainLeg = nonWalkingLegs[0];
+        return {
+            mode: mainLeg.mode?.id || 'walking',
+            line: mainLeg.routeOptions?.[0]?.name || ''
+        };
+    }
+
+    getRouteModeClass(primaryMode) {
+        const mode = primaryMode.mode;
+        const line = (primaryMode.line || '').toLowerCase();
+
+        if (mode === 'walking') return 'mode-walk';
+        if (mode === 'bus') return 'mode-bus';
+        if (mode === 'tube') return 'mode-tube';
+        if (mode === 'overground') return 'mode-overground';
+        if (mode === 'mixed') return 'mode-mixed';
+        if (mode === 'national-rail') {
+            if (line.includes('southeastern')) return 'mode-southeastern';
+            return 'mode-train';
+        }
+        return 'mode-mixed';
+    }
+
+    getRouteSummary(journey) {
+        const nonWalkingLegs = journey.legs.filter(l => l.mode?.id !== 'walking');
+        if (nonWalkingLegs.length === 0) return 'Walk';
+
+        return nonWalkingLegs.map(leg => {
+            const lineName = leg.routeOptions?.[0]?.name || '';
+            const mode = leg.mode?.id || '';
+            const via = leg.departurePoint?.commonName || '';
+
+            if (mode === 'bus') return `Bus ${lineName}`;
+            if (lineName) return `${lineName}${via ? ` via ${via.split(' ')[0]}` : ''}`;
+            return this.getJourneyModeIcon(mode);
+        }).join(' → ');
+    }
+
+    getWalkingOption(destination, referenceJourney) {
+        if (!referenceJourney) return '';
+
+        // Estimate walking distance from journey endpoint
+        const arrivalPoint = referenceJourney.legs[referenceJourney.legs.length - 1]?.arrivalPoint;
+        if (!arrivalPoint?.lat || !arrivalPoint?.lon) return '';
+
+        const { lat, lon } = CONFIG.LOCATION;
+        const distance = this.calculateDistance(lat, lon, arrivalPoint.lat, arrivalPoint.lon);
+
+        // Only show walking if under 4km
+        if (distance > 4) return '';
+
+        const walkingMins = Math.round((distance * 1.3) / (5 / 60)); // 5 km/h, 1.3x for non-straight paths
+        const weatherInsight = this.getWeatherInsight('walking', walkingMins);
+
+        const insightHtml = weatherInsight ? `
+            <div class="route-card-smart">
+                <div class="smart-insight ${weatherInsight.type}">${weatherInsight.text}</div>
+            </div>
+        ` : '';
+
+        return `
+            <div class="route-card mode-walk" data-index="walk">
+                <div class="route-card-header">
+                    <span class="route-mode-icon">🚶</span>
+                    <span class="route-summary">Walk (${distance.toFixed(1)} km)</span>
+                    <span class="route-duration">${walkingMins} min</span>
+                </div>
+                <div class="route-card-meta">Direct walking route</div>
+                ${insightHtml}
+            </div>
+        `;
+    }
+
+    // ==================== SMART INSIGHTS ====================
+    getSmartInsight(journey) {
+        const insights = [];
+
+        journey.legs.forEach(leg => {
+            const mode = leg.mode?.id;
+
+            // Train insight: match against live station data
+            if (mode === 'national-rail' || mode === 'overground') {
+                const stationName = (leg.departurePoint?.commonName || '').toLowerCase();
+                const stationMap = {
+                    'penge west': 'pnw',
+                    'penge east': 'pne',
+                    'anerley': 'anr',
+                    'birkbeck': 'bkb'
+                };
+
+                for (const [name, id] of Object.entries(stationMap)) {
+                    if (stationName.includes(name)) {
+                        const liveData = this.stationData[id];
+                        if (liveData && liveData.length > 0) {
+                            const next = liveData[0];
+                            const platformText = next.platform && next.platform !== '-' ? ` from Platform ${next.platform}` : '';
+                            insights.push({
+                                type: 'live',
+                                text: `⚡ Next train in ${next.mins} min${platformText}`
+                            });
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // Bus insight: match against live bus data
+            if (mode === 'bus') {
+                const routeName = leg.routeOptions?.[0]?.name;
+                if (routeName && this.busArrivalData) {
+                    const matchingBus = this.busArrivalData
+                        .filter(b => b.lineName === routeName)
+                        .sort((a, b) => a.timeToStation - b.timeToStation)[0];
+
+                    if (matchingBus) {
+                        const mins = Math.floor(matchingBus.timeToStation / 60);
+                        insights.push({
+                            type: 'live',
+                            text: `🚌 ${routeName} arriving in ${mins} min`
+                        });
+                    }
+                }
+            }
+        });
+
+        return insights;
+    }
+
+    getWeatherInsight(mode, durationMins) {
+        if (!this.currentWeather) return null;
+
+        const { temp, rainChance, condition } = this.currentWeather;
+
+        if (mode === 'walking') {
+            if (rainChance >= 60) {
+                return { type: 'weather', text: '🌧️ Rain right now — consider other options' };
+            }
+            if (temp >= 10 && temp <= 25 && rainChance < 30) {
+                return { type: 'weather', text: '🌤️ Nice weather — great for walking' };
+            }
+            if (temp < 5) {
+                return { type: 'weather', text: '🥶 Cold out — wrap up if walking' };
+            }
+        }
+
+        // For any mode: rain warning if expected during journey
+        if (rainChance >= 50 && this.currentWeather.hourlyData) {
+            const currentHour = new Date().getHours();
+            const hoursAhead = Math.ceil(durationMins / 60);
+            for (let i = 1; i <= hoursAhead && i < 12; i++) {
+                const idx = currentHour + i;
+                if (idx < this.currentWeather.hourlyData.precipitation_probability?.length) {
+                    const prob = this.currentWeather.hourlyData.precipitation_probability[idx];
+                    if (prob >= 60) {
+                        const rainTime = `${(idx % 24).toString().padStart(2, '0')}:00`;
+                        return { type: 'weather', text: `☔ Rain expected at ${rainTime} — bring umbrella` };
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    getDisruptionInsight(journey) {
+        const insights = [];
+        if (!this.lineStatusData) return insights;
+
+        journey.legs.forEach(leg => {
+            if (leg.mode?.id === 'walking') return;
+
+            const lineName = (leg.routeOptions?.[0]?.name || '').toLowerCase();
+
+            // Check against stored line status data
+            for (const [lineId, status] of Object.entries(this.lineStatusData)) {
+                if (status === 'Good Service') continue;
+
+                if (lineName.includes(lineId) || lineId.includes(lineName.split(' ')[0])) {
+                    const icon = status.toLowerCase().includes('severe') ? '🚫' : '⚠️';
+                    const displayName = lineName.charAt(0).toUpperCase() + lineName.slice(1);
+                    insights.push({
+                        type: 'warning',
+                        text: `${icon} ${displayName}: ${status.toLowerCase()}`
+                    });
+                    break;
+                }
+            }
+        });
+
+        return insights;
     }
 
     getJourneyModeIcon(mode) {
@@ -1877,79 +2200,24 @@ class PengeDash {
         return '';
     }
 
-    // ==================== ORIGIN TOGGLE (From Home / From Here) ====================
-    setupOriginToggle() {
-        const homeBtn = document.getElementById('origin-home');
-        const hereBtn = document.getElementById('origin-here');
-
-        if (!homeBtn || !hereBtn) return;
-
-        homeBtn.addEventListener('click', () => {
-            this.setJourneyOrigin('home');
-        });
-
-        hereBtn.addEventListener('click', () => {
-            this.setJourneyOrigin('here');
-        });
-    }
-
+    // ==================== ORIGIN TOGGLE (From Home / Current Location) ====================
     setJourneyOrigin(origin) {
-        const homeBtn = document.getElementById('origin-home');
-        const hereBtn = document.getElementById('origin-here');
+        const fromText = document.getElementById('from-text');
         const locationStatus = document.getElementById('location-status');
-        const quickPicks = document.getElementById('journey-quick-picks');
 
-        // Null checks for DOM elements
-        if (!homeBtn || !hereBtn || !locationStatus) {
-            console.error('Origin toggle elements not found');
-            return;
-        }
+        if (!fromText) return;
 
         this.journeyOrigin = origin;
 
-        // Update button states and ARIA attributes
-        homeBtn.classList.toggle('active', origin === 'home');
-        hereBtn.classList.toggle('active', origin === 'here');
-        homeBtn.setAttribute('aria-pressed', origin === 'home');
-        hereBtn.setAttribute('aria-pressed', origin === 'here');
-
         if (origin === 'here') {
-            // Show location status and get current location
-            locationStatus.style.display = 'flex';
+            fromText.textContent = 'Current Location';
+            if (locationStatus) locationStatus.style.display = 'flex';
             this.getCurrentLocation();
-
-            // Update quick picks to show "Home" as destination when origin is "here"
-            this.updateQuickPicksForOrigin();
         } else {
-            // Hide location status
-            locationStatus.style.display = 'none';
+            fromText.textContent = 'Home (SE20)';
+            if (locationStatus) locationStatus.style.display = 'none';
             this.currentLocation = null;
-
-            // Restore normal quick picks
-            this.renderDestinationChips();
         }
-    }
-
-    updateQuickPicksForOrigin() {
-        const container = document.getElementById('journey-quick-picks');
-        if (!container) return;
-
-        const postcode = CONFIG.LOCATION.postcode;
-        const shortPostcode = postcode.split(' ')[0]; // e.g., "SE20"
-
-        // When "From Here" is selected, show Home as the main destination
-        container.innerHTML = `
-            <button class="destination-chip home-chip" data-destination="home">
-                <span>🏠</span> Home (${shortPostcode})
-            </button>
-        `;
-
-        // Bind click event
-        container.querySelector('.home-chip').addEventListener('click', () => {
-            document.querySelectorAll('.destination-chip').forEach(c => c.classList.remove('active'));
-            container.querySelector('.home-chip').classList.add('active');
-            this.planJourney(postcode);
-        });
     }
 
     async getCurrentLocation() {
@@ -2028,124 +2296,17 @@ class PengeDash {
         }
     }
 
-    // ==================== FAVORITE JOURNEYS ====================
-    loadFavoriteJourneys() {
-        const saved = localStorage.getItem('pengedash-favorite-journeys');
-        this.favoriteJourneys = saved ? JSON.parse(saved) : [];
-    }
-
-    saveFavoriteJourneys() {
-        localStorage.setItem('pengedash-favorite-journeys', JSON.stringify(this.favoriteJourneys));
-    }
-
-    renderFavoriteJourneys() {
-        const container = document.getElementById('favorite-journeys');
-        const list = document.getElementById('favorites-list');
-        if (!container || !list) return;
-
-        if (this.favoriteJourneys.length === 0) {
-            container.style.display = 'none';
-            return;
-        }
-
-        container.style.display = 'block';
-        list.innerHTML = this.favoriteJourneys.map(fav => `
-            <button class="favorite-journey-btn" data-id="${fav.id}" data-dest="${fav.destination}">
-                <span class="fav-icon">${fav.icon}</span>
-                <span class="fav-name">${fav.name}</span>
-            </button>
-        `).join('');
-
-        // Bind click events
-        list.querySelectorAll('.favorite-journey-btn').forEach(btn => {
-            btn.addEventListener('click', () => this.executeFavoriteJourney(btn.dataset.id));
-
-            // Long press to delete
-            let pressTimer;
-            btn.addEventListener('touchstart', () => {
-                pressTimer = setTimeout(() => this.confirmDeleteFavorite(btn.dataset.id), 600);
-            });
-            btn.addEventListener('touchend', () => clearTimeout(pressTimer));
-            btn.addEventListener('touchmove', () => clearTimeout(pressTimer));
-        });
-    }
-
-    setupFavoriteJourneyHandlers() {
-        const addBtn = document.getElementById('add-favorite-btn');
-        const modal = document.getElementById('add-favorite-modal');
-        const closeBtn = document.getElementById('favorite-modal-close');
-        const cancelBtn = document.getElementById('favorite-cancel');
-        const saveBtn = document.getElementById('favorite-save');
-        const iconPicker = document.getElementById('icon-picker');
-
-        if (!addBtn || !modal) return;
-
-        // Show modal
-        addBtn.addEventListener('click', () => {
-            modal.style.display = 'flex';
-            document.getElementById('favorite-name').value = '';
-            document.getElementById('favorite-destination').value = '';
-        });
-
-        // Close modal
-        const closeModal = () => modal.style.display = 'none';
-        closeBtn?.addEventListener('click', closeModal);
-        cancelBtn?.addEventListener('click', closeModal);
-        modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
-
-        // Icon picker
-        iconPicker?.querySelectorAll('.icon-option').forEach(btn => {
-            btn.addEventListener('click', () => {
-                iconPicker.querySelectorAll('.icon-option').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-            });
-        });
-
-        // Save
-        saveBtn?.addEventListener('click', () => {
-            const name = document.getElementById('favorite-name').value.trim();
-            const destination = document.getElementById('favorite-destination').value.trim();
-            const icon = iconPicker?.querySelector('.icon-option.active')?.dataset.icon || '⭐';
-
-            if (!name || !destination) {
-                alert('Please enter name and destination');
-                return;
-            }
-
-            this.favoriteJourneys.push({
-                id: `fav-${Date.now()}`,
-                name,
-                icon,
-                destination,
-                origin: 'home'
-            });
-
-            this.saveFavoriteJourneys();
-            this.renderFavoriteJourneys();
-            closeModal();
-        });
-    }
-
-    executeFavoriteJourney(favId) {
-        const fav = this.favoriteJourneys.find(f => f.id === favId);
-        if (!fav) return;
-
-        // Reset selection
-        document.querySelectorAll('.destination-chip').forEach(c => c.classList.remove('active'));
-        this.setJourneyOrigin(fav.origin || 'home');
-        this.planJourney(fav.destination);
-    }
-
-    confirmDeleteFavorite(favId) {
-        const fav = this.favoriteJourneys.find(f => f.id === favId);
-        if (fav && confirm(`Delete "${fav.name}"?`)) {
-            this.favoriteJourneys = this.favoriteJourneys.filter(f => f.id !== favId);
-            this.saveFavoriteJourneys();
-            this.renderFavoriteJourneys();
-        }
-    }
-
     // ==================== UTILITIES ====================
+    escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    escapeAttr(str) {
+        return str.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    }
+
     getTimeAgo(date) {
         const seconds = Math.floor((new Date() - date) / 1000);
 
