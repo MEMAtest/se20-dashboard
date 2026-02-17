@@ -73,9 +73,22 @@
                     <button class="journey-search-btn" id="journey-search-btn">Go</button>
                     <div class="autocomplete-dropdown" id="autocomplete-dropdown"></div>
                 </div>
+                <!-- Time Pills -->
+                <div class="journey-time-row" id="journey-time-row">
+                    <span class="time-label">Depart:</span>
+                    <button class="time-pill active" data-offset="0">Now</button>
+                    <button class="time-pill" data-offset="30">+30 min</button>
+                    <button class="time-pill" data-offset="60">+1 hr</button>
+                    <button class="time-pill" data-offset="120">+2 hr</button>
+                </div>
                 <!-- Quick Destination Pills -->
                 <div class="journey-quick-row" id="journey-quick-picks">
                     <!-- Destinations loaded from localStorage -->
+                </div>
+                <!-- Favourite/Recent Journeys -->
+                <div class="journey-favourites" id="journey-favourites" style="display: none;">
+                    <span class="favourites-label">Recent</span>
+                    <div class="favourites-list" id="favourites-list"></div>
                 </div>
                 <!-- Route Options (shown after search) -->
                 <div class="journey-results" id="journey-results" style="display: none;">

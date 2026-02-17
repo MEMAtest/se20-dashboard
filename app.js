@@ -1,5 +1,12 @@
 // Penge Dash SE20 - Main Application
 
+const PLATFORM_DIRECTIONS = {
+    pnw: { '1': '→ Victoria', '2': '→ London Br' },
+    pne: { '1': '→ London Br', '2': '→ Orpington' },
+    bkb: { '1': '→ Elmers End', '2': '→ Wimbledon' },
+    anr: { '1': '→ Highbury & Islington', '2': '→ West Croydon' }
+};
+
 class PengeDash {
     constructor() {
         this.isRefreshing = false;
@@ -386,18 +393,27 @@ class PengeDash {
             .filter(d => d.dest.toLowerCase().includes(destination.toLowerCase().split(' ')[0]))
             .slice(0, 6);
 
+        const dirLookup = PLATFORM_DIRECTIONS[stationId] || {};
+
         if (filtered.length === 0) {
             departuresEl.innerHTML = '<div class="no-data">No more trains to this destination</div>';
         } else {
-            departuresEl.innerHTML = filtered.map((dep, i) => `
+            departuresEl.innerHTML = filtered.map((dep, i) => {
+                const dirLabel = dep.platform && dep.platform !== '-' ? (dirLookup[dep.platform] || '') : '';
+                const scheduledStr = dep.scheduledTime || (dep.mins != null ? new Date(Date.now() + dep.mins * 60000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '');
+                return `
                 <div class="modal-departure">
                     <div class="modal-departure-info">
                         <span class="modal-departure-dest">${this.escapeHtml(dep.dest)}</span>
                         ${dep.platform && dep.platform !== '-' ? `<span class="modal-departure-platform">P${this.escapeHtml(dep.platform)}</span>` : ''}
+                        ${dirLabel ? `<span class="departure-platform-dir">${dirLabel}</span>` : ''}
                     </div>
-                    <span class="modal-departure-time">${dep.mins} min</span>
+                    <div class="modal-departure-time-col">
+                        <span class="modal-departure-time">${dep.mins} min</span>
+                        ${scheduledStr ? `<span class="departure-scheduled">${scheduledStr}</span>` : ''}
+                    </div>
                 </div>
-            `).join('');
+            `}).join('');
         }
 
         modal.classList.add('active');
@@ -925,17 +941,24 @@ class PengeDash {
 
         const stationNames = { 'pnw': 'Penge West', 'pne': 'Penge East', 'bkb': 'Birkbeck', 'anr': 'Anerley' };
 
-        container.innerHTML = departures.slice(0, 6).map(dep => `
+        const dirLookup = PLATFORM_DIRECTIONS[stationId] || {};
+
+        container.innerHTML = departures.slice(0, 6).map(dep => {
+            const dirLabel = dep.platform && dep.platform !== '-' ? (dirLookup[dep.platform] || '') : '';
+            const scheduledStr = dep.scheduledTime || (dep.mins != null ? new Date(Date.now() + dep.mins * 60000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '');
+            return `
             <div class="departure ${dep.cancelled ? 'cancelled' : ''}" onclick="pengeDash.openModal('${this.escapeAttr(stationId)}', '${this.escapeAttr(stationNames[stationId])}', '${this.escapeAttr(dep.dest)}')">
                 <div class="departure-info">
                     ${dep.platform && dep.platform !== '-' ? `<span class="departure-platform">P${this.escapeHtml(dep.platform)}</span>` : ''}
+                    ${dirLabel ? `<span class="departure-platform-dir">${dirLabel}</span>` : ''}
                     <span class="departure-destination">${this.escapeHtml(dep.dest)}${dep.cancelled ? ' ❌' : ''}${dep.delayed ? ' ⚠️' : ''}</span>
                 </div>
                 <div class="departure-time">
                     <span class="departure-due ${dep.mins <= 3 ? 'urgent' : ''}">${dep.mins} min</span>
+                    ${scheduledStr ? `<span class="departure-scheduled">${scheduledStr}</span>` : ''}
                 </div>
             </div>
-        `).join('');
+        `}).join('');
     }
 
     // ==================== ANERLEY OVERGROUND (TfL Fallback) ====================
@@ -1001,6 +1024,8 @@ class PengeDash {
             // Only show hype for first departure
             const hype = index === 0 ? this.getDepartureHype(dep.mins) : null;
 
+            const scheduledStr = dep.scheduledTime || (dep.mins != null ? new Date(Date.now() + dep.mins * 60000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '');
+
             return `
                 <div class="departure" onclick="pengeDash.openModal('anr', 'Anerley', '${this.escapeAttr(dep.dest)}')">
                     <div class="departure-info">
@@ -1009,6 +1034,7 @@ class PengeDash {
                     </div>
                     <div class="departure-time">
                         <span class="departure-due ${dep.mins <= 3 ? 'urgent' : ''}">${dep.mins} min</span>
+                        ${scheduledStr ? `<span class="departure-scheduled">${scheduledStr}</span>` : ''}
                         ${hype ? `<span class="departure-hype">${hype}</span>` : ''}
                     </div>
                 </div>
@@ -1116,17 +1142,24 @@ class PengeDash {
         // Display first 3
         const displayData = data.slice(0, 3);
 
-        container.innerHTML = displayData.map(dep => `
+        const dirLookup = PLATFORM_DIRECTIONS[stationId] || {};
+
+        container.innerHTML = displayData.map(dep => {
+            const dirLabel = dep.platform ? (dirLookup[dep.platform] || '') : '';
+            const scheduledStr = new Date(Date.now() + dep.mins * 60000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+            return `
             <div class="departure" onclick="pengeDash.openModal('${this.escapeAttr(stationId)}', '${this.escapeAttr(stationNames[stationId])}', '${this.escapeAttr(dep.dest)}')">
                 <div class="departure-info">
                     ${dep.platform ? `<span class="departure-platform">P${this.escapeHtml(dep.platform)}</span>` : ''}
+                    ${dirLabel ? `<span class="departure-platform-dir">${dirLabel}</span>` : ''}
                     <span class="departure-destination">${this.escapeHtml(dep.dest)}</span>
                 </div>
                 <div class="departure-time">
                     <span class="departure-due">${dep.mins} min</span>
+                    <span class="departure-scheduled">${scheduledStr}</span>
                 </div>
             </div>
-        `).join('');
+        `}).join('');
     }
 
     // ==================== BUSES ====================
@@ -1203,6 +1236,12 @@ class PengeDash {
                     locationText = mins <= 1 ? 'Arriving' : `~${stopsAway} stop${stopsAway > 1 ? 's' : ''}`;
                 }
 
+                // Scheduled arrival time
+                const arrivalTime = bus.expectedArrival
+                    ? new Date(bus.expectedArrival)
+                    : new Date(Date.now() + bus.timeToStation * 1000);
+                const arrivalStr = arrivalTime.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+
                 return `
                     <div class="bus-arrival">
                         <div class="bus-route">
@@ -1212,7 +1251,10 @@ class PengeDash {
                                 <span class="bus-location">${this.escapeHtml(locationText)}</span>
                             </div>
                         </div>
-                        <span class="bus-time">${mins} min</span>
+                        <div class="bus-time-col">
+                            <span class="bus-time">${mins} min</span>
+                            <span class="bus-scheduled">${arrivalStr}</span>
+                        </div>
                     </div>
                 `;
             }).join('');
@@ -1240,25 +1282,23 @@ class PengeDash {
             { route: '176', dest: 'Penge', mins: 17 }
         ];
 
-        eastContainer.innerHTML = mockEastBuses.map(bus => `
+        const renderMockBus = (bus) => {
+            const arrivalStr = new Date(Date.now() + bus.mins * 60000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+            return `
             <div class="bus-arrival">
                 <div class="bus-route">
                     <span class="bus-number">${bus.route}</span>
                     <span class="bus-destination">${bus.dest}</span>
                 </div>
-                <span class="bus-time">${bus.mins} min</span>
+                <div class="bus-time-col">
+                    <span class="bus-time">${bus.mins} min</span>
+                    <span class="bus-scheduled">${arrivalStr}</span>
+                </div>
             </div>
-        `).join('');
+        `};
 
-        westContainer.innerHTML = mockWestBuses.map(bus => `
-            <div class="bus-arrival">
-                <div class="bus-route">
-                    <span class="bus-number">${bus.route}</span>
-                    <span class="bus-destination">${bus.dest}</span>
-                </div>
-                <span class="bus-time">${bus.mins} min</span>
-            </div>
-        `).join('');
+        eastContainer.innerHTML = mockEastBuses.map(renderMockBus).join('');
+        westContainer.innerHTML = mockWestBuses.map(renderMockBus).join('');
 
         document.getElementById('buses-updated').textContent = 'Demo data';
     }
@@ -1498,12 +1538,17 @@ class PengeDash {
         // Default destinations
         this.defaultDestinations = ['Victoria', 'London Br', 'E.Croydon', 'Bromley S', 'Canary Whf'];
         this.journeyOrigin = 'home';
+        this.journeyTimeOffset = 0;
         this.currentLocation = null;
         this.fetchingLocation = false;
 
         // Load saved destinations or use defaults
         this.loadDestinations();
         this.renderDestinationChips();
+
+        // Load favourite journeys
+        this.loadFavouriteJourneys();
+        this.renderFavouriteJourneys();
 
         // From field tap → toggle origin
         const fromRow = document.getElementById('journey-from-row');
@@ -1544,6 +1589,15 @@ class PengeDash {
 
         // Setup autocomplete
         this.setupAutocomplete();
+
+        // Time pill handlers
+        document.querySelectorAll('.time-pill').forEach(pill => {
+            pill.addEventListener('click', () => {
+                document.querySelectorAll('.time-pill').forEach(p => p.classList.remove('active'));
+                pill.classList.add('active');
+                this.journeyTimeOffset = parseInt(pill.dataset.offset, 10);
+            });
+        });
     }
 
     // ==================== AUTOCOMPLETE ====================
@@ -1658,10 +1712,10 @@ class PengeDash {
     }
 
     loadDestinations() {
-        const saved = localStorage.getItem('pengedash-destinations');
-        if (saved) {
-            this.destinations = JSON.parse(saved);
-        } else {
+        try {
+            const saved = localStorage.getItem('pengedash-destinations');
+            this.destinations = saved ? JSON.parse(saved) : [...this.defaultDestinations];
+        } catch (e) {
             this.destinations = [...this.defaultDestinations];
         }
     }
@@ -1772,6 +1826,13 @@ class PengeDash {
                 url += `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}`;
             }
 
+            // Apply time offset if set
+            if (this.journeyTimeOffset > 0) {
+                const departTime = new Date(Date.now() + this.journeyTimeOffset * 60000);
+                const sep = url.includes('?') ? '&' : '?';
+                url += `${sep}dateTime=${departTime.toISOString().slice(0,16)}&timeIs=Departing`;
+            }
+
             let response = await fetch(url);
             let data = await response.json();
 
@@ -1809,6 +1870,11 @@ class PengeDash {
                 if (CONFIG.TFL_APP_KEY) {
                     resolvedUrl += `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}`;
                 }
+                if (this.journeyTimeOffset > 0) {
+                    const departTime = new Date(Date.now() + this.journeyTimeOffset * 60000);
+                    const sep = resolvedUrl.includes('?') ? '&' : '?';
+                    resolvedUrl += `${sep}dateTime=${departTime.toISOString().slice(0,16)}&timeIs=Departing`;
+                }
 
                 response = await fetch(resolvedUrl);
                 data = await response.json();
@@ -1820,7 +1886,7 @@ class PengeDash {
             } else {
                 resultsContainer.innerHTML = `
                     <div class="journey-error">
-                        😕 Couldn't find a route to "${destination}".<br>
+                        😕 Couldn't find a route to "${this.escapeHtml(destination)}".<br>
                         Try a more specific location or station name.
                     </div>
                 `;
@@ -1839,6 +1905,9 @@ class PengeDash {
 
     displayRouteOptions(journeys, destination) {
         const container = document.getElementById('journey-results');
+
+        // Save as favourite journey
+        this.saveFavouriteJourney(destination);
 
         // Build route cards for each journey option
         const routeCards = journeys.map((journey, index) => {
@@ -1901,6 +1970,10 @@ class PengeDash {
                 `;
             }).join('');
 
+            // Extract fare if available (in pence)
+            const farePence = journey.fare?.totalCost;
+            const fareHtml = farePence != null ? ` · <span class="route-fare">£${(farePence / 100).toFixed(2)}</span>` : '';
+
             return `
                 <div class="route-card ${modeClass}" data-index="${index}">
                     <div class="route-card-header">
@@ -1908,7 +1981,7 @@ class PengeDash {
                         <span class="route-summary">${summary}</span>
                         <span class="route-duration">${duration} min</span>
                     </div>
-                    <div class="route-card-meta">Departs ${depStr} · Arrives ${arrStr}</div>
+                    <div class="route-card-meta">Departs ${depStr} · Arrives ${arrStr}${fareHtml}</div>
                     ${insightsHtml}
                     <div class="route-card-detail">
                         <div class="journey-route">${legsHtml}</div>
@@ -1920,8 +1993,16 @@ class PengeDash {
         // Add walking option if destination is relatively close
         const walkingCard = this.getWalkingOption(destination, journeys[0]);
 
+        // Show departure time header if using offset
+        let headerText = 'Getting there';
+        if (this.journeyTimeOffset > 0) {
+            const departAt = new Date(Date.now() + this.journeyTimeOffset * 60000);
+            const timeStr = departAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+            headerText = `Departing at ${timeStr}`;
+        }
+
         container.innerHTML = `
-            <div class="route-options-header">Getting there</div>
+            <div class="route-options-header">${headerText}</div>
             <div class="route-options">
                 ${routeCards}
                 ${walkingCard}
@@ -2294,6 +2375,85 @@ class PengeDash {
         } catch (error) {
             return `${coords.lat.toFixed(4)}, ${coords.lon.toFixed(4)}`;
         }
+    }
+
+    // ==================== FAVOURITE JOURNEYS ====================
+    loadFavouriteJourneys() {
+        try {
+            const saved = localStorage.getItem('pengedash-favorite-journeys');
+            this.favouriteJourneys = saved ? JSON.parse(saved) : [];
+        } catch (e) {
+            this.favouriteJourneys = [];
+        }
+    }
+
+    saveFavouriteJourney(destination) {
+        if (!destination) return;
+        // Remove existing duplicate (case-insensitive)
+        this.favouriteJourneys = this.favouriteJourneys.filter(
+            f => f.destination.toLowerCase() !== destination.toLowerCase()
+        );
+        // Add to front
+        this.favouriteJourneys.unshift({ destination, timestamp: Date.now() });
+        // Max 5
+        this.favouriteJourneys = this.favouriteJourneys.slice(0, 5);
+        try {
+            localStorage.setItem('pengedash-favorite-journeys', JSON.stringify(this.favouriteJourneys));
+        } catch (e) { /* ignore */ }
+        this.renderFavouriteJourneys();
+    }
+
+    removeFavouriteJourney(destination) {
+        this.favouriteJourneys = this.favouriteJourneys.filter(
+            f => f.destination.toLowerCase() !== destination.toLowerCase()
+        );
+        try {
+            localStorage.setItem('pengedash-favorite-journeys', JSON.stringify(this.favouriteJourneys));
+        } catch (e) { /* ignore */ }
+        this.renderFavouriteJourneys();
+    }
+
+    renderFavouriteJourneys() {
+        const container = document.getElementById('journey-favourites');
+        const list = document.getElementById('favourites-list');
+        if (!container || !list) return;
+
+        if (!this.favouriteJourneys || this.favouriteJourneys.length === 0) {
+            container.style.display = 'none';
+            return;
+        }
+
+        // Show max 3
+        const display = this.favouriteJourneys.slice(0, 3);
+        list.innerHTML = display.map(f =>
+            `<button class="favourite-chip" data-destination="${this.escapeAttr(f.destination)}">🕐 ${this.escapeHtml(f.destination)}</button>`
+        ).join('');
+
+        container.style.display = 'flex';
+
+        // Click to search
+        list.querySelectorAll('.favourite-chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+                const dest = chip.dataset.destination;
+                document.getElementById('destination-input').value = dest;
+                document.querySelectorAll('.destination-chip').forEach(c => c.classList.remove('active'));
+                this.planJourney(dest);
+            });
+        });
+
+        // Long-press to remove (pressTimer scoped per chip)
+        list.querySelectorAll('.favourite-chip').forEach(chip => {
+            let pressTimer;
+            chip.addEventListener('touchstart', () => {
+                pressTimer = setTimeout(() => {
+                    if (confirm(`Remove "${chip.dataset.destination}" from recent?`)) {
+                        this.removeFavouriteJourney(chip.dataset.destination);
+                    }
+                }, 600);
+            }, { passive: true });
+            chip.addEventListener('touchend', () => clearTimeout(pressTimer));
+            chip.addEventListener('touchmove', () => clearTimeout(pressTimer));
+        });
     }
 
     // ==================== UTILITIES ====================
