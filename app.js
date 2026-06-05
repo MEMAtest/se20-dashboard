@@ -51,75 +51,89 @@ class PengeDash {
         this.loadCachedNearby();
         this.updateHeaderLocation();
 
-        this.updateClock();
-        this.updateGreeting();
-        setInterval(() => this.updateClock(), 1000);
-        setInterval(() => this.updateGreeting(), 60000); // Update greeting every minute
-
         // Auto dark mode (8pm - 6am)
         this.updateTheme();
-        setInterval(() => this.updateTheme(), 60000); // Check every minute
+        setInterval(() => this.updateTheme(), 60000);
 
-        // Setup offline detection
+        // Offline detection
         this.setupOfflineDetection();
 
-        // If starting offline, load cached data immediately
-        if (!navigator.onLine) {
-            this.loadCachedData();
-        }
+        // Navigation (top tabs + bottom nav) and shell links
+        this.setupNav();
+        this.setupShellLinks();
 
-        // Bind refresh button
-        document.getElementById('refresh-btn').addEventListener('click', () => this.refreshAll());
-
-        // Bind collapsible toggles
-        document.getElementById('coming-soon-toggle').addEventListener('click', () => this.toggleComingSoon());
-        document.getElementById('line-status-toggle').addEventListener('click', () => this.toggleLineStatus());
-
-        // Bind alert close (stopPropagation so it doesn't open the detail modal)
-        document.getElementById('alert-close').addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.hideAlert();
-        });
-        // Tap the alert banner to see full disruption detail
-        document.getElementById('service-alert').addEventListener('click', () => this.openAlertModal());
-
-        // Setup pull-to-refresh
-        this.setupPullToRefresh();
-
-        // Create modals (next trains + generic detail)
+        // Modals (next-trains + generic detail)
         this.createModal();
 
-        // Setup journey planner
+        // Journey planner controls (where-to, chips, filters)
         this.setupJourneyPlanner();
 
-        // Settings (home postcode + saved places) and quick-nav
+        // Settings + saved/recents (Saved screen)
         this.setupSettings();
-        this.setupQuickNav();
+        this.renderSavedPlaces();
+        this.renderRecents();
 
         // Map (Leaflet) — guarded if library/offline
         this.initMap();
 
-        // Reflect saved home in the journey "from" label + curated-vs-dynamic cards
+        // Reflect saved home in the journey "from" label
         this.applyHomeToJourney();
-        this.applyHomeMode();
-        // Show a "finding nearby…" placeholder if relocated and not yet detected
-        if (!this.home.isDefault) this.renderNearbySection(this.nearbyStations.length === 0);
+
+        // Nearby placeholder until detection completes
+        this.renderNearbyNow(this.nearbyStations.length === 0);
 
         // Initial data load
         this.refreshAll();
 
-        // Detect nearby stops — for the map always, and for cards when relocated
+        // Detect nearby (all homes) — feeds the map + Nearby screen
         if (this.nearbyStations.length === 0) {
             this.detectNearbyForHome();
         } else {
             this.updateMap();
+            this.renderNearbyNow();
+            this.fetchNearbyArrivals();
         }
 
-        // Set up auto-refresh intervals
+        // Auto-refresh intervals
         this.setupAutoRefresh();
+    }
 
-        // Keep Darwin backend alive only for the SE20 default (it serves SE20 only)
-        if (this.home.isDefault) this.pingDarwinBackend();
+    // ==================== NAVIGATION (screens) ====================
+    setupNav() {
+        this.currentScreen = 'plan';
+        this._screenHistory = ['plan'];
+        const handler = (btn) => this.showScreen(btn.dataset.screen);
+        document.querySelectorAll('#top-tabs .top-tab').forEach(b =>
+            b.addEventListener('click', () => handler(b)));
+        document.querySelectorAll('#bottom-nav .bn-btn').forEach(b =>
+            b.addEventListener('click', () => handler(b)));
+    }
+
+    showScreen(name) {
+        if (!name) return;
+        this.currentScreen = name;
+        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+        const screen = document.getElementById(`screen-${name}`);
+        if (screen) screen.classList.add('active');
+        // Sync tab highlights (top tabs only have the 4 main; saved/journey have none)
+        document.querySelectorAll('#top-tabs .top-tab').forEach(b =>
+            b.classList.toggle('active', b.dataset.screen === name));
+        document.querySelectorAll('#bottom-nav .bn-btn').forEach(b =>
+            b.classList.toggle('active', b.dataset.screen === name));
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    setupShellLinks() {
+        const go = (id, screen) => {
+            const el = document.getElementById(id);
+            if (el) el.addEventListener('click', () => this.showScreen(screen));
+        };
+        go('bell-btn', 'alerts');
+        go('location-chip', 'saved');
+        go('plan-alerts-link', 'alerts');
+        go('nearby-alerts-link', 'alerts');
+        const back = document.getElementById('journey-back');
+        if (back) back.addEventListener('click', () => this.showScreen('plan'));
     }
 
     // ==================== HOME / SAVED PLACES PERSISTENCE ====================
@@ -338,6 +352,9 @@ class PengeDash {
         this.home = home;
         this.nearbyStations = nearby.stations;
         this.nearbyBusStops = nearby.busStops;
+        this.stationData = {};        // clear previous location's departures
+        this.busStopData = {};
+        this.liveDepartures = [];
         this.saveHome();
         this.cacheData('nearby-cache', { home: home.postcode, stations: nearby.stations, busStops: nearby.busStops });
 
@@ -349,117 +366,163 @@ class PengeDash {
         // Rebuild UI
         this.updateHeaderLocation();
         this.applyHomeToJourney();
-        this.applyHomeMode();
-        this.renderNearbySection();
+        this.renderSavedPlaces();
+        if (this.updateSettingsUI) this.updateSettingsUI();
+        this.renderNearbyNow();
         this.updateMap();
         await this.refreshAll();
         return home;
     }
 
     async detectNearbyForHome() {
-        try {
-            let nearby = await this.detectNearby(this.home.lat, this.home.lon);
-            if (nearby.stations.length === 0) {
-                nearby = await this.detectNearby(this.home.lat, this.home.lon, CONFIG.NEARBY.stationRadius * 2);
+        // Coalesce concurrent calls (init + refreshAll can both trigger detection)
+        if (this._detecting) return this._detecting;
+        this._detecting = (async () => {
+            try {
+                let nearby = await this.detectNearby(this.home.lat, this.home.lon);
+                if (nearby.stations.length === 0) {
+                    nearby = await this.detectNearby(this.home.lat, this.home.lon, CONFIG.NEARBY.stationRadius * 2);
+                }
+                this.nearbyStations = nearby.stations;
+                this.nearbyBusStops = nearby.busStops;
+                this.cacheData('nearby-cache', { home: this.home.postcode, stations: nearby.stations, busStops: nearby.busStops });
+                this.renderNearbyNow();
+                this.updateMap();
+                await this.fetchNearbyArrivals();
+            } catch (e) {
+                console.error('Nearby detection failed:', e);
+                // Don't leave the Nearby screen stuck on "Finding…"
+                this.renderNearbyNow(false);
+                this.liveDepartures = [];
+                this.renderLiveDepartures();
+            } finally {
+                this._detecting = null;
             }
-            this.nearbyStations = nearby.stations;
-            this.nearbyBusStops = nearby.busStops;
-            this.cacheData('nearby-cache', { home: this.home.postcode, stations: nearby.stations, busStops: nearby.busStops });
-            this.renderNearbySection(); // no-op for default home
-            this.updateMap();
-            if (!this.home.isDefault) await this.fetchNearbyArrivals();
-        } catch (e) {
-            console.error('Nearby detection failed:', e);
-        }
+        })();
+        return this._detecting;
     }
 
-    // ==================== DYNAMIC NEARBY CARDS (relocated homes) ====================
-    renderNearbySection(detecting = false) {
-        const host = document.getElementById('nearby-section');
-        if (!host || this.home.isDefault) return;
+    // ==================== NEARBY SCREEN ====================
+    _stationMode(st) {
+        const m = st.modes || [];
+        return m.includes('tube') ? 'tube' : m.includes('overground') ? 'overground'
+            : m.includes('dlr') ? 'dlr' : m.includes('elizabeth-line') ? 'elizabeth' : 'rail';
+    }
+    _modeEmoji(mode, isBus) {
+        if (isBus) return '🚌';
+        return mode === 'overground' ? '🚆' : mode === 'dlr' ? '🚈'
+            : mode === 'tube' ? '🚇' : mode === 'elizabeth' ? '🚆' : '🚉';
+    }
 
+    renderNearbyNow(detecting = false) {
+        const list = document.getElementById('nearby-now-list');
+        if (!list) return;
         if (this.nearbyStations.length === 0 && this.nearbyBusStops.length === 0) {
-            host.innerHTML = detecting
-                ? `<section class="card"><div class="loading">Finding nearby stations…</div></section>`
-                : `<section class="card"><div class="no-data">No stations or stops found near ${this.escapeHtml(this.home.label || 'here')}.</div></section>`;
+            list.innerHTML = detecting
+                ? '<div class="loading">Finding nearby stations…</div>'
+                : `<div class="no-data">No stations or stops found near ${this.escapeHtml(this.home.label || 'here')}.</div>`;
             return;
         }
-
-        const stationCards = this.nearbyStations.map(st => this.renderStationCard(st)).join('');
-        const busCard = this.renderBusCard();
-        host.innerHTML = stationCards + busCard;
-
-        // Tap a departure to open the modal (delegated)
-        host.querySelectorAll('.station-card').forEach(card => {
-            card.addEventListener('click', (e) => {
-                const dep = e.target.closest('.departure');
-                if (!dep) return;
-                const sid = card.dataset.stationId;
-                const sname = card.dataset.stationName;
-                this.openModal(sid, sname, dep.dataset.dest || '');
+        const modeName = { tube: 'Tube', overground: 'Overground', dlr: 'DLR',
+            'elizabeth-line': 'Elizabeth line', 'national-rail': 'National Rail', tram: 'Tram' };
+        const items = [];
+        this.nearbyStations.forEach(st => {
+            const walk = Math.max(1, Math.round(st.distance / 80));
+            const mode = this._stationMode(st);
+            const tags = (st.modes || []).slice(0, 2)
+                .map(m => `<span class="ni-tag line">${this.escapeHtml(modeName[m] || m)}</span>`).join('');
+            items.push(`
+                <button class="nearby-item" data-station-id="${this.escapeAttr(st.id)}" data-station-name="${this.escapeAttr(st.name)}">
+                    <span class="ni-icon ${mode}">${this._modeEmoji(mode)}</span>
+                    <span class="ni-body">
+                        <span class="ni-name">${this.escapeHtml(st.name)}</span>
+                        <span class="ni-sub">${walk} min walk · ${st.distance} m</span>
+                        <span class="ni-tags">${tags}</span>
+                    </span>
+                    <span class="ni-chev">›</span>
+                </button>`);
+        });
+        this.nearbyBusStops.forEach(stop => {
+            const walk = Math.max(1, Math.round(stop.distance / 80));
+            const towards = stop.towards ? `towards ${stop.towards}` : (stop.indicator ? `Stop ${stop.indicator}` : '');
+            items.push(`
+                <button class="nearby-item" data-busstop-id="${this.escapeAttr(stop.id)}" data-busstop-name="${this.escapeAttr(stop.name)}">
+                    <span class="ni-icon bus">🚌</span>
+                    <span class="ni-body">
+                        <span class="ni-name">${this.escapeHtml(stop.name)}</span>
+                        <span class="ni-sub">${walk} min walk · ${stop.distance} m${towards ? ' · ' + this.escapeHtml(towards) : ''}</span>
+                    </span>
+                    <span class="ni-chev">›</span>
+                </button>`);
+        });
+        list.innerHTML = items.join('');
+        list.querySelectorAll('.nearby-item').forEach(el => {
+            el.addEventListener('click', () => {
+                if (el.dataset.stationId) this.openStopModal(el.dataset.stationId, el.dataset.stationName, false);
+                else if (el.dataset.busstopId) this.openStopModal(el.dataset.busstopId, el.dataset.busstopName, true);
             });
         });
     }
 
-    renderStationCard(station) {
-        const walk = Math.max(1, Math.round(station.distance / 80)); // ~80 m/min
-        const isTflLive = (station.modes || []).some(m =>
-            ['tube', 'overground', 'dlr', 'elizabeth-line', 'tram'].includes(m));
-        const roundelClass = (station.modes || []).includes('tube') ? 'tube-roundel'
-            : (station.modes || []).includes('overground') ? 'overground-roundel'
-            : (station.modes || []).includes('dlr') ? 'dlr-roundel' : 'rail-roundel';
-
-        const body = isTflLive
-            ? `<div class="departures" id="arrivals-${this.escapeAttr(station.id)}"><div class="loading">Loading...</div></div>`
-            : `<div class="nr-unavailable">🚂 National Rail — live times not available here.
-                 <a href="https://www.nationalrail.co.uk/live-trains/departures/" target="_blank" rel="noopener">Live departures ↗</a></div>`;
-
-        return `
-            <section class="card trains-card station-card" data-station-id="${this.escapeAttr(station.id)}" data-station-name="${this.escapeAttr(station.name)}">
-                <div class="card-header">
-                    <h2><span class="${roundelClass}"></span> ${this.escapeHtml(station.name)}</h2>
-                    <div class="header-badges">
-                        <span class="walk-time-badge">🚶 ${walk} min</span>
-                        ${isTflLive ? '<span class="live-badge">LIVE</span>' : ''}
-                        <span class="update-time" id="updated-${this.escapeAttr(station.id)}">--</span>
-                    </div>
-                </div>
-                ${body}
-            </section>`;
-    }
-
-    renderBusCard() {
-        if (!this.nearbyBusStops || this.nearbyBusStops.length === 0) return '';
-        const stops = this.nearbyBusStops.map(stop => {
-            const label = stop.towards ? `→ ${stop.towards}` : (stop.indicator ? `Stop ${stop.indicator}` : stop.name);
+    renderLiveDepartures() {
+        const list = document.getElementById('live-departures-list');
+        if (!list) return;
+        const deps = (this.liveDepartures || []).slice(0, 8);
+        if (deps.length === 0) { list.innerHTML = '<div class="no-data">No live departures right now.</div>'; return; }
+        list.innerHTML = deps.map(d => {
+            const icon = this._modeEmoji(d.mode, d.isBus);
+            const title = d.isBus
+                ? `${d.line ? 'Bus ' + this.escapeHtml(d.line) : 'Bus'} to ${this.escapeHtml(d.dest)}`
+                : `${this.escapeHtml(d.line || d.station)} to ${this.escapeHtml(d.dest)}`;
+            const sub = d.isBus
+                ? `From ${this.escapeHtml(d.station)}`
+                : `${this.escapeHtml(d.station)}${d.platform && d.platform !== '-' ? ' · Platform ' + this.escapeHtml(d.platform) : ''}`;
             return `
-                <div class="bus-direction">
-                    <div class="direction-header">
-                        <span class="direction-name">${this.escapeHtml(stop.name)} ${this.escapeHtml(label)}</span>
-                    </div>
-                    <div class="bus-arrivals" id="busstop-${this.escapeAttr(stop.id)}">
-                        <div class="loading">Loading...</div>
-                    </div>
-                </div>`;
+            <button class="dep-item" data-id="${this.escapeAttr(d.id)}" data-bus="${d.isBus ? '1' : ''}" data-name="${this.escapeAttr(d.name)}">
+                <span class="di-icon">${icon}</span>
+                <span class="di-body">
+                    <span class="di-title">${title}</span>
+                    <span class="di-sub">${sub}</span>
+                </span>
+                <span class="di-right">
+                    <span class="di-mins ${d.mins <= 3 ? 'urgent' : ''}">${d.mins} min</span>
+                    <span class="ni-chev">›</span>
+                </span>
+            </button>`;
         }).join('');
-
-        return `
-            <section class="card buses-card">
-                <div class="card-header">
-                    <h2><span class="tfl-bus-icon"></span> Buses</h2>
-                    <div class="header-badges">
-                        <span class="live-badge">LIVE</span>
-                        <span class="update-time" id="nearby-buses-updated">--</span>
-                    </div>
-                </div>
-                <div class="bus-directions">${stops}</div>
-            </section>`;
+        list.querySelectorAll('.dep-item').forEach(el =>
+            el.addEventListener('click', () => this.openStopModal(el.dataset.id, el.dataset.name, el.dataset.bus === '1')));
     }
 
-    // ==================== UNIVERSAL ARRIVALS (TfL StopPoint/Arrivals) ====================
+    openStopModal(id, name, isBus = false) {
+        const modal = document.getElementById('next-trains-modal');
+        document.getElementById('modal-station-name').textContent = name || 'Departures';
+        const sub = modal.querySelector('.modal-subtitle');
+        if (sub) sub.textContent = 'Next live departures';
+        const el = document.getElementById('modal-departures');
+        const data = isBus ? ((this.busStopData || {})[id] || []) : (this.stationData[id] || []);
+        if (data.length === 0) {
+            el.innerHTML = '<div class="no-data">No live departures right now</div>';
+        } else {
+            el.innerHTML = data.slice(0, 8).map(d => `
+                <div class="modal-departure">
+                    <div class="modal-departure-info">
+                        <span class="modal-departure-dest">${isBus && d.line ? this.escapeHtml(d.line) + ' · ' : ''}${this.escapeHtml(d.dest)}</span>
+                        ${d.platform && d.platform !== '-' ? `<span class="departure-platform-dir">Platform ${this.escapeHtml(d.platform)}</span>` : ''}
+                    </div>
+                    <div class="modal-departure-time-col">
+                        <span class="modal-departure-time">${d.mins} min</span>
+                        ${d.scheduledTime ? `<span class="departure-scheduled">${d.scheduledTime}</span>` : ''}
+                    </div>
+                </div>`).join('');
+        }
+        modal.classList.add('active');
+    }
+
     async fetchActiveTransit() {
-        if (this.home.isDefault) {
-            await Promise.all([this.fetchDarwinTrains(), this.fetchBuses()]);
+        // Unified: live arrivals for nearby stations/buses via TfL (correct for all homes)
+        if (this.nearbyStations.length === 0 && this.nearbyBusStops.length === 0) {
+            await this.detectNearbyForHome();
         } else {
             await this.fetchNearbyArrivals();
         }
@@ -467,48 +530,60 @@ class PengeDash {
 
     async fetchNearbyArrivals() {
         const tflAuth = CONFIG.TFL_APP_KEY ? `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+        const merged = [];
+        this.busStopData = this.busStopData || {};
 
-        // Stations with TfL live modes
         const liveStations = this.nearbyStations.filter(st =>
             (st.modes || []).some(m => ['tube', 'overground', 'dlr', 'elizabeth-line', 'tram'].includes(m)));
 
         await Promise.all(liveStations.map(async (st) => {
             try {
-                const res = await fetch(`https://api.tfl.gov.uk/StopPoint/${st.id}/Arrivals${tflAuth}`);
-                const data = await res.json();
-                const departures = (Array.isArray(data) ? data : [])
-                    .map(a => ({
-                        dest: this.cleanStationName(a.destinationName || a.towards || 'Check board'),
-                        platform: this.cleanPlatform(a.platformName),
-                        mins: Math.floor((a.timeToStation || 0) / 60),
-                        currentLocation: a.currentLocation || '',
-                        scheduledTime: a.expectedArrival
-                            ? new Date(a.expectedArrival).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : ''
-                    }))
-                    .filter(d => d.mins >= 0)
-                    .sort((a, b) => a.mins - b.mins);
+                const data = await fetch(`https://api.tfl.gov.uk/StopPoint/${st.id}/Arrivals${tflAuth}`).then(r => r.json());
+                const deps = (Array.isArray(data) ? data : []).map(a => ({
+                    dest: this.cleanStationName(a.destinationName || a.towards || 'Check board'),
+                    platform: this.cleanPlatform(a.platformName),
+                    line: a.lineName || '',
+                    mins: Math.floor((a.timeToStation || 0) / 60),
+                    scheduledTime: a.expectedArrival
+                        ? new Date(a.expectedArrival).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : ''
+                })).filter(d => d.mins >= 0).sort((a, b) => a.mins - b.mins);
 
-                st.platformDirections = this.getPlatformDirections(departures);
-                this.stationData[st.id] = departures;
-                this.renderStationArrivals(st, departures);
-                const upd = document.getElementById(`updated-${st.id}`);
-                if (upd) upd.textContent = this.getTimeAgo(new Date());
-            } catch (e) {
-                const upd = document.getElementById(`updated-${st.id}`);
-                if (upd) upd.textContent = 'Error';
-            }
+                st.platformDirections = this.getPlatformDirections(deps);
+                this.stationData[st.id] = deps;
+                const mode = this._stationMode(st);
+                deps.slice(0, 2).forEach(d => merged.push({
+                    mode, station: st.name, dest: d.dest, line: d.line, mins: d.mins,
+                    platform: d.platform, id: st.id, name: st.name, isBus: false
+                }));
+            } catch (e) { /* skip */ }
         }));
 
-        // Bus stops
         await Promise.all((this.nearbyBusStops || []).map(async (stop) => {
             try {
-                const res = await fetch(`https://api.tfl.gov.uk/StopPoint/${stop.id}/Arrivals${tflAuth}`);
-                const data = await res.json();
-                this.renderBusStopArrivals(stop.id, Array.isArray(data) ? data : []);
-            } catch (e) { /* leave loading */ }
+                const data = await fetch(`https://api.tfl.gov.uk/StopPoint/${stop.id}/Arrivals${tflAuth}`).then(r => r.json());
+                const arr = (Array.isArray(data) ? data : []).map(b => ({
+                    dest: b.destinationName || b.towards || 'Check board',
+                    line: b.lineName || '',
+                    mins: Math.floor((b.timeToStation || 0) / 60),
+                    platform: '-',
+                    scheduledTime: (b.expectedArrival ? new Date(b.expectedArrival) : new Date(Date.now() + (b.timeToStation || 0) * 1000))
+                        .toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+                })).filter(d => d.mins >= 0).sort((a, b) => a.mins - b.mins);
+                this.busStopData[stop.id] = arr;
+                if (arr[0]) merged.push({
+                    mode: 'bus', station: stop.name, dest: arr[0].dest, line: arr[0].line,
+                    mins: arr[0].mins, id: stop.id, name: stop.name, isBus: true
+                });
+            } catch (e) { /* skip */ }
         }));
-        const busUpd = document.getElementById('nearby-buses-updated');
-        if (busUpd) busUpd.textContent = this.getTimeAgo(new Date());
+
+        merged.sort((a, b) => a.mins - b.mins);
+        this.liveDepartures = merged;
+        this.renderLiveDepartures();
+        const now = this.getTimeAgo(new Date());
+        ['departures-updated', 'nearby-updated'].forEach(id => {
+            const el = document.getElementById(id); if (el) el.textContent = now;
+        });
     }
 
     cleanStationName(name) {
@@ -738,41 +813,13 @@ class PengeDash {
     }
 
     loadCachedData() {
-        // Load weather from cache
         const cachedWeather = this.getCachedData('weather');
-        if (cachedWeather) {
-            this.displayWeather(cachedWeather);
-            this.displayHourlyForecast(cachedWeather);
-            if (cachedWeather.daily) {
-                this.displaySunTimes(cachedWeather);
-            }
-            // Validate weather_code exists and is a number before applying background
-            if (cachedWeather.current?.weather_code !== undefined &&
-                typeof cachedWeather.current.weather_code === 'number') {
-                this.applyWeatherBackground(cachedWeather.current.weather_code);
-            }
-        }
+        if (cachedWeather) this.displayWeather(cachedWeather);
 
-        // Load buses from cache
-        const cachedBuses = this.getCachedData('buses');
-        if (cachedBuses) {
-            this.displayBuses(cachedBuses.east, cachedBuses.west);
-        }
-
-        // Load trains from cache
-        const cachedTrains = this.getCachedData('trains');
-        if (cachedTrains) {
-            ['PNW', 'PNE', 'BKB', 'ANR'].forEach(stationCode => {
-                if (cachedTrains[stationCode]) {
-                    this.displayStationDepartures(stationCode, cachedTrains[stationCode]);
-                }
-            });
-        }
-
-        // Load line status from cache
         const cachedLines = this.getCachedData('lines');
         if (cachedLines) {
             this.displayLineStatus(cachedLines);
+            this.checkServiceAlerts(cachedLines);
         }
     }
 
@@ -1005,7 +1052,6 @@ class PengeDash {
 
     setupAutoRefresh() {
         setInterval(() => this.fetchWeather(), CONFIG.REFRESH_INTERVALS.weather);
-        setInterval(() => this.fetchAirQuality(), CONFIG.REFRESH_INTERVALS.weather);
         setInterval(() => this.fetchActiveTransit(), CONFIG.REFRESH_INTERVALS.trains);
         setInterval(() => this.fetchLineStatus(), CONFIG.REFRESH_INTERVALS.trains);
         setInterval(() => this.fetchTrafficDisruptions(), CONFIG.REFRESH_INTERVALS.traffic);
@@ -1068,125 +1114,71 @@ class PengeDash {
 
     async refreshAll() {
         if (this.isRefreshing) return;
-
         this.isRefreshing = true;
-        const btn = document.getElementById('refresh-btn');
-        btn.classList.add('spinning');
-        document.getElementById('status-message').textContent = 'Refreshing...';
+        const status = document.getElementById('status-message');
+        if (status) status.textContent = 'Refreshing…';
 
         try {
             await Promise.all([
                 this.fetchWeather(),
-                this.fetchAirQuality(),
                 this.fetchActiveTransit(),
                 this.fetchLineStatus(),
                 this.fetchTrafficDisruptions()
             ]);
-
-            const now = new Date().toLocaleTimeString('en-GB', {
-                hour: '2-digit',
-                minute: '2-digit'
-            });
-            document.getElementById('last-refresh').textContent = `Last refresh: ${now}`;
-            document.getElementById('status-message').textContent = 'Ready';
+            const now = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+            if (status) status.textContent = `Updated ${now}`;
         } catch (error) {
             console.error('Refresh error:', error);
-            document.getElementById('status-message').textContent = 'Some data failed to load';
+            if (status) status.textContent = 'Some data failed to load';
         } finally {
             this.isRefreshing = false;
-            btn.classList.remove('spinning');
         }
     }
 
     // ==================== WEATHER (Open-Meteo - No API key needed!) ====================
     async fetchWeather() {
-        const updateTime = document.getElementById('weather-updated');
-
         try {
             const { lat, lon } = this.home || CONFIG.LOCATION;
-            // Open-Meteo: Free, no API key required - now with hourly forecast + sunrise/sunset
-            const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m&hourly=temperature_2m,precipitation_probability,weather_code&daily=sunrise,sunset&timezone=Europe/London&forecast_hours=12`;
-
+            const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m&hourly=temperature_2m,precipitation_probability,weather_code&timezone=Europe/London&forecast_hours=12`;
             const response = await fetch(url);
             const data = await response.json();
-
-            // Cache the weather data
             this.cacheData('weather', data);
-
             this.displayWeather(data);
-            this.displayHourlyForecast(data);
-            this.displaySunTimes(data);
-            this.applyWeatherBackground(data.current.weather_code);
-            updateTime.textContent = this.getTimeAgo(new Date());
         } catch (error) {
             console.error('Weather fetch error:', error);
-            // Try to load from cache first
             const cachedWeather = this.getCachedData('weather');
-            if (cachedWeather) {
-                this.displayWeather(cachedWeather);
-                this.displayHourlyForecast(cachedWeather);
-                if (cachedWeather.daily) this.displaySunTimes(cachedWeather);
-                if (cachedWeather.current) this.applyWeatherBackground(cachedWeather.current.weather_code);
-                updateTime.textContent = 'Cached';
-            } else {
-                this.displayMockWeather();
-            }
+            if (cachedWeather) this.displayWeather(cachedWeather);
+            else this.displayMockWeather();
         }
     }
 
     displayWeather(data) {
+        if (!data || !data.current) return;
         const current = data.current;
         const temp = Math.round(current.temperature_2m);
         const feelsLike = Math.round(current.apparent_temperature);
-        const windSpeed = Math.round(current.wind_speed_10m * 0.621371); // km/h to mph
-
-        // Get rain probability for current hour
+        const windSpeed = Math.round(current.wind_speed_10m * 0.621371);
         const currentHour = new Date().getHours();
         const rainChance = data.hourly?.precipitation_probability?.[currentHour] || 0;
         const { icon, condition } = this.getWeatherFromCode(current.weather_code);
 
-        // Store weather data for smart journey insights
+        // Store for smart journey insights
         this.currentWeather = { temp, feelsLike, rainChance, condition, windSpeed, hourlyData: data.hourly };
 
-        document.getElementById('temp').textContent = `${temp}°`;
-        document.getElementById('feels-like').textContent = `${feelsLike}°`;
-        document.getElementById('wind').textContent = `${windSpeed} mph`;
-
-        document.getElementById('rain-chance').textContent = `${rainChance}%`;
-
-        // Rain hint - make the percentage more meaningful
-        const rainHint = document.getElementById('rain-hint');
-        if (rainChance <= 10) {
-            rainHint.textContent = 'Dry';
-        } else if (rainChance <= 30) {
-            rainHint.textContent = 'Unlikely';
-        } else if (rainChance <= 60) {
-            rainHint.textContent = 'Possible';
-        } else if (rainChance <= 80) {
-            rainHint.textContent = 'Likely';
-        } else {
-            rainHint.textContent = 'Expect rain';
-        }
-
-        // Weather icon and condition from WMO code
-        document.getElementById('weather-icon').textContent = icon;
-        document.getElementById('weather-condition').textContent = condition;
-
-        // Clothing advice
+        const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+        set('temp', `${temp}°`);
+        set('weather-condition', condition);
+        set('weather-icon', icon);
+        set('feels-like-row', `Feels ${feelsLike}°`);
+        set('rain-row', `Rain ${rainChance}%`);
+        set('mini-weather', `${icon} ${temp}°`);
         this.updateClothingAdvice(feelsLike, rainChance, windSpeed);
     }
 
     displayMockWeather() {
-        document.getElementById('temp').textContent = '12°';
-        document.getElementById('feels-like').textContent = '10°';
-        document.getElementById('rain-chance').textContent = '30%';
-        document.getElementById('rain-hint').textContent = 'Unlikely';
-        document.getElementById('wind').textContent = '8 mph';
-        document.getElementById('weather-icon').textContent = '🌤️';
-        document.getElementById('weather-condition').textContent = 'Partly cloudy';
-        document.getElementById('weather-updated').textContent = 'Demo data';
-
-        // Show clothing advice for demo
+        const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+        set('temp', '12°'); set('weather-condition', 'Partly cloudy'); set('weather-icon', '🌤️');
+        set('feels-like-row', 'Feels 10°'); set('rain-row', 'Rain 30%'); set('mini-weather', '🌤️ 12°');
         this.updateClothingAdvice(10, 30, 8);
     }
 
@@ -1425,20 +1417,24 @@ class PengeDash {
                 return;
             }
 
-            // Process each station and build cache
+            // Process each station and build cache.
+            // NOTE: the Darwin backend's `mins` field is unreliable (often stuck ~59),
+            // so we recompute minutes from the scheduled/expected clock time instead.
+            // Anerley is Overground — Darwin returns garbage for it, so we use TfL (below).
             const trainsCache = {};
-            ['PNW', 'PNE', 'BKB', 'ANR'].forEach(stationCode => {
+            ['PNW', 'PNE', 'BKB'].forEach(stationCode => {
                 const stationData = data.stations[stationCode];
                 if (stationData && stationData.departures) {
                     const departures = stationData.departures.map(dep => ({
                         dest: this.formatDestination(dep.destination),
                         platform: dep.platform || '-',
-                        mins: dep.mins,
+                        mins: this.parseTimeToMins(dep.expectedTime || dep.scheduledTime, dep.mins),
                         scheduledTime: dep.scheduledTime,
                         expectedTime: dep.expectedTime,
                         cancelled: dep.cancelled,
                         delayed: dep.delayed
-                    })).filter(d => d.mins !== null && d.mins >= 0);
+                    })).filter(d => d.mins !== null && d.mins >= 0)
+                       .sort((a, b) => a.mins - b.mins);
 
                     this.stationData[stationCode.toLowerCase()] = departures;
                     trainsCache[stationCode] = departures;
@@ -1449,23 +1445,22 @@ class PengeDash {
             // Cache train data
             this.cacheData('trains', trainsCache);
 
-            document.getElementById('anerley-updated').textContent = this.getTimeAgo(new Date());
+            // Anerley (Overground) — fetch correct live times from TfL
+            this.fetchAnerleyTfL();
         } catch (error) {
             console.error('Darwin fetch error:', error);
             // Try cached data first
             const cachedTrains = this.getCachedData('trains');
             if (cachedTrains && Object.keys(cachedTrains).length > 0) {
-                ['PNW', 'PNE', 'BKB', 'ANR'].forEach(stationCode => {
+                ['PNW', 'PNE', 'BKB'].forEach(stationCode => {
                     if (cachedTrains[stationCode]) {
                         this.stationData[stationCode.toLowerCase()] = cachedTrains[stationCode];
                         this.displayStationDepartures(stationCode, cachedTrains[stationCode]);
                     }
                 });
-                document.getElementById('anerley-updated').textContent = 'Cached';
-            } else {
-                // Fallback to TfL for Anerley (Overground)
-                this.fetchAnerleyTfL();
             }
+            // Anerley always comes from TfL (live Overground), even on Darwin failure
+            this.fetchAnerleyTfL();
         }
     }
 
@@ -1481,9 +1476,26 @@ class PengeDash {
             'ORPNGTN': 'Orpington', 'ORPINTN': 'Orpington',
             'HGHBYIS': 'Highbury & Islington',
             'WCROYDN': 'West Croydon',
-            'CRYSTLP': 'Crystal Palace'
+            'CRYSTLP': 'Crystal Palace',
+            'PENEW': 'Penge West', 'PENGEW': 'Penge West',
+            'PENGE': 'Penge East', 'PENGEE': 'Penge East',
+            'SYDENHM': 'Sydenham', 'NRWD': 'Norwood Junction',
+            'BCKNHMJ': 'Beckenham Junction', 'ELMERSE': 'Elmers End'
         };
         return names[tiploc] || tiploc || 'Unknown';
+    }
+
+    // Parse "HH:MM" clock time into minutes-from-now (handles midnight rollover).
+    // Falls back to the provided value if parsing fails.
+    parseTimeToMins(timeStr, fallback = null) {
+        if (!timeStr || !/^\d{1,2}:\d{2}$/.test(String(timeStr))) return fallback;
+        const [h, m] = String(timeStr).split(':').map(Number);
+        const now = new Date();
+        const t = new Date(now);
+        t.setHours(h, m, 0, 0);
+        let diff = Math.round((t - now) / 60000);
+        if (diff < -60) diff += 1440; // departure is after midnight
+        return diff;
     }
 
     displayStationDepartures(stationCode, departures) {
@@ -1585,8 +1597,7 @@ class PengeDash {
             if (dep.currentLocation) {
                 locationText = dep.currentLocation;
             } else {
-                const stopsAway = Math.max(1, Math.round(dep.mins / 3));
-                locationText = dep.mins <= 1 ? 'Arriving' : `~${stopsAway} stop${stopsAway > 1 ? 's' : ''}`;
+                locationText = dep.mins <= 1 ? 'Arriving' : 'On time';
             }
 
             // Only show hype for first departure
@@ -1936,6 +1947,7 @@ class PengeDash {
             };
         });
 
+        if (!container) return;
         container.innerHTML = lines.map(line => {
             const meta = LINE_META[line.id] || { name: line.name, class: '' };
             const ls = line.lineStatuses && line.lineStatuses[0];
@@ -1943,35 +1955,32 @@ class PengeDash {
             const statusClass = statusText.toLowerCase().replace(/\s+/g, '-');
 
             return `
-                <div class="line-status ${meta.class}">
+                <button class="line-status ${meta.class}" data-line-id="${this.escapeAttr(line.id)}">
                     <span class="line-name">${this.escapeHtml(meta.name)}</span>
                     <span class="line-status-badge ${statusClass}">${this.escapeHtml(statusText)}</span>
-                </div>
-            `;
+                </button>`;
         }).join('');
+        container.querySelectorAll('.line-status').forEach(el =>
+            el.addEventListener('click', () => this.openLineDetail(el.dataset.lineId)));
+    }
+
+    openLineDetail(lineId) {
+        const d = (this.lineDetails || {})[lineId];
+        if (!d) return;
+        const detail = d.reason || d.disruption ||
+            (d.status === 'Good Service' ? 'Good service on the whole line.' : 'No further detail provided by TfL.');
+        this.openDetailModal(`${d.name} · ${d.status}`,
+            `<div class="alert-detail-item ${d.status !== 'Good Service' ? 'bad' : ''}">
+                <div class="alert-detail-reason">${this.escapeHtml(detail)}</div>
+             </div>`);
     }
 
     checkServiceAlerts(lines) {
-        const alertBanner = document.getElementById('service-alert');
-        const alertText = document.getElementById('alert-text');
-        const statusMessage = document.getElementById('status-message');
-
-        // Find lines with issues (not "Good Service")
+        // Lines with issues (not "Good Service")
         const issues = lines.filter(line => {
             const ls = line.lineStatuses && line.lineStatuses[0];
             return ls && ls.statusSeverityDescription !== 'Good Service';
         });
-
-        // Update status message with transport mood
-        statusMessage.textContent = this.getTransportMood(issues);
-
-        if (issues.length === 0) {
-            alertBanner.style.display = 'none';
-            this._alertIssues = [];
-            return;
-        }
-
-        // Build alert summary + retain detail for the modal
         this._alertIssues = issues.map(line => {
             const ls = line.lineStatuses[0];
             return {
@@ -1981,25 +1990,32 @@ class PengeDash {
                 disruption: (ls.disruption && ls.disruption.description) || ''
             };
         });
-
-        const summary = this._alertIssues.map(i => `${i.name}: ${i.status}`);
-        alertText.textContent = summary.join(' | ');
-        alertBanner.style.display = 'flex';
+        // Bell indicator
+        const dot = document.getElementById('bell-dot');
+        if (dot) dot.style.display = issues.length > 0 ? 'block' : 'none';
+        this.renderAlerts();
     }
 
-    openAlertModal() {
+    renderAlerts() {
+        const list = document.getElementById('alerts-list');
+        if (!list) return;
         const issues = this._alertIssues || [];
-        if (issues.length === 0) return;
-        const body = issues.map(i => {
+        const upd = document.getElementById('alerts-updated');
+        if (upd) upd.textContent = this.getTimeAgo(new Date());
+        if (issues.length === 0) {
+            list.innerHTML = `<div class="all-good"><span class="ag-emoji">✅</span>All services running normally right now.</div>`;
+            return;
+        }
+        list.innerHTML = issues.map(i => {
             const detail = i.reason || i.disruption || 'No further detail provided by TfL.';
+            const bad = /suspend|severe|closed|part/i.test(i.status);
             return `
-                <div class="alert-detail-item">
-                    <div class="alert-detail-line">${this.escapeHtml(i.name)}</div>
-                    <div class="alert-detail-status">${this.escapeHtml(i.status)}</div>
-                    <div class="alert-detail-reason">${this.escapeHtml(detail)}</div>
+                <div class="alert-card ${bad ? 'bad' : ''}">
+                    <div class="alert-card-line">${this.escapeHtml(i.name)}</div>
+                    <div class="alert-card-status">${this.escapeHtml(i.status)}</div>
+                    <div class="alert-card-reason">${this.escapeHtml(detail)}</div>
                 </div>`;
         }).join('');
-        this.openDetailModal('⚠️ Service disruptions', body);
     }
 
     // ==================== TRAFFIC DISRUPTIONS ====================
@@ -2123,85 +2139,85 @@ class PengeDash {
 
     // ==================== JOURNEY PLANNER (CityMapper-style) ====================
     setupJourneyPlanner() {
-        // Default destinations
-        this.defaultDestinations = ['Victoria', 'London Br', 'E.Croydon', 'Bromley S', 'Canary Whf'];
+        this.defaultDestinations = ['Victoria', 'London Bridge', 'Croydon', 'Bromley South', 'Canary Wharf'];
         this.journeyOrigin = 'home';
         this.journeyTimeOffset = 0;
-        this.journeyModes = null; // null = all modes
+        this.journeyModes = null;      // null = all modes
+        this.journeyPref = '';         // '' | leastwalking | leastinterchange
+        this.journeyStepFree = false;
         this.currentLocation = null;
         this.fetchingLocation = false;
+        this._hasSearched = false;
 
-        // Load saved destinations or use defaults
         this.loadDestinations();
         this.renderDestinationChips();
-
-        // Load favourite journeys
         this.loadFavouriteJourneys();
         this.renderFavouriteJourneys();
 
-        // From field tap → toggle origin
-        const fromRow = document.getElementById('journey-from-row');
-        if (fromRow) {
-            fromRow.addEventListener('click', (e) => {
-                // Don't toggle if swap button was clicked
-                if (e.target.closest('.journey-origin-swap')) return;
-                this.toggleOrigin();
-            });
-        }
-
-        // Swap button
+        // Origin toggle (Home ↔ current location)
+        const fromBtn = document.getElementById('from-text');
+        if (fromBtn) fromBtn.addEventListener('click', () => this.toggleOrigin());
         const swapBtn = document.getElementById('origin-swap-btn');
-        if (swapBtn) {
-            swapBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.toggleOrigin();
-            });
-        }
+        if (swapBtn) swapBtn.addEventListener('click', () => this.toggleOrigin());
 
-        // Search button
-        document.getElementById('journey-search-btn').addEventListener('click', () => {
-            const input = document.getElementById('destination-input');
-            const destination = input.value.trim();
-            if (destination) {
-                document.querySelectorAll('.destination-chip').forEach(c => c.classList.remove('active'));
-                this.planJourney(destination);
-            }
+        // Search + clear
+        const input = document.getElementById('destination-input');
+        const goBtn = document.getElementById('journey-search-btn');
+        const clearBtn = document.getElementById('destination-clear');
+        goBtn.addEventListener('click', () => {
+            const dest = input.value.trim();
+            if (dest) this.planJourney(dest);
+        });
+        input.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') { this.hideAutocomplete(); goBtn.click(); }
+        });
+        input.addEventListener('input', () => { clearBtn.style.display = input.value ? 'flex' : 'none'; });
+        clearBtn.addEventListener('click', () => {
+            input.value = ''; clearBtn.style.display = 'none';
+            this.hideAutocomplete(); input.focus();
         });
 
-        // Enter key in search input
-        document.getElementById('destination-input').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                this.hideAutocomplete();
-                document.getElementById('journey-search-btn').click();
-            }
-        });
-
-        // Setup autocomplete
         this.setupAutocomplete();
 
-        // Time pill handlers
-        document.querySelectorAll('.time-pill').forEach(pill => {
+        // Preference pills (Fastest / Least walking / Fewest changes / Step-free toggle)
+        document.querySelectorAll('#journey-pref-row .pill').forEach(pill => {
             pill.addEventListener('click', () => {
-                document.querySelectorAll('.time-pill').forEach(p => p.classList.remove('active'));
-                pill.classList.add('active');
-                this.journeyTimeOffset = parseInt(pill.dataset.offset, 10);
+                if (pill.dataset.stepfree) {
+                    this.journeyStepFree = !this.journeyStepFree;
+                    pill.classList.toggle('active', this.journeyStepFree);
+                } else {
+                    document.querySelectorAll('#journey-pref-row .pill:not([data-stepfree])').forEach(p => p.classList.remove('active'));
+                    pill.classList.add('active');
+                    this.journeyPref = pill.dataset.pref || '';
+                }
+                this._replanIfActive();
             });
         });
 
-        // Mode filter pill handlers (re-runs the search if one is active)
-        document.querySelectorAll('.mode-pill').forEach(pill => {
+        // Mode pills
+        document.querySelectorAll('#journey-mode-row .pill').forEach(pill => {
             pill.addEventListener('click', () => {
-                document.querySelectorAll('.mode-pill').forEach(p => p.classList.remove('active'));
+                document.querySelectorAll('#journey-mode-row .pill').forEach(p => p.classList.remove('active'));
                 pill.classList.add('active');
-                const mode = pill.dataset.mode;
-                this.journeyModes = (mode === 'all') ? null : mode;
-                // If a destination is already entered, re-plan with the new mode
-                const dest = document.getElementById('destination-input').value.trim();
-                if (dest && document.getElementById('journey-results').style.display === 'block') {
-                    this.planJourney(dest);
-                }
+                this.journeyModes = pill.dataset.mode === 'all' ? null : pill.dataset.mode;
+                this._replanIfActive();
             });
         });
+
+        // Time pills
+        document.querySelectorAll('#journey-time-row .pill').forEach(pill => {
+            pill.addEventListener('click', () => {
+                document.querySelectorAll('#journey-time-row .pill').forEach(p => p.classList.remove('active'));
+                pill.classList.add('active');
+                this.journeyTimeOffset = parseInt(pill.dataset.offset, 10);
+                this._replanIfActive();
+            });
+        });
+    }
+
+    _replanIfActive() {
+        const dest = document.getElementById('destination-input').value.trim();
+        if (dest && this._hasSearched) this.planJourney(dest);
     }
 
     // ==================== AUTOCOMPLETE ====================
@@ -2331,61 +2347,30 @@ class PengeDash {
     renderDestinationChips() {
         const container = document.getElementById('journey-quick-picks');
         if (!container) return;
+        const chips = this.destinations.map(dest => `
+            <span class="chip" data-destination="${this.escapeAttr(dest)}">${this.escapeHtml(dest)}<button class="chip-x" data-remove="${this.escapeAttr(dest)}" aria-label="Remove">&times;</button></span>`).join('');
+        container.innerHTML = chips + `<button class="chip add" id="add-dest-chip">+ Add</button>`;
 
-        const chipsHtml = this.destinations.map(dest => `
-            <button class="destination-chip" data-destination="${this.escapeHtml(dest)}">${this.escapeHtml(dest)}</button>
-        `).join('');
-
-        container.innerHTML = chipsHtml + `<button class="add-chip" id="add-dest-chip">+</button>`;
-
-        // Use single delegated handler (avoids listener leak on re-render)
-        // Remove old handler if exists
-        if (this._chipHandler) container.removeEventListener('click', this._chipHandler);
-
-        this._chipHandler = (e) => {
-            const chip = e.target.closest('.destination-chip');
-            const addBtn = e.target.closest('.add-chip');
-
-            if (chip) {
-                container.querySelectorAll('.destination-chip').forEach(c => c.classList.remove('active'));
-                chip.classList.add('active');
-                document.getElementById('destination-input').value = '';
+        container.querySelectorAll('.chip[data-destination]').forEach(chip => {
+            chip.addEventListener('click', (e) => {
+                if (e.target.closest('.chip-x')) return;
+                const input = document.getElementById('destination-input');
+                input.value = chip.dataset.destination;
+                const clr = document.getElementById('destination-clear'); if (clr) clr.style.display = 'flex';
                 this.planJourney(chip.dataset.destination);
-            } else if (addBtn) {
-                const dest = prompt('Add destination:');
-                if (dest && dest.trim()) {
-                    const trimmed = dest.trim();
-                    if (!this.destinations.some(d => d.toLowerCase() === trimmed.toLowerCase())) {
-                        this.destinations.push(trimmed);
-                        this.saveDestinations();
-                        this.renderDestinationChips();
-                    }
-                }
+            });
+        });
+        container.querySelectorAll('.chip-x').forEach(x =>
+            x.addEventListener('click', (e) => { e.stopPropagation(); this.removeDestination(x.dataset.remove); }));
+        const add = document.getElementById('add-dest-chip');
+        if (add) add.addEventListener('click', () => {
+            const dest = prompt('Add a quick destination:');
+            if (dest && dest.trim() && !this.destinations.some(d => d.toLowerCase() === dest.trim().toLowerCase())) {
+                this.destinations.push(dest.trim());
+                this.saveDestinations();
+                this.renderDestinationChips();
             }
-        };
-        container.addEventListener('click', this._chipHandler);
-
-        // Long-press to delete on mobile (delegated)
-        if (this._chipTouchStart) container.removeEventListener('touchstart', this._chipTouchStart);
-        if (this._chipTouchEnd) container.removeEventListener('touchend', this._chipTouchEnd);
-        if (this._chipTouchMove) container.removeEventListener('touchmove', this._chipTouchMove);
-
-        let pressTimer;
-        this._chipTouchStart = (e) => {
-            const chip = e.target.closest('.destination-chip');
-            if (!chip) return;
-            pressTimer = setTimeout(() => {
-                if (confirm(`Remove "${chip.dataset.destination}"?`)) {
-                    this.removeDestination(chip.dataset.destination);
-                }
-            }, 600);
-        };
-        this._chipTouchEnd = () => clearTimeout(pressTimer);
-        this._chipTouchMove = () => clearTimeout(pressTimer);
-
-        container.addEventListener('touchstart', this._chipTouchStart, { passive: true });
-        container.addEventListener('touchend', this._chipTouchEnd);
-        container.addEventListener('touchmove', this._chipTouchMove);
+        });
     }
 
     removeDestination(destination) {
@@ -2394,14 +2379,28 @@ class PengeDash {
         this.renderDestinationChips();
     }
 
+    appendJourneyParams(url) {
+        const sep = () => url.includes('?') ? '&' : '?';
+        if (this.journeyTimeOffset > 0) {
+            const dt = new Date(Date.now() + this.journeyTimeOffset * 60000);
+            url += `${sep()}dateTime=${dt.toISOString().slice(0, 16)}&timeIs=Departing`;
+        }
+        if (this.journeyModes) url += `${sep()}mode=${this.journeyModes}`;
+        if (this.journeyPref) url += `${sep()}journeyPreference=${this.journeyPref}`;
+        if (this.journeyStepFree) url += `${sep()}accessibilityPreference=StepFreeToVehicle`;
+        return url;
+    }
+
     async planJourney(destination) {
         const resultsContainer = document.getElementById('journey-results');
         const updateTime = document.getElementById('journey-updated');
+        this._hasSearched = true;
+        this.showScreen('plan');
 
         // Show loading state
         resultsContainer.style.display = 'block';
-        resultsContainer.innerHTML = '<div class="journey-loading">Finding best route... 🔍</div>';
-        updateTime.textContent = 'Searching...';
+        resultsContainer.innerHTML = '<div class="empty-hint">Finding the best routes… 🔍</div>';
+        updateTime.textContent = 'Searching…';
 
         try {
             // Determine origin based on mode
@@ -2434,17 +2433,7 @@ class PengeDash {
                 url += `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}`;
             }
 
-            // Apply time offset if set
-            if (this.journeyTimeOffset > 0) {
-                const departTime = new Date(Date.now() + this.journeyTimeOffset * 60000);
-                const sep = url.includes('?') ? '&' : '?';
-                url += `${sep}dateTime=${departTime.toISOString().slice(0,16)}&timeIs=Departing`;
-            }
-            // Apply mode filter if set
-            if (this.journeyModes) {
-                const sep = url.includes('?') ? '&' : '?';
-                url += `${sep}mode=${this.journeyModes}`;
-            }
+            url = this.appendJourneyParams(url);
 
             let response = await fetch(url);
             let data = await response.json();
@@ -2483,15 +2472,7 @@ class PengeDash {
                 if (CONFIG.TFL_APP_KEY) {
                     resolvedUrl += `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}`;
                 }
-                if (this.journeyTimeOffset > 0) {
-                    const departTime = new Date(Date.now() + this.journeyTimeOffset * 60000);
-                    const sep = resolvedUrl.includes('?') ? '&' : '?';
-                    resolvedUrl += `${sep}dateTime=${departTime.toISOString().slice(0,16)}&timeIs=Departing`;
-                }
-                if (this.journeyModes) {
-                    const sep = resolvedUrl.includes('?') ? '&' : '?';
-                    resolvedUrl += `${sep}mode=${this.journeyModes}`;
-                }
+                resolvedUrl = this.appendJourneyParams(resolvedUrl);
 
                 response = await fetch(resolvedUrl);
                 data = await response.json();
@@ -2522,130 +2503,186 @@ class PengeDash {
 
     displayRouteOptions(journeys, destination) {
         const container = document.getElementById('journey-results');
-
-        // Save as favourite journey
+        this._lastJourneys = journeys;
         this.saveFavouriteJourney(destination);
 
-        // Build route cards for each journey option
-        const routeCards = journeys.map((journey, index) => {
-            const primaryMode = this.getPrimaryMode(journey);
-            const modeIcon = this.getJourneyModeIcon(primaryMode.mode);
-            const modeClass = this.getRouteModeClass(primaryMode);
-            const duration = journey.duration;
-            const depTime = new Date(journey.startDateTime);
-            const arrTime = new Date(journey.arrivalDateTime);
-            const depStr = depTime.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-            const arrStr = arrTime.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        // Tagging: fastest / cheapest / least-walking
+        const durations = journeys.map(j => j.duration);
+        const fares = journeys.map(j => (j.fare && j.fare.totalCost != null) ? j.fare.totalCost : Infinity);
+        const walks = journeys.map(j => (j.legs || []).filter(l => l.mode?.id === 'walking').reduce((s, l) => s + (l.duration || 0), 0));
+        const idxFast = durations.indexOf(Math.min(...durations));
+        const idxCheap = Math.min(...fares) < Infinity ? fares.indexOf(Math.min(...fares)) : -1;
+        const idxLeast = walks.indexOf(Math.min(...walks));
+        const tagFor = (i) => i === idxFast ? { cls: 'tag-best', label: 'Fastest' }
+            : i === idxCheap ? { cls: 'tag-cheapest', label: 'Cheapest' }
+            : i === idxLeast ? { cls: 'tag-least', label: 'Least walking' } : null;
 
-            // Route summary
-            const summary = this.getRouteSummary(journey);
-
-            // Smart insights
-            const smartInsights = this.getSmartInsight(journey);
-            const weatherInsight = this.getWeatherInsight(primaryMode.mode, duration);
-            const disruptionInsights = this.getDisruptionInsight(journey);
-
-            const allInsights = [...smartInsights, ...disruptionInsights];
-            if (weatherInsight) allInsights.push(weatherInsight);
-
-            const insightsHtml = allInsights.length > 0 ? `
-                <div class="route-card-smart">
-                    ${allInsights.map(i => `<div class="smart-insight ${i.type}">${i.text}</div>`).join('')}
-                </div>
-            ` : '';
-
-            // Full leg detail (hidden, shown on tap)
-            const legsHtml = journey.legs.map(leg => {
-                const mode = leg.mode?.id || 'walking';
-                const icon = this.getJourneyModeIcon(mode);
-                const lineName = leg.routeOptions?.[0]?.name || leg.instruction?.detailed || '';
-                const lineId = this.getLineClass(lineName);
-                let instruction = leg.instruction?.summary || leg.instruction?.detailed || '';
-
-                if (mode === 'walking') {
-                    instruction = `Walk to ${leg.arrivalPoint?.commonName || 'destination'}`;
-                } else if (mode === 'bus') {
-                    instruction = `${lineName} bus to ${leg.arrivalPoint?.commonName || ''}`;
-                } else {
-                    instruction = `${lineName} to ${leg.arrivalPoint?.commonName || ''}`;
-                }
-
-                const durationMins = leg.duration || 0;
-
-                return `
-                    <div class="journey-leg">
-                        <div class="leg-icon">${icon}</div>
-                        <div class="leg-details">
-                            <div class="leg-instruction">
-                                ${instruction}
-                                ${lineId && mode !== 'walking' ? `<span class="leg-line-badge ${lineId}">${lineName}</span>` : ''}
-                            </div>
-                            <div class="leg-time">${this.formatLegTime(leg)}</div>
-                        </div>
-                        <div class="leg-duration">${durationMins} min</div>
-                    </div>
-                `;
-            }).join('');
-
-            // Extract fare if available (in pence)
-            const farePence = journey.fare?.totalCost;
-            const fareHtml = farePence != null ? ` · <span class="route-fare">£${(farePence / 100).toFixed(2)}</span>` : '';
-
+        const cards = journeys.map((journey, index) => {
+            const tag = tagFor(index);
+            const dep = new Date(journey.startDateTime);
+            const leaveMins = Math.max(0, Math.round((dep - new Date()) / 60000));
+            const depStr = dep.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+            const arrStr = new Date(journey.arrivalDateTime).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+            const status = this.routeStatus(journey);
+            const fare = (journey.fare && journey.fare.totalCost != null) ? `£${(journey.fare.totalCost / 100).toFixed(2)}` : '—';
+            const walkTotal = walks[index];
             return `
-                <div class="route-card ${modeClass}" data-index="${index}">
-                    <div class="route-card-header">
-                        <span class="route-mode-icon">${modeIcon}</span>
-                        <span class="route-summary">${summary}</span>
-                        <span class="route-duration">${duration} min</span>
+                <div class="route-card ${tag ? tag.cls : ''}" data-index="${index}">
+                    ${tag ? `<span class="route-tag">${tag.label}</span>` : ''}
+                    <div class="route-top">
+                        <div>
+                            <div class="route-time"><span class="rt-num">${journey.duration}</span><span class="rt-unit">min</span></div>
+                            <div class="route-time-label">Total time</div>
+                        </div>
+                        <span class="route-status ${status.cls}">${status.label}</span>
                     </div>
-                    <div class="route-card-meta">Departs ${depStr} · Arrives ${arrStr}${fareHtml}</div>
-                    ${insightsHtml}
-                    <div class="route-card-detail">
-                        <div class="journey-route">${legsHtml}</div>
+                    <div class="route-modes">${this.buildModeStrip(journey)}</div>
+                    <div class="route-meta">Leaves in <b>${leaveMins} min</b> · ${depStr}–${arrStr}</div>
+                    <div class="route-foot">
+                        <span class="route-foot-item">💷 ${fare}</span>
+                        <span class="route-foot-item">🚶 ${walkTotal} min</span>
+                        <span class="route-foot-item">›  Details</span>
                     </div>
-                </div>
-            `;
+                </div>`;
         }).join('');
 
-        // Add walking option if destination is relatively close
-        const walkingCard = this.getWalkingOption(destination, journeys[0]);
+        container.style.display = 'block';
+        container.innerHTML = cards;
 
-        // Show departure time header if using offset
-        let headerText = 'Getting there';
-        if (this.journeyTimeOffset > 0) {
-            const departAt = new Date(Date.now() + this.journeyTimeOffset * 60000);
-            const timeStr = departAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-            headerText = `Departing at ${timeStr}`;
-        }
+        // Draw fastest on the map (no auto-scroll)
+        this.drawJourneyRoute(journeys[idxFast >= 0 ? idxFast : 0]);
 
-        container.innerHTML = `
-            <div class="route-options-header">${headerText}</div>
-            <div class="route-options">
-                ${routeCards}
-                ${walkingCard}
-            </div>
-        `;
-
-        // Draw the first journey on the map
-        this._lastJourneys = journeys;
-        this.drawJourneyRoute(journeys[0]);
-
-        // Bind tap-to-expand on route cards (and redraw that route on the map)
         container.querySelectorAll('.route-card').forEach(card => {
             card.addEventListener('click', () => {
-                const wasActive = card.classList.contains('active');
-                // Collapse all
-                container.querySelectorAll('.route-card').forEach(c => c.classList.remove('active'));
-                // Toggle this one
-                if (!wasActive) {
-                    card.classList.add('active');
-                    const idx = parseInt(card.dataset.index, 10);
-                    if (!isNaN(idx) && this._lastJourneys[idx]) this.drawJourneyRoute(this._lastJourneys[idx], true);
-                    // Scroll into view
-                    setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 100);
-                }
+                const idx = parseInt(card.dataset.index, 10);
+                if (!isNaN(idx) && journeys[idx]) this.showJourneyDetail(journeys[idx], destination);
             });
         });
+    }
+
+    routeStatus(journey) {
+        let cls = 'ok';
+        (journey.legs || []).forEach(leg => {
+            const name = (leg.routeOptions?.[0]?.name || '').toLowerCase();
+            const st = this.lineStatusData ? this.lineStatusData[name] : null;
+            if (st && st !== 'Good Service') {
+                if (/sever|suspend|closed|part/i.test(st)) cls = 'bad';
+                else if (cls !== 'bad') cls = 'warn';
+            }
+        });
+        return { cls, label: cls === 'ok' ? 'On time' : cls === 'warn' ? 'Minor delays' : 'Disruption' };
+    }
+
+    buildModeStrip(journey) {
+        const parts = [];
+        (journey.legs || []).forEach(leg => {
+            const mode = leg.mode?.id || 'walking';
+            const dur = leg.duration || 0;
+            if (mode === 'walking') {
+                if (dur >= 2) parts.push(`<span class="route-mode-seg">🚶 ${dur} min</span>`);
+            } else if (mode === 'bus') {
+                const line = leg.routeOptions?.[0]?.name || '';
+                parts.push(`<span class="route-mode-seg"><span class="bus-badge">${this.escapeHtml(line)}</span> Bus</span>`);
+            } else {
+                const line = leg.routeOptions?.[0]?.name || mode;
+                parts.push(`<span class="route-mode-seg">${this._routeRoundel(mode)} ${this.escapeHtml(line)}</span>`);
+            }
+        });
+        return parts.join('<span class="route-sep">›</span>') || '<span class="route-mode-seg">🚶 Walk</span>';
+    }
+
+    _routeRoundel(mode) {
+        const cls = mode === 'tube' ? 'tube' : mode === 'overground' ? 'overground'
+            : mode === 'dlr' ? 'dlr' : mode === 'elizabeth-line' ? 'elizabeth' : 'rail';
+        return `<span class="roundel ${cls}"></span>`;
+    }
+
+    showJourneyDetail(journey, destination) {
+        const content = document.getElementById('journey-detail-content');
+        if (!content) return;
+        this.drawJourneyRoute(journey, false);
+
+        const fromLabel = this.journeyOrigin === 'here' ? 'Here' : (this.home.label || 'Home');
+        const dep = new Date(journey.startDateTime);
+        const arr = new Date(journey.arrivalDateTime);
+        const arrStr = arr.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        const status = this.routeStatus(journey);
+        const fare = (journey.fare && journey.fare.totalCost != null) ? `£${(journey.fare.totalCost / 100).toFixed(2)}` : '—';
+        const legs = journey.legs || [];
+        const walkTotal = legs.filter(l => l.mode?.id === 'walking').reduce((s, l) => s + (l.duration || 0), 0);
+
+        // Timeline steps
+        const steps = legs.map((leg, i) => {
+            const mode = leg.mode?.id || 'walking';
+            const dur = leg.duration || 0;
+            const nodeCls = mode === 'walking' ? 'walk' : mode === 'bus' ? 'bus' : '';
+            const icon = mode === 'walking' ? '🚶' : mode === 'bus' ? '🚌' : this._modeEmoji(this._legMode(mode));
+            const lineName = leg.routeOptions?.[0]?.name || '';
+            const toName = this.cleanStationName(leg.arrivalPoint?.commonName || (i === legs.length - 1 ? destination : 'next stop'));
+            let title, sub;
+            if (mode === 'walking') {
+                title = `Walk to ${this.escapeHtml(toName)}`;
+                sub = `${dur} min${leg.distance ? ' · ' + (leg.distance >= 1000 ? (leg.distance / 1000).toFixed(1) + ' km' : Math.round(leg.distance) + ' m') : ''}`;
+            } else {
+                const verb = mode === 'bus' ? `Bus ${this.escapeHtml(lineName)}` : this.escapeHtml(lineName || mode);
+                title = `${verb} to ${this.escapeHtml(toName)}`;
+                const depAt = leg.departureTime ? new Date(leg.departureTime).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '';
+                sub = `${dur} min${depAt ? ' · departs ' + depAt : ''}`;
+            }
+            const lineCls = mode === 'walking' ? 'green' : mode === 'bus' ? 'red' : '';
+            return `
+                <div class="tl-step">
+                    <div class="tl-rail">
+                        <div class="tl-node ${nodeCls}">${icon}</div>
+                        ${i < legs.length - 1 ? `<div class="tl-line ${lineCls}"></div>` : ''}
+                    </div>
+                    <div class="tl-card">
+                        <div class="tl-card-title">${title}</div>
+                        <div class="tl-card-sub">${sub}</div>
+                    </div>
+                </div>`;
+        }).join('');
+
+        const insights = [];
+        if (status.cls === 'ok') insights.push(`<div class="jd-insight ok">🛡️ <span class="jd-i-body"><b>Low disruption</b> — no major issues on your route.</span></div>`);
+        else insights.push(`<div class="jd-insight" style="background:var(--amber-soft);color:var(--amber)">⚠️ <span class="jd-i-body"><b>${status.label}</b> on part of this route.</span></div>`);
+        if (this.currentWeather && this.currentWeather.rainChance >= 50 && walkTotal >= 3) {
+            insights.push(`<div class="jd-insight info">🌧️ <span class="jd-i-body"><b>Rain likely</b> — ${this.currentWeather.rainChance}% chance, allow extra time walking.</span></div>`);
+        }
+
+        content.innerHTML = `
+            <div class="jd-summary">
+                <div class="jd-route">
+                    <span class="jd-od">${this.escapeHtml(fromLabel)} → ${this.escapeHtml(destination)}</span>
+                    <span class="route-status ${status.cls}">${status.label}</span>
+                </div>
+                <div class="jd-big">
+                    <span class="jd-total">${journey.duration}<span class="u"> min</span></span>
+                    <span class="jd-arrive">Arrive<b>${arrStr}</b></span>
+                </div>
+                <div class="jd-foot">
+                    <span>💷 ${fare}</span><span>🚶 ${walkTotal} min walk</span><span>🚉 ${legs.filter(l=>l.mode?.id!=='walking').length} legs</span>
+                </div>
+            </div>
+            <div class="section-head"><h3>Your journey</h3></div>
+            <div class="timeline">${steps}</div>
+            ${insights.join('')}
+            <div class="jd-actions">
+                <button class="jd-act primary" id="jd-save">★ Save route</button>
+            </div>`;
+
+        const saveBtn = document.getElementById('jd-save');
+        if (saveBtn) saveBtn.addEventListener('click', () => {
+            this.saveFavouriteJourney(destination);
+            saveBtn.textContent = '✓ Saved';
+        });
+
+        this.showScreen('journey');
+    }
+
+    _legMode(mode) {
+        return mode === 'overground' ? 'overground' : mode === 'dlr' ? 'dlr'
+            : mode === 'tube' ? 'tube' : mode === 'elizabeth-line' ? 'elizabeth' : 'rail';
     }
 
     getPrimaryMode(journey) {
@@ -2905,75 +2942,46 @@ class PengeDash {
     }
 
     // ==================== ORIGIN TOGGLE (From Home / Current Location) ====================
+    homeLabel() {
+        return (this.home && this.home.label) || `Home (${((this.home && this.home.postcode) || 'SE20').split(' ')[0]})`;
+    }
+
     setJourneyOrigin(origin) {
         const fromText = document.getElementById('from-text');
-        const locationStatus = document.getElementById('location-status');
-
         if (!fromText) return;
-
         this.journeyOrigin = origin;
-
         if (origin === 'here') {
-            fromText.textContent = 'Current Location';
-            if (locationStatus) locationStatus.style.display = 'flex';
+            fromText.textContent = 'Locating…';
             this.getCurrentLocation();
         } else {
-            fromText.textContent = (this.home && this.home.label)
-                || `Home (${((this.home && this.home.postcode) || 'SE20').split(' ')[0]})`;
-            if (locationStatus) locationStatus.style.display = 'none';
+            fromText.textContent = this.homeLabel();
             this.currentLocation = null;
         }
     }
 
     async getCurrentLocation() {
-        const statusText = document.getElementById('location-text');
-        if (!statusText) return;
+        const fromText = document.getElementById('from-text');
+        const setFrom = (t) => { if (fromText) fromText.textContent = t; };
 
-        // Check for secure context (required for geolocation in most browsers)
-        if (!window.isSecureContext && location.hostname !== 'localhost') {
-            statusText.textContent = '❌ HTTPS required for location';
-            return;
-        }
-
-        if (!navigator.geolocation) {
-            statusText.textContent = '❌ Geolocation not supported';
-            return;
-        }
-
-        // Prevent race conditions from rapid clicks
+        if (!navigator.geolocation) { setFrom('Location N/A'); this.journeyOrigin = 'home'; return; }
         if (this.fetchingLocation) return;
         this.fetchingLocation = true;
-
-        statusText.textContent = 'Getting location...';
+        setFrom('Locating…');
 
         try {
             const position = await new Promise((resolve, reject) => {
                 navigator.geolocation.getCurrentPosition(resolve, reject, {
-                    enableHighAccuracy: true,
-                    timeout: 8000,
-                    maximumAge: 15000  // 15 seconds - fresher for travel
+                    enableHighAccuracy: true, timeout: 8000, maximumAge: 15000
                 });
             });
-
-            this.currentLocation = {
-                lat: position.coords.latitude,
-                lon: position.coords.longitude
-            };
-
-            // Try to get a friendly location name
+            this.currentLocation = { lat: position.coords.latitude, lon: position.coords.longitude };
             const locationName = await this.reverseGeocode(this.currentLocation);
-            statusText.textContent = `📍 ${locationName}`;
-
+            setFrom(`📍 ${locationName}`);
         } catch (error) {
             console.error('Geolocation error:', error);
-            if (error.code === 1) {
-                statusText.textContent = '❌ Location denied - tap to use Home';
-            } else if (error.code === 2) {
-                statusText.textContent = '❌ Location unavailable';
-            } else {
-                statusText.textContent = '❌ Location timeout - try again';
-            }
+            setFrom('Location denied — tap for Home');
             this.currentLocation = null;
+            this.journeyOrigin = 'home';
         } finally {
             this.fetchingLocation = false;
         }
@@ -3038,46 +3046,25 @@ class PengeDash {
     }
 
     renderFavouriteJourneys() {
-        const container = document.getElementById('journey-favourites');
         const list = document.getElementById('favourites-list');
-        if (!container || !list) return;
-
-        if (!this.favouriteJourneys || this.favouriteJourneys.length === 0) {
-            container.style.display = 'none';
-            return;
-        }
-
-        // Show max 3
-        const display = this.favouriteJourneys.slice(0, 3);
-        list.innerHTML = display.map(f =>
-            `<button class="favourite-chip" data-destination="${this.escapeAttr(f.destination)}">🕐 ${this.escapeHtml(f.destination)}</button>`
-        ).join('');
-
-        container.style.display = 'flex';
-
-        // Click to search
-        list.querySelectorAll('.favourite-chip').forEach(chip => {
-            chip.addEventListener('click', () => {
-                const dest = chip.dataset.destination;
-                document.getElementById('destination-input').value = dest;
-                document.querySelectorAll('.destination-chip').forEach(c => c.classList.remove('active'));
-                this.planJourney(dest);
+        if (list) {
+            const display = (this.favouriteJourneys || []).slice(0, 4);
+            list.innerHTML = display.map(f =>
+                `<span class="chip" data-destination="${this.escapeAttr(f.destination)}">🕐 ${this.escapeHtml(f.destination)}<button class="chip-x" data-remove="${this.escapeAttr(f.destination)}" aria-label="Remove">&times;</button></span>`
+            ).join('');
+            list.querySelectorAll('.chip[data-destination]').forEach(chip => {
+                chip.addEventListener('click', (e) => {
+                    if (e.target.closest('.chip-x')) return;
+                    const input = document.getElementById('destination-input');
+                    input.value = chip.dataset.destination;
+                    const clr = document.getElementById('destination-clear'); if (clr) clr.style.display = 'flex';
+                    this.planJourney(chip.dataset.destination);
+                });
             });
-        });
-
-        // Long-press to remove (pressTimer scoped per chip)
-        list.querySelectorAll('.favourite-chip').forEach(chip => {
-            let pressTimer;
-            chip.addEventListener('touchstart', () => {
-                pressTimer = setTimeout(() => {
-                    if (confirm(`Remove "${chip.dataset.destination}" from recent?`)) {
-                        this.removeFavouriteJourney(chip.dataset.destination);
-                    }
-                }, 600);
-            }, { passive: true });
-            chip.addEventListener('touchend', () => clearTimeout(pressTimer));
-            chip.addEventListener('touchmove', () => clearTimeout(pressTimer));
-        });
+            list.querySelectorAll('.chip-x').forEach(x =>
+                x.addEventListener('click', (e) => { e.stopPropagation(); this.removeFavouriteJourney(x.dataset.remove); }));
+        }
+        this.renderRecents();
     }
 
     // ==================== MAP (Leaflet) ====================
@@ -3109,25 +3096,20 @@ class PengeDash {
         this.map.setView(center, 14);
 
         // Home pin
-        L.marker(center).addTo(this.markersLayer).bindPopup(`🏠 ${this.escapeHtml(this.home.label || 'Home')}`);
+        const homeIcon = L.divIcon({ className: 'map-pin', html: '<span>🏠</span>', iconSize: [28, 28] });
+        L.marker(center, { icon: homeIcon }).addTo(this.markersLayer).bindPopup(`🏠 ${this.escapeHtml(this.home.label || 'Home')}`);
 
-        // Nearby station + bus markers
         const mk = (lat, lon, emoji, label, onClick) => {
             if (lat == null || lon == null) return;
-            const icon = L.divIcon({ className: 'map-pin', html: `<span>${emoji}</span>`, iconSize: [24, 24] });
+            const icon = L.divIcon({ className: 'map-pin', html: `<span>${emoji}</span>`, iconSize: [26, 26] });
             const m = L.marker([lat, lon], { icon }).addTo(this.markersLayer).bindPopup(this.escapeHtml(label));
             if (onClick) m.on('click', onClick);
         };
         (this.nearbyStations || []).forEach(s => {
-            const emoji = (s.modes || []).includes('tube') ? '🚇'
-                : (s.modes || []).includes('overground') ? '🚆'
-                : (s.modes || []).includes('dlr') ? '🚈' : '🚂';
-            mk(s.lat, s.lon, emoji, s.name, () => {
-                const card = document.querySelector(`.station-card[data-station-id="${s.id}"]`);
-                if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            });
+            const emoji = this._modeEmoji(this._stationMode(s));
+            mk(s.lat, s.lon, emoji, s.name, () => this.openStopModal(s.id, s.name, false));
         });
-        (this.nearbyBusStops || []).forEach(b => mk(b.lat, b.lon, '🚌', b.name));
+        (this.nearbyBusStops || []).forEach(b => mk(b.lat, b.lon, '🚌', b.name, () => this.openStopModal(b.id, b.name, true)));
 
         // Leaflet needs a size recalc when its container was hidden/resized
         setTimeout(() => { if (this.map) this.map.invalidateSize(); }, 200);
@@ -3165,54 +3147,18 @@ class PengeDash {
         }
     }
 
-    // ==================== SETTINGS (home postcode + saved places) ====================
+    // ==================== SETTINGS (Saved screen) ====================
     setupSettings() {
-        const btn = document.getElementById('settings-btn');
-        if (btn) btn.addEventListener('click', () => this.openSettingsModal());
-    }
-
-    openSettingsModal() {
-        const savedHtml = (this.savedPlaces || []).length === 0
-            ? '<div class="settings-empty">No saved places yet.</div>'
-            : this.savedPlaces.map(p => `
-                <div class="saved-place">
-                    <button class="saved-place-go" data-postcode="${this.escapeAttr(p.postcode || '')}" data-label="${this.escapeAttr(p.label)}">
-                        📍 ${this.escapeHtml(p.label)}
-                    </button>
-                    <button class="saved-place-remove" data-label="${this.escapeAttr(p.label)}">&times;</button>
-                </div>`).join('');
-
-        const body = `
-            <div class="settings-section">
-                <div class="settings-label">Home location</div>
-                <div class="settings-current">Currently: <strong>${this.escapeHtml(this.home.label || this.home.postcode || 'SE20')}</strong></div>
-                <div class="settings-input-row">
-                    <input type="text" id="settings-postcode" placeholder="Enter postcode (e.g. E1 6AN)" autocomplete="off">
-                    <button class="settings-set-btn" id="settings-set-home">Set</button>
-                </div>
-                <button class="settings-loc-btn" id="settings-use-location">📍 Use my current location</button>
-                <div class="settings-status" id="settings-status"></div>
-            </div>
-            <div class="settings-section">
-                <div class="settings-label">Saved places</div>
-                <div id="settings-saved-list">${savedHtml}</div>
-            </div>
-            ${this.home.isDefault ? '' : '<button class="settings-reset-btn" id="settings-reset">Reset to SE20 (Penge)</button>'}
-        `;
-        this.openDetailModal('⚙️ Settings', body);
-        this.wireSettingsHandlers();
-    }
-
-    wireSettingsHandlers() {
-        const status = document.getElementById('settings-status');
-        const setStatus = (msg, isErr) => { if (status) { status.textContent = msg; status.className = `settings-status ${isErr ? 'error' : ''}`; } };
-
-        const doResolve = async (input) => {
+        const setStatus = (msg, isErr) => {
+            const s = document.getElementById('settings-status');
+            if (s) { s.textContent = msg || ''; s.className = `settings-status ${isErr ? 'error' : ''}`; }
+        };
+        this._settingsResolve = async (input) => {
             setStatus('Locating…', false);
             try {
                 const home = await this.resolveLocation(input);
                 setStatus(`Moved to ${home.label}`, false);
-                setTimeout(() => this.closeDetailModal(), 700);
+                this.updateSettingsUI();
             } catch (e) {
                 setStatus(e.message || 'Could not set that location', true);
             }
@@ -3221,68 +3167,76 @@ class PengeDash {
         const setBtn = document.getElementById('settings-set-home');
         const input = document.getElementById('settings-postcode');
         if (setBtn && input) {
-            setBtn.addEventListener('click', () => {
-                const v = input.value.trim();
-                if (v) doResolve(v);
-            });
+            setBtn.addEventListener('click', () => { const v = input.value.trim(); if (v) this._settingsResolve(v); });
             input.addEventListener('keypress', (e) => { if (e.key === 'Enter') setBtn.click(); });
         }
-
         const locBtn = document.getElementById('settings-use-location');
-        if (locBtn) {
-            locBtn.addEventListener('click', async () => {
-                setStatus('Getting GPS…', false);
-                if (!navigator.geolocation) { setStatus('Geolocation not supported', true); return; }
-                navigator.geolocation.getCurrentPosition(
-                    (pos) => doResolve({ lat: pos.coords.latitude, lon: pos.coords.longitude, label: 'Current area', postcode: '' }),
-                    () => setStatus('Location denied or unavailable', true),
-                    { enableHighAccuracy: true, timeout: 8000 }
-                );
-            });
-        }
-
+        if (locBtn) locBtn.addEventListener('click', () => {
+            setStatus('Getting GPS…', false);
+            if (!navigator.geolocation) { setStatus('Geolocation not supported', true); return; }
+            navigator.geolocation.getCurrentPosition(
+                (pos) => this._settingsResolve({ lat: pos.coords.latitude, lon: pos.coords.longitude, label: 'Current area', postcode: '' }),
+                () => setStatus('Location denied or unavailable', true),
+                { enableHighAccuracy: true, timeout: 8000 }
+            );
+        });
         const reset = document.getElementById('settings-reset');
-        if (reset) reset.addEventListener('click', () => doResolve(CONFIG.DEFAULT_HOME.postcode));
+        if (reset) reset.addEventListener('click', () => this._settingsResolve(CONFIG.DEFAULT_HOME.postcode));
 
-        document.querySelectorAll('.saved-place-go').forEach(b =>
-            b.addEventListener('click', () => {
-                const pc = b.dataset.postcode;
-                if (pc) doResolve(pc);
-            }));
-        document.querySelectorAll('.saved-place-remove').forEach(b =>
-            b.addEventListener('click', () => {
-                this.removeSavedPlace(b.dataset.label);
-                this.openSettingsModal(); // re-render list
-            }));
+        this.updateSettingsUI();
     }
 
-    // ==================== QUICK NAV ====================
-    setupQuickNav() {
-        const nav = document.getElementById('quick-nav');
-        if (!nav) return;
-        nav.querySelectorAll('.quick-nav-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const target = document.getElementById(btn.dataset.target);
-                if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                nav.querySelectorAll('.quick-nav-btn').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-            });
-        });
+    updateSettingsUI() {
+        const cur = document.getElementById('settings-current-label');
+        if (cur) cur.textContent = this.home.label || this.home.postcode || 'SE20';
+        const reset = document.getElementById('settings-reset');
+        if (reset) reset.style.display = this.home.isDefault ? 'none' : 'block';
+    }
 
-        // Highlight active section while scrolling
-        if ('IntersectionObserver' in window) {
-            const sections = ['journey-section', 'transit-section', 'lines-section', 'weather-section'];
-            const obs = new IntersectionObserver((entries) => {
-                entries.forEach(entry => {
-                    if (entry.isIntersecting) {
-                        const id = entry.target.id;
-                        nav.querySelectorAll('.quick-nav-btn').forEach(b =>
-                            b.classList.toggle('active', b.dataset.target === id));
-                    }
-                });
-            }, { rootMargin: '-40% 0px -55% 0px' });
-            sections.forEach(id => { const el = document.getElementById(id); if (el) obs.observe(el); });
+    renderSavedPlaces() {
+        const list = document.getElementById('saved-places-list');
+        if (!list) return;
+        if (!this.savedPlaces || this.savedPlaces.length === 0) {
+            list.innerHTML = '<div class="saved-empty">No saved places yet — set a home or search to add some.</div>';
+            return;
         }
+        list.innerHTML = this.savedPlaces.map(p => `
+            <div class="saved-item">
+                <button class="saved-item-go" data-postcode="${this.escapeAttr(p.postcode || '')}" data-lat="${p.lat}" data-lon="${p.lon}" data-label="${this.escapeAttr(p.label)}">📍 ${this.escapeHtml(p.label)}</button>
+                <button class="saved-item-x" data-label="${this.escapeAttr(p.label)}" aria-label="Remove">&times;</button>
+            </div>`).join('');
+        list.querySelectorAll('.saved-item-go').forEach(b => b.addEventListener('click', () => {
+            if (b.dataset.postcode) this._settingsResolve(b.dataset.postcode);
+            else this._settingsResolve({ lat: parseFloat(b.dataset.lat), lon: parseFloat(b.dataset.lon), label: b.dataset.label, postcode: '' });
+        }));
+        list.querySelectorAll('.saved-item-x').forEach(x => x.addEventListener('click', () => {
+            this.removeSavedPlace(x.dataset.label);
+            this.renderSavedPlaces();
+        }));
+    }
+
+    renderRecents() {
+        const list = document.getElementById('saved-recents-list');
+        if (!list) return;
+        const recents = this.favouriteJourneys || [];
+        if (recents.length === 0) {
+            list.innerHTML = '<div class="saved-empty">No recent journeys yet.</div>';
+            return;
+        }
+        list.innerHTML = recents.map(f => `
+            <div class="saved-item">
+                <button class="saved-item-go" data-destination="${this.escapeAttr(f.destination)}">🕐 ${this.escapeHtml(f.destination)}</button>
+                <button class="saved-item-x" data-remove="${this.escapeAttr(f.destination)}" aria-label="Remove">&times;</button>
+            </div>`).join('');
+        list.querySelectorAll('.saved-item-go').forEach(b => b.addEventListener('click', () => {
+            const input = document.getElementById('destination-input');
+            input.value = b.dataset.destination;
+            this.planJourney(b.dataset.destination);
+        }));
+        list.querySelectorAll('.saved-item-x').forEach(x => x.addEventListener('click', () => {
+            this.removeFavouriteJourney(x.dataset.remove);
+            this.renderRecents();
+        }));
     }
 
     // ==================== UTILITIES ====================
@@ -3293,7 +3247,7 @@ class PengeDash {
     }
 
     escapeAttr(str) {
-        return str.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        return String(str == null ? '' : str).replace(/'/g, "\\'").replace(/"/g, '&quot;');
     }
 
     getTimeAgo(date) {

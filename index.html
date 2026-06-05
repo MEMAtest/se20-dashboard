@@ -2,339 +2,245 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#f5f7fa">
-    <title>Penge Dash | SE20</title>
+    <title>Journey | SE20</title>
     <link rel="manifest" href="manifest.json">
+    <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="icon-192.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
           integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div class="dashboard" id="dashboard">
-        <!-- Offline Banner (hidden when online) -->
-        <div class="offline-banner" id="offline-banner" role="alert" aria-live="assertive" aria-atomic="true" style="display: none;">
+    <div class="app" id="app">
+        <!-- Offline banner -->
+        <div class="offline-banner" id="offline-banner" role="alert" aria-live="assertive" style="display:none;">
             <span class="offline-icon" aria-hidden="true">📡</span>
-            <span class="offline-text">Offline - showing cached data</span>
-        </div>
-        <!-- Service Alerts Banner (hidden when no alerts) -->
-        <div class="service-alert" id="service-alert" style="display: none;">
-            <span class="alert-icon">⚠️</span>
-            <span class="alert-text" id="alert-text">Service disruptions</span>
-            <button class="alert-close" id="alert-close">&times;</button>
+            <span class="offline-text">Offline · showing cached data</span>
         </div>
 
-        <!-- Header -->
-        <header class="header">
-            <div class="greeting-area">
-                <div class="greeting" id="greeting">Morning!</div>
-                <div class="location">
-                    <span class="location-pin">📍</span>
-                    <span id="header-location">SE20</span>
-                </div>
-            </div>
-            <div class="time" id="current-time">--:--</div>
-            <div class="header-actions">
-                <button class="icon-btn" id="settings-btn" aria-label="Settings">
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="3"/>
-                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-                    </svg>
-                </button>
-                <button class="refresh-btn icon-btn" id="refresh-btn" aria-label="Refresh">
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M23 4v6h-6M1 20v-6h6"/>
-                        <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
-                    </svg>
+        <!-- App header -->
+        <header class="app-header">
+            <div class="app-header-left">
+                <h1 class="app-title">Journey</h1>
+                <button class="location-chip" id="location-chip" title="Change home">
+                    <span class="location-pin">📍</span><span id="header-location">SE20</span>
                 </button>
             </div>
+            <button class="bell-btn" id="bell-btn" aria-label="Alerts">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                    <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                </svg>
+                <span class="bell-dot" id="bell-dot" style="display:none;"></span>
+            </button>
         </header>
 
-        <!-- Quick Navigation -->
-        <nav class="quick-nav" id="quick-nav">
-            <button class="quick-nav-btn active" data-target="journey-section">Journey</button>
-            <button class="quick-nav-btn" data-target="transit-section">Transit</button>
-            <button class="quick-nav-btn" data-target="lines-section">Lines</button>
-            <button class="quick-nav-btn" data-target="weather-section">Weather</button>
+        <!-- Segmented top tabs -->
+        <nav class="top-tabs" id="top-tabs">
+            <button class="top-tab active" data-screen="plan"><span class="tt-icon">⤳</span> Plan</button>
+            <button class="top-tab" data-screen="nearby"><span class="tt-icon">📍</span> Nearby</button>
+            <button class="top-tab" data-screen="lines"><span class="tt-icon">🚆</span> Lines</button>
+            <button class="top-tab" data-screen="alerts"><span class="tt-icon">⚠️</span> Alerts</button>
         </nav>
 
-        <!-- Journey Planner (CityMapper-style) -->
-        <section class="card journey-card" id="journey-section">
-            <div class="card-header">
-                <h2>Where to?</h2>
-                <div class="header-badges">
-                    <span class="update-time" id="journey-updated">Ready</span>
-                </div>
-            </div>
-            <div class="journey-content">
-                <!-- From Field -->
-                <div class="journey-from-row" id="journey-from-row">
-                    <span class="from-icon">📍</span>
-                    <span class="from-text" id="from-text">Home (SE20)</span>
-                    <button class="journey-origin-swap" id="origin-swap-btn" title="Swap origin">⇄</button>
-                </div>
-                <div class="current-location-status" id="location-status"
-                     role="status" aria-live="polite" aria-atomic="true" style="display: none;">
-                    <span class="location-icon" aria-hidden="true">📍</span>
-                    <span class="location-text" id="location-text">Getting location...</span>
-                </div>
-                <!-- To Field -->
-                <div class="journey-to-row">
-                    <span class="to-icon">🔍</span>
-                    <input type="text" id="destination-input" placeholder="Search destination..." autocomplete="off">
-                    <button class="journey-search-btn" id="journey-search-btn">Go</button>
-                    <div class="autocomplete-dropdown" id="autocomplete-dropdown"></div>
-                </div>
-                <!-- Time Pills -->
-                <div class="journey-time-row" id="journey-time-row">
-                    <span class="time-label">Depart:</span>
-                    <button class="time-pill active" data-offset="0">Now</button>
-                    <button class="time-pill" data-offset="30">+30 min</button>
-                    <button class="time-pill" data-offset="60">+1 hr</button>
-                    <button class="time-pill" data-offset="120">+2 hr</button>
-                </div>
-                <!-- Travel Mode Filters -->
-                <div class="journey-mode-row" id="journey-mode-row">
-                    <span class="time-label">By:</span>
-                    <button class="mode-pill active" data-mode="all">🧭 Any</button>
-                    <button class="mode-pill" data-mode="tube,overground,dlr,elizabeth-line,national-rail">🚆 Rail</button>
-                    <button class="mode-pill" data-mode="tube">🚇 Tube</button>
-                    <button class="mode-pill" data-mode="overground">🚆 Ovgnd</button>
-                    <button class="mode-pill" data-mode="bus">🚌 Bus</button>
-                </div>
-                <!-- Quick Destination Pills -->
-                <div class="journey-quick-row" id="journey-quick-picks">
-                    <!-- Destinations loaded from localStorage -->
-                </div>
-                <!-- Favourite/Recent Journeys -->
-                <div class="journey-favourites" id="journey-favourites" style="display: none;">
-                    <span class="favourites-label">Recent</span>
-                    <div class="favourites-list" id="favourites-list"></div>
-                </div>
-                <!-- Route Options (shown after search) -->
-                <div class="journey-results" id="journey-results" style="display: none;">
-                    <div class="journey-loading">Finding best route...</div>
-                </div>
-            </div>
-        </section>
+        <main class="screens" id="screens">
 
-        <!-- Map (Citymapper-style) -->
-        <section class="card map-card" id="map-card">
-            <div id="map"></div>
-        </section>
-
-        <!-- Transit anchor + dynamic nearby (shown when home is relocated) -->
-        <div id="transit-section"></div>
-        <div id="nearby-section" style="display: none;"></div>
-
-        <!-- Anerley Overground (LIVE) - SE20 default only -->
-        <section class="card trains-card overground-card se20-card" id="anerley-card">
-            <div class="card-header">
-                <h2><span class="overground-roundel"></span> Anerley</h2>
-                <div class="header-badges">
-                    <span class="walk-time-badge">🚶 4 min</span>
-                    <span class="live-badge">LIVE</span>
-                    <span class="update-time" id="anerley-updated">--</span>
-                </div>
-            </div>
-            <div class="platforms">
-                <div class="platform-section" data-platform="1">
-                    <div class="platform-header">
-                        <span class="platform-badge">Platform 1</span>
-                        <span class="platform-direction">→ Highbury & Islington</span>
+            <!-- ============ PLAN ============ -->
+            <section class="screen active" id="screen-plan">
+                <!-- Where to card -->
+                <div class="card plan-card">
+                    <div class="plan-card-head">
+                        <h2 class="card-title">Where are you going?</h2>
+                        <span class="mini-weather" id="mini-weather"></span>
                     </div>
-                    <div class="departures" id="anr-platform-1">
-                        <div class="loading">Loading...</div>
-                    </div>
-                </div>
-                <div class="platform-section" data-platform="2">
-                    <div class="platform-header">
-                        <span class="platform-badge">Platform 2</span>
-                        <span class="platform-direction">→ West Croydon</span>
-                    </div>
-                    <div class="departures" id="anr-platform-2">
-                        <div class="loading">Loading...</div>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- Buses Card (LIVE) - SE20 default only -->
-        <section class="card buses-card se20-card" id="buses-card">
-            <div class="card-header">
-                <h2><span class="tfl-bus-icon"></span> Buses</h2>
-                <div class="header-badges">
-                    <span class="walk-time-badge">🚶 2 min</span>
-                    <span class="live-badge">LIVE</span>
-                    <span class="update-time" id="buses-updated">--</span>
-                </div>
-            </div>
-            <div class="bus-directions">
-                <div class="bus-direction">
-                    <div class="direction-header">
-                        <span class="direction-arrow">↑</span>
-                        <span class="direction-name">To Crystal Palace / Central</span>
-                    </div>
-                    <div class="bus-arrivals" id="bus-arrivals-east">
-                        <div class="loading">Loading...</div>
-                    </div>
-                </div>
-                <div class="bus-direction">
-                    <div class="direction-header">
-                        <span class="direction-arrow">↓</span>
-                        <span class="direction-name">To Penge / Beckenham</span>
-                    </div>
-                    <div class="bus-arrivals" id="bus-arrivals-west">
-                        <div class="loading">Loading...</div>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- Coming Soon - National Rail (Collapsible) - SE20 default only -->
-        <section class="card coming-soon-card se20-card" id="nearby-trains-card">
-            <div class="collapsible-header" id="coming-soon-toggle">
-                <div class="collapsible-title">
-                    <h2>🚂 Nearby Trains</h2>
-                    <span class="live-badge">LIVE</span>
-                </div>
-                <span class="collapsible-icon" id="collapsible-icon">▼</span>
-            </div>
-            <div class="collapsible-content" id="coming-soon-content" style="display: none;">
-                <div class="stations">
-                    <!-- Penge West (Demo) -->
-                    <div class="station demo-station" data-station="pnw">
-                        <div class="station-header">
-                            <span class="station-name">Penge West <span class="walk-time-inline">🚶 8 min</span></span>
-                            <span class="station-code southern">Southern</span>
+                    <div class="route-input">
+                        <div class="route-input-fields">
+                            <div class="ri-row">
+                                <span class="ri-dot from"></span>
+                                <button class="ri-from" id="from-text">Home (SE20)</button>
+                            </div>
+                            <div class="ri-divider"></div>
+                            <div class="ri-row">
+                                <span class="ri-dot to"></span>
+                                <input type="text" id="destination-input" placeholder="Search destination…" autocomplete="off">
+                                <button class="ri-clear" id="destination-clear" aria-label="Clear" style="display:none;">&times;</button>
+                            </div>
+                            <div class="autocomplete-dropdown" id="autocomplete-dropdown"></div>
                         </div>
-                        <div class="departures" id="pnw-departures">
-                            <div class="loading">Loading...</div>
+                        <button class="ri-swap" id="origin-swap-btn" aria-label="Swap origin">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                                <path d="M7 4v16M7 20l-3-3M7 4l3 3M17 20V4M17 4l3 3M17 20l-3-3"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <button class="go-btn" id="journey-search-btn">Find routes</button>
+                    <!-- quick chips -->
+                    <div class="quick-chips" id="journey-quick-picks"></div>
+                    <div class="quick-chips recents" id="favourites-list"></div>
+                </div>
+
+                <!-- Preference + mode filters -->
+                <div class="filter-strip">
+                    <div class="pill-row" id="journey-pref-row">
+                        <button class="pill active" data-pref="">⚡ Fastest</button>
+                        <button class="pill" data-pref="leastwalking">🚶 Least walking</button>
+                        <button class="pill" data-pref="leastinterchange">🔁 Fewest changes</button>
+                        <button class="pill" data-stepfree="1">♿ Step-free</button>
+                    </div>
+                    <div class="pill-row" id="journey-mode-row">
+                        <button class="pill mode active" data-mode="all">Any mode</button>
+                        <button class="pill mode" data-mode="tube,overground,dlr,elizabeth-line,national-rail">Rail</button>
+                        <button class="pill mode" data-mode="tube">Tube</button>
+                        <button class="pill mode" data-mode="overground">Overground</button>
+                        <button class="pill mode" data-mode="bus">Bus</button>
+                    </div>
+                    <div class="pill-row" id="journey-time-row">
+                        <button class="pill time active" data-offset="0">Now</button>
+                        <button class="pill time" data-offset="30">+30m</button>
+                        <button class="pill time" data-offset="60">+1h</button>
+                        <button class="pill time" data-offset="120">+2h</button>
+                    </div>
+                </div>
+
+                <!-- Route results -->
+                <div class="section-head">
+                    <h3>Best routes now</h3>
+                    <span class="updated" id="journey-updated">Ready</span>
+                </div>
+                <div class="journey-results" id="journey-results">
+                    <div class="empty-hint">Search a destination to see the fastest routes, fares and live times.</div>
+                </div>
+
+                <button class="link-card" id="plan-alerts-link">
+                    <span class="lc-icon green">🕐</span>
+                    <span class="lc-text"><strong>Live updates</strong><br><span class="muted">Real-time delays & disruptions</span></span>
+                    <span class="lc-chevron">›</span>
+                </button>
+            </section>
+
+            <!-- ============ NEARBY ============ -->
+            <section class="screen" id="screen-nearby">
+                <div class="card map-card" id="map-card"><div id="map"></div></div>
+
+                <div class="section-head">
+                    <h3>Nearby now</h3>
+                    <span class="updated" id="nearby-updated">--</span>
+                </div>
+                <div class="nearby-list" id="nearby-now-list">
+                    <div class="loading">Finding nearby stations…</div>
+                </div>
+
+                <div class="section-head">
+                    <h3>Live departures</h3>
+                    <span class="updated" id="departures-updated">--</span>
+                </div>
+                <div class="departures-list" id="live-departures-list">
+                    <div class="loading">Loading…</div>
+                </div>
+
+                <button class="link-card" id="nearby-alerts-link">
+                    <span class="lc-icon amber">⚠️</span>
+                    <span class="lc-text"><strong>Disruptions near you</strong><br><span class="muted">Services affecting your area</span></span>
+                    <span class="lc-chevron">›</span>
+                </button>
+            </section>
+
+            <!-- ============ LINES ============ -->
+            <section class="screen" id="screen-lines">
+                <div class="section-head">
+                    <h3>Line status</h3>
+                    <span class="updated" id="lines-updated">--</span>
+                </div>
+                <div class="lines-list" id="line-statuses"><div class="loading">Loading…</div></div>
+            </section>
+
+            <!-- ============ ALERTS ============ -->
+            <section class="screen" id="screen-alerts">
+                <div class="section-head"><h3>Service alerts</h3><span class="updated" id="alerts-updated">--</span></div>
+                <div class="alerts-list" id="alerts-list"><div class="loading">Loading…</div></div>
+                <div class="section-head"><h3>Road & traffic</h3></div>
+                <div class="traffic-disruptions" id="traffic-disruptions"><div class="loading">Loading…</div></div>
+            </section>
+
+            <!-- ============ SAVED ============ -->
+            <section class="screen" id="screen-saved">
+                <div class="card">
+                    <h2 class="card-title">Home location</h2>
+                    <div class="settings-current">Currently: <strong id="settings-current-label">SE20</strong></div>
+                    <div class="settings-input-row">
+                        <input type="text" id="settings-postcode" placeholder="Enter postcode (e.g. E1 6AN)" autocomplete="off">
+                        <button class="settings-set-btn" id="settings-set-home">Set</button>
+                    </div>
+                    <button class="settings-loc-btn" id="settings-use-location">📍 Use my current location</button>
+                    <button class="settings-reset-btn" id="settings-reset" style="display:none;">↺ Reset to SE20 (Penge)</button>
+                    <div class="settings-status" id="settings-status"></div>
+                </div>
+
+                <div class="section-head"><h3>Saved places</h3></div>
+                <div class="saved-list" id="saved-places-list"></div>
+
+                <div class="section-head"><h3>Recent journeys</h3></div>
+                <div class="saved-list" id="saved-recents-list"></div>
+
+                <div class="weather-mini-card card" id="weather-card">
+                    <div class="weather-main">
+                        <span class="weather-icon" id="weather-icon">🌤️</span>
+                        <div class="weather-temp-block">
+                            <span class="temp" id="temp">--°</span>
+                            <span class="weather-condition" id="weather-condition">--</span>
+                        </div>
+                        <div class="weather-side">
+                            <span id="feels-like-row">Feels --°</span>
+                            <span id="rain-row">Rain --%</span>
                         </div>
                     </div>
-                    <!-- Penge East (Demo) -->
-                    <div class="station demo-station" data-station="pne">
-                        <div class="station-header">
-                            <span class="station-name">Penge East <span class="walk-time-inline">🚶 10 min</span></span>
-                            <span class="station-code southeastern">Southeastern</span>
-                        </div>
-                        <div class="departures" id="pne-departures">
-                            <div class="loading">Loading...</div>
-                        </div>
-                    </div>
-                    <!-- Birkbeck (Demo) -->
-                    <div class="station demo-station" data-station="bkb">
-                        <div class="station-header">
-                            <span class="station-name">Birkbeck <span class="walk-time-inline">🚶 12 min</span></span>
-                            <span class="station-code tram">Tram</span>
-                        </div>
-                        <div class="departures" id="bkb-departures">
-                            <div class="loading">Loading...</div>
-                        </div>
+                    <div class="clothing-advice" id="clothing-advice">
+                        <span class="clothing-icon" id="clothing-icon">🧥</span>
+                        <span class="clothing-text" id="clothing-text">--</span>
                     </div>
                 </div>
-            </div>
-        </section>
 
-        <!-- TfL Line Status (LIVE) - Collapsible -->
-        <section class="card status-card" id="lines-section">
-            <div class="collapsible-header" id="line-status-toggle">
-                <div class="collapsible-title">
-                    <h2>🚇 Line Status</h2>
-                    <span class="live-badge">LIVE</span>
-                    <span class="update-time" id="lines-updated">--</span>
-                </div>
-                <span class="collapsible-icon" id="line-status-icon">▼</span>
-            </div>
-            <div class="collapsible-content" id="line-status-content" style="display: none;">
-                <div class="line-statuses" id="line-statuses">
-                    <div class="loading">Loading...</div>
-                </div>
-            </div>
-        </section>
+                <div class="app-foot" id="status-message">Ready</div>
+            </section>
 
-        <!-- Weather Card (LIVE) -->
-        <section class="card weather-card" id="weather-section">
-            <div class="card-header">
-                <h2>Weather</h2>
-                <div class="header-badges">
-                    <span class="air-quality-badge" id="air-quality">Air: --</span>
-                    <span class="update-time" id="weather-updated">--</span>
-                </div>
-            </div>
-            <div class="weather-content">
-                <div class="weather-main">
-                    <span class="weather-icon" id="weather-icon">🌤️</span>
-                    <div class="weather-temp-block">
-                        <span class="temp" id="temp">--°</span>
-                        <span class="weather-condition" id="weather-condition">--</span>
-                    </div>
-                </div>
-                <div class="weather-details">
-                    <div class="weather-detail">
-                        <span class="label">Feels like</span>
-                        <span class="value" id="feels-like">--°</span>
-                    </div>
-                    <div class="weather-detail">
-                        <span class="label">Rain</span>
-                        <span class="value" id="rain-chance">--%</span>
-                        <span class="rain-hint" id="rain-hint"></span>
-                    </div>
-                    <div class="weather-detail">
-                        <span class="label">Wind</span>
-                        <span class="value" id="wind">-- mph</span>
-                    </div>
-                </div>
-            </div>
-            <!-- Sunrise/Sunset -->
-            <div class="sun-times-row">
-                <div class="sun-times" id="sun-times">
-                    <span class="sun-icon">🌅</span>
-                    <span class="sun-time">--:--</span>
-                    <span class="sun-divider">·</span>
-                    <span class="sun-icon">🌇</span>
-                    <span class="sun-time">--:--</span>
-                </div>
-                <div class="daylight-badge during-day" id="daylight-remaining">Loading...</div>
-            </div>
-            <!-- Clothing Recommendation -->
-            <div class="clothing-advice" id="clothing-advice">
-                <span class="clothing-icon" id="clothing-icon">🧥</span>
-                <span class="clothing-text" id="clothing-text">Loading...</span>
-            </div>
-            <!-- Hourly Forecast -->
-            <div class="hourly-forecast" id="hourly-forecast">
-                <div class="forecast-scroll" id="forecast-scroll">
-                    <div class="forecast-loading">Loading forecast...</div>
-                </div>
-            </div>
-        </section>
+            <!-- ============ JOURNEY DETAIL ============ -->
+            <section class="screen" id="screen-journey">
+                <button class="back-link" id="journey-back">‹ Back to results</button>
+                <div id="journey-detail-content"></div>
+            </section>
 
-        <!-- Traffic Disruptions (LIVE) -->
-        <section class="card traffic-card">
-            <div class="card-header">
-                <h2>🚗 Traffic</h2>
-                <div class="header-badges">
-                    <span class="live-badge">LIVE</span>
-                    <span class="update-time" id="traffic-updated">--</span>
-                </div>
-            </div>
-            <div class="traffic-disruptions" id="traffic-disruptions">
-                <div class="loading">Loading...</div>
-            </div>
-        </section>
+        </main>
 
-        <!-- Status Bar -->
-        <footer class="status-bar">
-            <span id="status-message">Ready</span>
-            <span id="last-refresh">Last refresh: --</span>
-        </footer>
+        <!-- Bottom nav -->
+        <nav class="bottom-nav" id="bottom-nav">
+            <button class="bn-btn active" data-screen="plan">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h6a4 4 0 0 0 4-4V7M16 5h-6a4 4 0 0 0-4 4v8"/></svg>
+                <span>Plan</span>
+            </button>
+            <button class="bn-btn" data-screen="nearby">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                <span>Nearby</span>
+            </button>
+            <button class="bn-btn" data-screen="lines">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="16" rx="3"/><path d="M4 11h16M8 19l-2 2M16 19l2 2"/><circle cx="8.5" cy="15" r="0.6" fill="currentColor"/><circle cx="15.5" cy="15" r="0.6" fill="currentColor"/></svg>
+                <span>Lines</span>
+            </button>
+            <button class="bn-btn" data-screen="alerts">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+                <span>Alerts</span>
+            </button>
+            <button class="bn-btn" data-screen="saved">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+                <span>Saved</span>
+            </button>
+        </nav>
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
