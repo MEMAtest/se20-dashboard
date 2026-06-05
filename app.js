@@ -85,13 +85,14 @@ class PengeDash {
         // Initial data load
         this.refreshAll();
 
-        // Detect nearby (all homes) — feeds the map + Nearby screen
+        // Detect nearby (all homes) — feeds the map + Nearby screen.
+        // When cache exists, render it immediately; refreshAll() above already
+        // fetches live arrivals via fetchActiveTransit (no duplicate fetch here).
         if (this.nearbyStations.length === 0) {
             this.detectNearbyForHome();
         } else {
             this.updateMap();
             this.renderNearbyNow();
-            this.fetchNearbyArrivals();
         }
 
         // Auto-refresh intervals
@@ -121,6 +122,12 @@ class PengeDash {
         document.querySelectorAll('#bottom-nav .bn-btn').forEach(b =>
             b.classList.toggle('active', b.dataset.screen === name));
         window.scrollTo({ top: 0, behavior: 'smooth' });
+
+        // Leaflet measures 0×0 while its screen is hidden — recompute size on show
+        // (markers are already drawn by updateMap during detection; no need to re-add)
+        if (name === 'nearby' && this.map) {
+            requestAnimationFrame(() => this.map.invalidateSize());
+        }
     }
 
     setupShellLinks() {
@@ -413,6 +420,10 @@ class PengeDash {
         return mode === 'overground' ? '🚆' : mode === 'dlr' ? '🚈'
             : mode === 'tube' ? '🚇' : mode === 'elizabeth' ? '🚆' : '🚉';
     }
+    // TfL only provides live arrivals for these modes (National Rail is not covered)
+    _hasLiveArrivals(st) {
+        return (st.modes || []).some(m => ['tube', 'overground', 'dlr', 'elizabeth-line', 'tram'].includes(m));
+    }
 
     renderNearbyNow(detecting = false) {
         const list = document.getElementById('nearby-now-list');
@@ -429,8 +440,10 @@ class PengeDash {
         this.nearbyStations.forEach(st => {
             const walk = Math.max(1, Math.round(st.distance / 80));
             const mode = this._stationMode(st);
-            const tags = (st.modes || []).slice(0, 2)
-                .map(m => `<span class="ni-tag line">${this.escapeHtml(modeName[m] || m)}</span>`).join('');
+            const tagList = (st.modes || []).slice(0, 2)
+                .map(m => `<span class="ni-tag line">${this.escapeHtml(modeName[m] || m)}</span>`);
+            if (!this._hasLiveArrivals(st)) tagList.push('<span class="ni-tag">No live times</span>');
+            const tags = tagList.join('');
             items.push(`
                 <button class="nearby-item" data-station-id="${this.escapeAttr(st.id)}" data-station-name="${this.escapeAttr(st.name)}">
                     <span class="ni-icon ${mode}">${this._modeEmoji(mode)}</span>
@@ -501,7 +514,12 @@ class PengeDash {
         if (sub) sub.textContent = 'Next live departures';
         const el = document.getElementById('modal-departures');
         const data = isBus ? ((this.busStopData || {})[id] || []) : (this.stationData[id] || []);
-        if (data.length === 0) {
+        const station = isBus ? null : (this.nearbyStations || []).find(s => s.id === id);
+        if (data.length === 0 && station && !this._hasLiveArrivals(station)) {
+            // National Rail station — TfL has no live arrivals feed; link out
+            el.innerHTML = `<div class="no-data">🚂 This is a National Rail station — live departures aren't available in TfL data here.<br><br>
+                <a href="https://www.nationalrail.co.uk/live-trains/departures/" target="_blank" rel="noopener" style="color:var(--blue);font-weight:600;">Check National Rail live times ↗</a></div>`;
+        } else if (data.length === 0) {
             el.innerHTML = '<div class="no-data">No live departures right now</div>';
         } else {
             el.innerHTML = data.slice(0, 8).map(d => `
@@ -2382,12 +2400,16 @@ class PengeDash {
     appendJourneyParams(url) {
         const sep = () => url.includes('?') ? '&' : '?';
         if (this.journeyTimeOffset > 0) {
+            // TfL Journey API expects separate date=yyyyMMdd & time=HHmm (local), not ISO dateTime
             const dt = new Date(Date.now() + this.journeyTimeOffset * 60000);
-            url += `${sep()}dateTime=${dt.toISOString().slice(0, 16)}&timeIs=Departing`;
+            const pad = n => String(n).padStart(2, '0');
+            const date = `${dt.getFullYear()}${pad(dt.getMonth() + 1)}${pad(dt.getDate())}`;
+            const time = `${pad(dt.getHours())}${pad(dt.getMinutes())}`;
+            url += `${sep()}date=${date}&time=${time}&timeIs=Departing`;
         }
         if (this.journeyModes) url += `${sep()}mode=${this.journeyModes}`;
         if (this.journeyPref) url += `${sep()}journeyPreference=${this.journeyPref}`;
-        if (this.journeyStepFree) url += `${sep()}accessibilityPreference=StepFreeToVehicle`;
+        if (this.journeyStepFree) url += `${sep()}accessibilityPreference=stepFreeToVehicle`;
         return url;
     }
 
@@ -2644,8 +2666,9 @@ class PengeDash {
         }).join('');
 
         const insights = [];
-        if (status.cls === 'ok') insights.push(`<div class="jd-insight ok">🛡️ <span class="jd-i-body"><b>Low disruption</b> — no major issues on your route.</span></div>`);
-        else insights.push(`<div class="jd-insight" style="background:var(--amber-soft);color:var(--amber)">⚠️ <span class="jd-i-body"><b>${status.label}</b> on part of this route.</span></div>`);
+        const haveLineData = Object.keys(this.lineStatusData || {}).length > 0;
+        if (status.cls !== 'ok') insights.push(`<div class="jd-insight" style="background:var(--amber-soft);color:var(--amber)">⚠️ <span class="jd-i-body"><b>${status.label}</b> on part of this route.</span></div>`);
+        else if (haveLineData) insights.push(`<div class="jd-insight ok">🛡️ <span class="jd-i-body"><b>Low disruption</b> — no major issues on your route.</span></div>`);
         if (this.currentWeather && this.currentWeather.rainChance >= 50 && walkTotal >= 3) {
             insights.push(`<div class="jd-insight info">🌧️ <span class="jd-i-body"><b>Rain likely</b> — ${this.currentWeather.rainChance}% chance, allow extra time walking.</span></div>`);
         }
@@ -3206,8 +3229,11 @@ class PengeDash {
                 <button class="saved-item-x" data-label="${this.escapeAttr(p.label)}" aria-label="Remove">&times;</button>
             </div>`).join('');
         list.querySelectorAll('.saved-item-go').forEach(b => b.addEventListener('click', () => {
-            if (b.dataset.postcode) this._settingsResolve(b.dataset.postcode);
-            else this._settingsResolve({ lat: parseFloat(b.dataset.lat), lon: parseFloat(b.dataset.lon), label: b.dataset.label, postcode: '' });
+            if (b.dataset.postcode) { this._settingsResolve(b.dataset.postcode); return; }
+            const lat = parseFloat(b.dataset.lat), lon = parseFloat(b.dataset.lon);
+            if (Number.isFinite(lat) && Number.isFinite(lon)) {
+                this._settingsResolve({ lat, lon, label: b.dataset.label, postcode: '' });
+            }
         }));
         list.querySelectorAll('.saved-item-x').forEach(x => x.addEventListener('click', () => {
             this.removeSavedPlace(x.dataset.label);
