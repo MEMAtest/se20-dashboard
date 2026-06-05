@@ -2171,3 +2171,210 @@ body {
         margin-top: env(safe-area-inset-top);
     }
 }
+
+/* ==================== ENHANCEMENTS (relocatable + map + nav) ==================== */
+
+/* Header actions (settings + refresh) */
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.icon-btn {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 9px;
+    cursor: pointer;
+    color: var(--text-primary);
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.icon-btn:hover { background: var(--bg-card-alt); }
+.icon-btn:active { transform: scale(0.95); }
+
+/* Tappable service alert */
+.service-alert { cursor: pointer; }
+
+/* Quick navigation */
+.quick-nav {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    display: flex;
+    gap: 6px;
+    padding: 8px 0;
+    margin-bottom: 12px;
+    background: var(--bg-primary, var(--bg-card));
+    backdrop-filter: blur(8px);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+.quick-nav-btn {
+    flex: 0 0 auto;
+    background: var(--bg-card-alt);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    padding: 6px 14px;
+    border-radius: 16px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.2s ease;
+}
+.quick-nav-btn.active {
+    background: var(--accent-blue);
+    color: white;
+    border-color: var(--accent-blue);
+}
+
+/* Map */
+.map-card { padding: 0; overflow: hidden; }
+#map {
+    height: 240px;
+    width: 100%;
+    border-radius: 16px;
+    z-index: 1;
+}
+.map-pin {
+    font-size: 18px;
+    text-align: center;
+    line-height: 24px;
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.4));
+}
+.leaflet-popup-content { font-family: inherit; font-size: 13px; }
+[data-theme="dark"] .leaflet-tile { filter: brightness(0.85) contrast(1.05); }
+
+/* Mode filter pills (match time pills) */
+.journey-mode-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+}
+.mode-pill {
+    background: var(--bg-card-alt);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    padding: 4px 12px;
+    border-radius: 16px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: inherit;
+    white-space: nowrap;
+}
+.mode-pill:hover { border-color: var(--accent-blue); color: var(--accent-blue); }
+.mode-pill.active { background: var(--accent-blue); color: white; border-color: var(--accent-blue); }
+
+/* Extra roundels for dynamic station cards */
+.tube-roundel, .dlr-roundel, .rail-roundel {
+    display: inline-block;
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    position: relative;
+    margin-right: 8px;
+    vertical-align: middle;
+}
+.tube-roundel { background: #dc241f; }
+.dlr-roundel { background: #00afad; }
+.rail-roundel { background: #1d1d1b; }
+.tube-roundel::before, .dlr-roundel::before, .rail-roundel::before {
+    content: '';
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 14px; height: 14px;
+    background: var(--bg-card);
+    border-radius: 50%;
+}
+.tube-roundel::after, .dlr-roundel::after, .rail-roundel::after {
+    content: '';
+    position: absolute;
+    top: 50%; left: 0; right: 0;
+    height: 6px;
+    transform: translateY(-50%);
+}
+.tube-roundel::after { background: #dc241f; }
+.dlr-roundel::after { background: #00afad; }
+.rail-roundel::after { background: #1d1d1b; }
+.station-card .card-header h2 { display: flex; align-items: center; }
+
+/* National Rail unavailable note */
+.nr-unavailable {
+    font-size: 13px;
+    color: var(--text-muted);
+    padding: 12px;
+    line-height: 1.5;
+}
+.nr-unavailable a { color: var(--accent-blue); font-weight: 600; text-decoration: none; }
+
+/* Alert detail modal */
+.alert-detail-item {
+    padding: 12px;
+    background: var(--bg-card-alt);
+    border-radius: 10px;
+    border-left: 3px solid var(--accent-red, #dc2626);
+}
+.alert-detail-line { font-weight: 700; font-size: 15px; }
+.alert-detail-status { font-size: 12px; color: var(--accent-red, #dc2626); font-weight: 600; margin: 2px 0 6px; }
+.alert-detail-reason { font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+
+/* Settings modal */
+.settings-section { margin-bottom: 18px; }
+.settings-label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px; }
+.settings-current { font-size: 13px; color: var(--text-secondary); margin-bottom: 10px; }
+.settings-input-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.settings-input-row input {
+    flex: 1;
+    background: var(--bg-card-alt);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 10px 12px;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 14px;
+}
+.settings-set-btn, .settings-loc-btn, .settings-reset-btn {
+    background: var(--accent-blue);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 16px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 14px;
+}
+.settings-loc-btn { width: 100%; background: var(--bg-card-alt); color: var(--text-primary); border: 1px solid var(--border-color); }
+.settings-reset-btn { width: 100%; background: var(--bg-card-alt); color: var(--text-secondary); border: 1px solid var(--border-color); }
+.settings-status { font-size: 12px; margin-top: 8px; color: var(--accent-green); min-height: 16px; }
+.settings-status.error { color: var(--accent-red, #dc2626); }
+.settings-empty { font-size: 13px; color: var(--text-muted); }
+.saved-place { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.saved-place-go {
+    flex: 1;
+    text-align: left;
+    background: var(--bg-card-alt);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 10px 12px;
+    color: var(--text-primary);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 14px;
+}
+.saved-place-remove {
+    background: var(--bg-card-alt);
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    font-size: 18px;
+    cursor: pointer;
+}

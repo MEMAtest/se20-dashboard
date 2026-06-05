@@ -12,6 +12,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -34,20 +36,36 @@
                 <div class="greeting" id="greeting">Morning!</div>
                 <div class="location">
                     <span class="location-pin">📍</span>
-                    <span>SE20</span>
+                    <span id="header-location">SE20</span>
                 </div>
             </div>
             <div class="time" id="current-time">--:--</div>
-            <button class="refresh-btn" id="refresh-btn" aria-label="Refresh">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M23 4v6h-6M1 20v-6h6"/>
-                    <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
-                </svg>
-            </button>
+            <div class="header-actions">
+                <button class="icon-btn" id="settings-btn" aria-label="Settings">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                    </svg>
+                </button>
+                <button class="refresh-btn icon-btn" id="refresh-btn" aria-label="Refresh">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M23 4v6h-6M1 20v-6h6"/>
+                        <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+                    </svg>
+                </button>
+            </div>
         </header>
 
+        <!-- Quick Navigation -->
+        <nav class="quick-nav" id="quick-nav">
+            <button class="quick-nav-btn active" data-target="journey-section">Journey</button>
+            <button class="quick-nav-btn" data-target="transit-section">Transit</button>
+            <button class="quick-nav-btn" data-target="lines-section">Lines</button>
+            <button class="quick-nav-btn" data-target="weather-section">Weather</button>
+        </nav>
+
         <!-- Journey Planner (CityMapper-style) -->
-        <section class="card journey-card">
+        <section class="card journey-card" id="journey-section">
             <div class="card-header">
                 <h2>Where to?</h2>
                 <div class="header-badges">
@@ -81,6 +99,15 @@
                     <button class="time-pill" data-offset="60">+1 hr</button>
                     <button class="time-pill" data-offset="120">+2 hr</button>
                 </div>
+                <!-- Travel Mode Filters -->
+                <div class="journey-mode-row" id="journey-mode-row">
+                    <span class="time-label">By:</span>
+                    <button class="mode-pill active" data-mode="all">🧭 Any</button>
+                    <button class="mode-pill" data-mode="tube,overground,dlr,elizabeth-line,national-rail">🚆 Rail</button>
+                    <button class="mode-pill" data-mode="tube">🚇 Tube</button>
+                    <button class="mode-pill" data-mode="overground">🚆 Ovgnd</button>
+                    <button class="mode-pill" data-mode="bus">🚌 Bus</button>
+                </div>
                 <!-- Quick Destination Pills -->
                 <div class="journey-quick-row" id="journey-quick-picks">
                     <!-- Destinations loaded from localStorage -->
@@ -97,8 +124,17 @@
             </div>
         </section>
 
-        <!-- Anerley Overground (LIVE) -->
-        <section class="card trains-card overground-card">
+        <!-- Map (Citymapper-style) -->
+        <section class="card map-card" id="map-card">
+            <div id="map"></div>
+        </section>
+
+        <!-- Transit anchor + dynamic nearby (shown when home is relocated) -->
+        <div id="transit-section"></div>
+        <div id="nearby-section" style="display: none;"></div>
+
+        <!-- Anerley Overground (LIVE) - SE20 default only -->
+        <section class="card trains-card overground-card se20-card" id="anerley-card">
             <div class="card-header">
                 <h2><span class="overground-roundel"></span> Anerley</h2>
                 <div class="header-badges">
@@ -129,8 +165,8 @@
             </div>
         </section>
 
-        <!-- Buses Card (LIVE) -->
-        <section class="card buses-card">
+        <!-- Buses Card (LIVE) - SE20 default only -->
+        <section class="card buses-card se20-card" id="buses-card">
             <div class="card-header">
                 <h2><span class="tfl-bus-icon"></span> Buses</h2>
                 <div class="header-badges">
@@ -161,8 +197,8 @@
             </div>
         </section>
 
-        <!-- Coming Soon - National Rail (Collapsible) -->
-        <section class="card coming-soon-card">
+        <!-- Coming Soon - National Rail (Collapsible) - SE20 default only -->
+        <section class="card coming-soon-card se20-card" id="nearby-trains-card">
             <div class="collapsible-header" id="coming-soon-toggle">
                 <div class="collapsible-title">
                     <h2>🚂 Nearby Trains</h2>
@@ -207,7 +243,7 @@
         </section>
 
         <!-- TfL Line Status (LIVE) - Collapsible -->
-        <section class="card status-card">
+        <section class="card status-card" id="lines-section">
             <div class="collapsible-header" id="line-status-toggle">
                 <div class="collapsible-title">
                     <h2>🚇 Line Status</h2>
@@ -224,7 +260,7 @@
         </section>
 
         <!-- Weather Card (LIVE) -->
-        <section class="card weather-card">
+        <section class="card weather-card" id="weather-section">
             <div class="card-header">
                 <h2>Weather</h2>
                 <div class="header-badges">
@@ -301,6 +337,8 @@
         </footer>
     </div>
 
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <script src="config.js"></script>
     <script src="app.js"></script>
 </body>

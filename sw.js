@@ -1,5 +1,7 @@
 // Penge Dash SE20 - Service Worker
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v3';
+const TILE_CACHE = 'penge-dash-tiles-v1';
+const MAX_TILES = 300;
 const CACHE_NAME = `penge-dash-${CACHE_VERSION}`;
 const STATIC_ASSETS = [
     '/',
@@ -30,7 +32,7 @@ self.addEventListener('activate', event => {
     event.waitUntil(
         caches.keys().then(keys => {
             return Promise.all(
-                keys.filter(key => key !== CACHE_NAME)
+                keys.filter(key => key !== CACHE_NAME && key !== TILE_CACHE)
                     .map(key => {
                         console.log('[SW] Deleting old cache:', key);
                         return caches.delete(key);
@@ -47,9 +49,47 @@ self.addEventListener('fetch', event => {
 
     const url = new URL(event.request.url);
 
+    // OSM map tiles — cache-first with a capped tile cache (immutable, fail-soft offline)
+    if (url.hostname.includes('tile.openstreetmap.org')) {
+        event.respondWith(
+            caches.open(TILE_CACHE).then(async cache => {
+                const cached = await cache.match(event.request);
+                if (cached) return cached;
+                try {
+                    const response = await fetch(event.request);
+                    cache.put(event.request, response.clone());
+                    // Trim cache opportunistically
+                    cache.keys().then(keys => {
+                        if (keys.length > MAX_TILES) cache.delete(keys[0]);
+                    });
+                    return response;
+                } catch (e) {
+                    return new Response('', { status: 504 });
+                }
+            })
+        );
+        return;
+    }
+
+    // Leaflet from unpkg — cache-first (versioned, immutable)
+    if (url.hostname.includes('unpkg.com')) {
+        event.respondWith(
+            caches.match(event.request).then(cached => {
+                if (cached) return cached;
+                return fetch(event.request).then(response => {
+                    const clone = response.clone();
+                    caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+                    return response;
+                }).catch(() => new Response('', { status: 504 }));
+            })
+        );
+        return;
+    }
+
     // For API requests, try network first with cache fallback
     if (url.hostname.includes('api.tfl.gov.uk') ||
         url.hostname.includes('api.open-meteo.com') ||
+        url.hostname.includes('api.postcodes.io') ||
         url.hostname.includes('railway-tlmc.onrender.com')) {
         event.respondWith(
             fetch(event.request)

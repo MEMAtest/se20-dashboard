@@ -7,14 +7,50 @@ const PLATFORM_DIRECTIONS = {
     anr: { '1': '→ Highbury & Islington', '2': '→ West Croydon' }
 };
 
+// The 6 named Overground lines (TfL rename, late 2024)
+const OVERGROUND_LINES = ['liberty', 'lioness', 'mildmay', 'suffragette', 'weaver', 'windrush'];
+
+// Display name + CSS class per line id (Overground + common National Rail TOCs)
+const LINE_META = {
+    'liberty':     { name: 'Liberty',     class: 'overground' },
+    'lioness':     { name: 'Lioness',     class: 'overground' },
+    'mildmay':     { name: 'Mildmay',     class: 'overground' },
+    'suffragette': { name: 'Suffragette', class: 'overground' },
+    'weaver':      { name: 'Weaver',      class: 'overground' },
+    'windrush':    { name: 'Windrush',    class: 'overground' },
+    'jubilee':     { name: 'Jubilee',     class: 'jubilee' },
+    'northern':    { name: 'Northern',    class: 'northern' },
+    'victoria':    { name: 'Victoria',    class: 'victoria' },
+    'elizabeth':   { name: 'Elizabeth',   class: 'elizabeth' },
+    'central':     { name: 'Central',     class: 'central' },
+    'district':    { name: 'District',    class: 'district' },
+    'bakerloo':    { name: 'Bakerloo',    class: 'bakerloo' },
+    'piccadilly':  { name: 'Piccadilly',  class: 'piccadilly' },
+    'dlr':         { name: 'DLR',         class: 'dlr' },
+    'southern':     { name: 'Southern',     class: 'southern' },
+    'southeastern': { name: 'Southeastern', class: 'southeastern' },
+    'thameslink':   { name: 'Thameslink',   class: 'thameslink' }
+};
+
 class PengeDash {
     constructor() {
         this.isRefreshing = false;
         this.stationData = {}; // Store all departures for modal
+        this.home = null;              // {lat, lon, postcode, label, isDefault}
+        this.savedPlaces = [];         // [{label, postcode, lat, lon}]
+        this.nearbyStations = [];      // dynamic stations (relocated homes)
+        this.nearbyBusStops = [];      // dynamic bus stops (relocated homes)
+        this.lineStatusData = {};      // {id: {status, reason, disruption, name}}
         this.init();
     }
 
     init() {
+        // Load persisted home + saved places before anything renders
+        this.loadHome();
+        this.loadSavedPlaces();
+        this.loadCachedNearby();
+        this.updateHeaderLocation();
+
         this.updateClock();
         this.updateGreeting();
         setInterval(() => this.updateClock(), 1000);
@@ -39,26 +75,524 @@ class PengeDash {
         document.getElementById('coming-soon-toggle').addEventListener('click', () => this.toggleComingSoon());
         document.getElementById('line-status-toggle').addEventListener('click', () => this.toggleLineStatus());
 
-        // Bind alert close
-        document.getElementById('alert-close').addEventListener('click', () => this.hideAlert());
+        // Bind alert close (stopPropagation so it doesn't open the detail modal)
+        document.getElementById('alert-close').addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.hideAlert();
+        });
+        // Tap the alert banner to see full disruption detail
+        document.getElementById('service-alert').addEventListener('click', () => this.openAlertModal());
 
         // Setup pull-to-refresh
         this.setupPullToRefresh();
 
-        // Create modal for next trains
+        // Create modals (next trains + generic detail)
         this.createModal();
 
         // Setup journey planner
         this.setupJourneyPlanner();
 
+        // Settings (home postcode + saved places) and quick-nav
+        this.setupSettings();
+        this.setupQuickNav();
+
+        // Map (Leaflet) — guarded if library/offline
+        this.initMap();
+
+        // Reflect saved home in the journey "from" label + curated-vs-dynamic cards
+        this.applyHomeToJourney();
+        this.applyHomeMode();
+        // Show a "finding nearby…" placeholder if relocated and not yet detected
+        if (!this.home.isDefault) this.renderNearbySection(this.nearbyStations.length === 0);
+
         // Initial data load
         this.refreshAll();
+
+        // Detect nearby stops — for the map always, and for cards when relocated
+        if (this.nearbyStations.length === 0) {
+            this.detectNearbyForHome();
+        } else {
+            this.updateMap();
+        }
 
         // Set up auto-refresh intervals
         this.setupAutoRefresh();
 
-        // Keep Darwin backend alive (prevents Render cold starts)
-        this.pingDarwinBackend();
+        // Keep Darwin backend alive only for the SE20 default (it serves SE20 only)
+        if (this.home.isDefault) this.pingDarwinBackend();
+    }
+
+    // ==================== HOME / SAVED PLACES PERSISTENCE ====================
+    loadHome() {
+        try {
+            const saved = localStorage.getItem('pengedash-home');
+            this.home = saved ? JSON.parse(saved) : { ...CONFIG.DEFAULT_HOME };
+        } catch (e) {
+            this.home = { ...CONFIG.DEFAULT_HOME };
+        }
+        // Back-compat / safety: ensure required fields exist (lat/lon may legitimately be 0)
+        if (!this.home || this.home.lat == null || this.home.lon == null) this.home = { ...CONFIG.DEFAULT_HOME };
+        if (this.home.isDefault === undefined) {
+            this.home.isDefault = (this.home.postcode || '').replace(/\s/g, '').toUpperCase()
+                === CONFIG.DEFAULT_HOME.postcode.replace(/\s/g, '').toUpperCase();
+        }
+    }
+
+    saveHome() {
+        try {
+            localStorage.setItem('pengedash-home', JSON.stringify(this.home));
+        } catch (e) { /* ignore quota */ }
+    }
+
+    loadSavedPlaces() {
+        try {
+            const saved = localStorage.getItem('pengedash-saved-places');
+            this.savedPlaces = saved ? JSON.parse(saved) : [];
+        } catch (e) {
+            this.savedPlaces = [];
+        }
+    }
+
+    saveSavedPlace(place) {
+        if (!place || !place.label) return;
+        this.savedPlaces = this.savedPlaces.filter(
+            p => p.label.toLowerCase() !== place.label.toLowerCase()
+        );
+        this.savedPlaces.unshift(place);
+        this.savedPlaces = this.savedPlaces.slice(0, 8);
+        try {
+            localStorage.setItem('pengedash-saved-places', JSON.stringify(this.savedPlaces));
+        } catch (e) { /* ignore */ }
+    }
+
+    removeSavedPlace(label) {
+        this.savedPlaces = this.savedPlaces.filter(
+            p => p.label.toLowerCase() !== label.toLowerCase()
+        );
+        try {
+            localStorage.setItem('pengedash-saved-places', JSON.stringify(this.savedPlaces));
+        } catch (e) { /* ignore */ }
+    }
+
+    loadCachedNearby() {
+        const cached = this.getCachedData('nearby-cache');
+        if (cached && cached.home && cached.home === (this.home && this.home.postcode)) {
+            this.nearbyStations = cached.stations || [];
+            this.nearbyBusStops = cached.busStops || [];
+        }
+    }
+
+    updateHeaderLocation() {
+        const el = document.getElementById('header-location');
+        if (el && this.home) {
+            // Show the postcode district (e.g. "SE20") or label
+            const pc = (this.home.postcode || '').toUpperCase();
+            const district = pc.split(' ')[0] || this.home.label || 'Home';
+            el.textContent = district;
+        }
+    }
+
+    applyHomeToJourney() {
+        const fromText = document.getElementById('from-text');
+        if (fromText && this.home && this.journeyOrigin !== 'here') {
+            fromText.textContent = this.home.label || `Home (${(this.home.postcode || '').split(' ')[0]})`;
+        }
+    }
+
+    // Show curated SE20 cards for the default home; show dynamic nearby cards when relocated
+    applyHomeMode() {
+        const se20Cards = document.querySelectorAll('.se20-card');
+        const nearby = document.getElementById('nearby-section');
+        if (this.home && this.home.isDefault) {
+            se20Cards.forEach(c => { c.style.display = ''; });
+            if (nearby) nearby.style.display = 'none';
+        } else {
+            se20Cards.forEach(c => { c.style.display = 'none'; });
+            if (nearby) nearby.style.display = '';
+        }
+    }
+
+    // ==================== GEOCODING + NEARBY DETECTION ====================
+    async geocodePostcode(postcode) {
+        const clean = (postcode || '').trim();
+        if (!clean) throw new Error('Empty postcode');
+
+        // Primary: postcodes.io (free, no key, CORS-enabled)
+        try {
+            const res = await fetch(`${CONFIG.GEOCODE_URL}/postcodes/${encodeURIComponent(clean)}`);
+            if (res.ok) {
+                const json = await res.json();
+                if (json.result) {
+                    return {
+                        lat: json.result.latitude,
+                        lon: json.result.longitude,
+                        postcode: json.result.postcode || clean.toUpperCase(),
+                        label: `Home (${(json.result.postcode || clean).split(' ')[0].toUpperCase()})`
+                    };
+                }
+            }
+        } catch (e) { /* fall through to TfL */ }
+
+        // Fallback: TfL StopPoint search (handles place names too)
+        let url = `https://api.tfl.gov.uk/StopPoint/Search?query=${encodeURIComponent(clean)}&maxResults=1`;
+        if (CONFIG.TFL_APP_KEY) url += `&app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        const match = data.matches && data.matches[0];
+        if (match && match.lat != null && match.lon != null) {
+            return {
+                lat: match.lat,
+                lon: match.lon,
+                postcode: clean.toUpperCase(),
+                label: `Home (${match.name})`
+            };
+        }
+        throw new Error('Could not find that postcode or place');
+    }
+
+    async detectNearby(lat, lon, radius) {
+        const stationRadius = radius || CONFIG.NEARBY.stationRadius;
+        const tflAuth = CONFIG.TFL_APP_KEY ? `&app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+
+        const stationsUrl = `https://api.tfl.gov.uk/StopPoint?lat=${lat}&lon=${lon}` +
+            `&stopTypes=NaptanMetroStation,NaptanRailStation&radius=${stationRadius}${tflAuth}`;
+        const busUrl = `https://api.tfl.gov.uk/StopPoint?lat=${lat}&lon=${lon}` +
+            `&stopTypes=NaptanPublicBusCoachTram&radius=${CONFIG.NEARBY.busRadius}${tflAuth}`;
+
+        const [stationsRes, busRes] = await Promise.all([
+            fetch(stationsUrl).then(r => r.json()).catch(() => ({ stopPoints: [] })),
+            fetch(busUrl).then(r => r.json()).catch(() => ({ stopPoints: [] }))
+        ]);
+
+        const seenStation = new Set();
+        const stations = (stationsRes.stopPoints || [])
+            .sort((a, b) => (a.distance || 0) - (b.distance || 0))
+            .map(sp => ({
+                id: sp.id || sp.naptanId,
+                name: this.cleanStationName(sp.commonName || ''),
+                modes: sp.modes || [],
+                lat: sp.lat,
+                lon: sp.lon,
+                distance: Math.round(sp.distance || 0),
+                lines: (sp.lines || []).map(l => ({ id: l.id, name: l.name })),
+                platformDirections: {}
+            }))
+            // Drop entries with no usable id/name, then dedup hub variants, keep nearest
+            .filter(s => {
+                if (!s.id || !s.name) return false;
+                const key = s.name.toLowerCase();
+                if (seenStation.has(key)) return false;
+                seenStation.add(key);
+                return true;
+            })
+            .slice(0, CONFIG.NEARBY.maxStations);
+
+        const busStops = (busRes.stopPoints || [])
+            .filter(sp => sp.id || sp.naptanId)
+            .sort((a, b) => (a.distance || 0) - (b.distance || 0))
+            .slice(0, CONFIG.NEARBY.maxBusStops)
+            .map(sp => ({
+                id: sp.id || sp.naptanId,
+                name: (sp.commonName || '').replace(/ \(Stop [A-Z0-9]+\)$/i, ''),
+                indicator: sp.stopLetter || sp.indicator || '',
+                towards: this._stopProp(sp, 'Towards') || sp.towards || '',
+                lat: sp.lat,
+                lon: sp.lon,
+                distance: Math.round(sp.distance || 0)
+            }));
+
+        return { stations, busStops };
+    }
+
+    _stopProp(stopPoint, key) {
+        const props = stopPoint.additionalProperties || [];
+        const found = props.find(p => p.key === key);
+        return found ? found.value : '';
+    }
+
+    // Full relocation: geocode -> detect nearby -> persist -> rebuild everything
+    async resolveLocation(input, opts = {}) {
+        // input can be a postcode string, or {lat, lon, label} for "use current location"
+        let home;
+        if (typeof input === 'string') {
+            home = await this.geocodePostcode(input);
+        } else {
+            home = {
+                lat: input.lat,
+                lon: input.lon,
+                postcode: input.postcode || '',
+                label: input.label || 'Current area'
+            };
+        }
+
+        // Is this the SE20 default?
+        const defPc = CONFIG.DEFAULT_HOME.postcode.replace(/\s/g, '').toUpperCase();
+        home.isDefault = (home.postcode || '').replace(/\s/g, '').toUpperCase() === defPc;
+
+        // Detect nearby (widen radius once if empty)
+        let nearby = await this.detectNearby(home.lat, home.lon);
+        if (nearby.stations.length === 0) {
+            nearby = await this.detectNearby(home.lat, home.lon, CONFIG.NEARBY.stationRadius * 2);
+        }
+
+        this.home = home;
+        this.nearbyStations = nearby.stations;
+        this.nearbyBusStops = nearby.busStops;
+        this.saveHome();
+        this.cacheData('nearby-cache', { home: home.postcode, stations: nearby.stations, busStops: nearby.busStops });
+
+        // Optionally remember as a saved place
+        if (opts.savePlace !== false) {
+            this.saveSavedPlace({ label: home.label, postcode: home.postcode, lat: home.lat, lon: home.lon });
+        }
+
+        // Rebuild UI
+        this.updateHeaderLocation();
+        this.applyHomeToJourney();
+        this.applyHomeMode();
+        this.renderNearbySection();
+        this.updateMap();
+        await this.refreshAll();
+        return home;
+    }
+
+    async detectNearbyForHome() {
+        try {
+            let nearby = await this.detectNearby(this.home.lat, this.home.lon);
+            if (nearby.stations.length === 0) {
+                nearby = await this.detectNearby(this.home.lat, this.home.lon, CONFIG.NEARBY.stationRadius * 2);
+            }
+            this.nearbyStations = nearby.stations;
+            this.nearbyBusStops = nearby.busStops;
+            this.cacheData('nearby-cache', { home: this.home.postcode, stations: nearby.stations, busStops: nearby.busStops });
+            this.renderNearbySection(); // no-op for default home
+            this.updateMap();
+            if (!this.home.isDefault) await this.fetchNearbyArrivals();
+        } catch (e) {
+            console.error('Nearby detection failed:', e);
+        }
+    }
+
+    // ==================== DYNAMIC NEARBY CARDS (relocated homes) ====================
+    renderNearbySection(detecting = false) {
+        const host = document.getElementById('nearby-section');
+        if (!host || this.home.isDefault) return;
+
+        if (this.nearbyStations.length === 0 && this.nearbyBusStops.length === 0) {
+            host.innerHTML = detecting
+                ? `<section class="card"><div class="loading">Finding nearby stations…</div></section>`
+                : `<section class="card"><div class="no-data">No stations or stops found near ${this.escapeHtml(this.home.label || 'here')}.</div></section>`;
+            return;
+        }
+
+        const stationCards = this.nearbyStations.map(st => this.renderStationCard(st)).join('');
+        const busCard = this.renderBusCard();
+        host.innerHTML = stationCards + busCard;
+
+        // Tap a departure to open the modal (delegated)
+        host.querySelectorAll('.station-card').forEach(card => {
+            card.addEventListener('click', (e) => {
+                const dep = e.target.closest('.departure');
+                if (!dep) return;
+                const sid = card.dataset.stationId;
+                const sname = card.dataset.stationName;
+                this.openModal(sid, sname, dep.dataset.dest || '');
+            });
+        });
+    }
+
+    renderStationCard(station) {
+        const walk = Math.max(1, Math.round(station.distance / 80)); // ~80 m/min
+        const isTflLive = (station.modes || []).some(m =>
+            ['tube', 'overground', 'dlr', 'elizabeth-line', 'tram'].includes(m));
+        const roundelClass = (station.modes || []).includes('tube') ? 'tube-roundel'
+            : (station.modes || []).includes('overground') ? 'overground-roundel'
+            : (station.modes || []).includes('dlr') ? 'dlr-roundel' : 'rail-roundel';
+
+        const body = isTflLive
+            ? `<div class="departures" id="arrivals-${this.escapeAttr(station.id)}"><div class="loading">Loading...</div></div>`
+            : `<div class="nr-unavailable">🚂 National Rail — live times not available here.
+                 <a href="https://www.nationalrail.co.uk/live-trains/departures/" target="_blank" rel="noopener">Live departures ↗</a></div>`;
+
+        return `
+            <section class="card trains-card station-card" data-station-id="${this.escapeAttr(station.id)}" data-station-name="${this.escapeAttr(station.name)}">
+                <div class="card-header">
+                    <h2><span class="${roundelClass}"></span> ${this.escapeHtml(station.name)}</h2>
+                    <div class="header-badges">
+                        <span class="walk-time-badge">🚶 ${walk} min</span>
+                        ${isTflLive ? '<span class="live-badge">LIVE</span>' : ''}
+                        <span class="update-time" id="updated-${this.escapeAttr(station.id)}">--</span>
+                    </div>
+                </div>
+                ${body}
+            </section>`;
+    }
+
+    renderBusCard() {
+        if (!this.nearbyBusStops || this.nearbyBusStops.length === 0) return '';
+        const stops = this.nearbyBusStops.map(stop => {
+            const label = stop.towards ? `→ ${stop.towards}` : (stop.indicator ? `Stop ${stop.indicator}` : stop.name);
+            return `
+                <div class="bus-direction">
+                    <div class="direction-header">
+                        <span class="direction-name">${this.escapeHtml(stop.name)} ${this.escapeHtml(label)}</span>
+                    </div>
+                    <div class="bus-arrivals" id="busstop-${this.escapeAttr(stop.id)}">
+                        <div class="loading">Loading...</div>
+                    </div>
+                </div>`;
+        }).join('');
+
+        return `
+            <section class="card buses-card">
+                <div class="card-header">
+                    <h2><span class="tfl-bus-icon"></span> Buses</h2>
+                    <div class="header-badges">
+                        <span class="live-badge">LIVE</span>
+                        <span class="update-time" id="nearby-buses-updated">--</span>
+                    </div>
+                </div>
+                <div class="bus-directions">${stops}</div>
+            </section>`;
+    }
+
+    // ==================== UNIVERSAL ARRIVALS (TfL StopPoint/Arrivals) ====================
+    async fetchActiveTransit() {
+        if (this.home.isDefault) {
+            await Promise.all([this.fetchDarwinTrains(), this.fetchBuses()]);
+        } else {
+            await this.fetchNearbyArrivals();
+        }
+    }
+
+    async fetchNearbyArrivals() {
+        const tflAuth = CONFIG.TFL_APP_KEY ? `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+
+        // Stations with TfL live modes
+        const liveStations = this.nearbyStations.filter(st =>
+            (st.modes || []).some(m => ['tube', 'overground', 'dlr', 'elizabeth-line', 'tram'].includes(m)));
+
+        await Promise.all(liveStations.map(async (st) => {
+            try {
+                const res = await fetch(`https://api.tfl.gov.uk/StopPoint/${st.id}/Arrivals${tflAuth}`);
+                const data = await res.json();
+                const departures = (Array.isArray(data) ? data : [])
+                    .map(a => ({
+                        dest: this.cleanStationName(a.destinationName || a.towards || 'Check board'),
+                        platform: this.cleanPlatform(a.platformName),
+                        mins: Math.floor((a.timeToStation || 0) / 60),
+                        currentLocation: a.currentLocation || '',
+                        scheduledTime: a.expectedArrival
+                            ? new Date(a.expectedArrival).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : ''
+                    }))
+                    .filter(d => d.mins >= 0)
+                    .sort((a, b) => a.mins - b.mins);
+
+                st.platformDirections = this.getPlatformDirections(departures);
+                this.stationData[st.id] = departures;
+                this.renderStationArrivals(st, departures);
+                const upd = document.getElementById(`updated-${st.id}`);
+                if (upd) upd.textContent = this.getTimeAgo(new Date());
+            } catch (e) {
+                const upd = document.getElementById(`updated-${st.id}`);
+                if (upd) upd.textContent = 'Error';
+            }
+        }));
+
+        // Bus stops
+        await Promise.all((this.nearbyBusStops || []).map(async (stop) => {
+            try {
+                const res = await fetch(`https://api.tfl.gov.uk/StopPoint/${stop.id}/Arrivals${tflAuth}`);
+                const data = await res.json();
+                this.renderBusStopArrivals(stop.id, Array.isArray(data) ? data : []);
+            } catch (e) { /* leave loading */ }
+        }));
+        const busUpd = document.getElementById('nearby-buses-updated');
+        if (busUpd) busUpd.textContent = this.getTimeAgo(new Date());
+    }
+
+    cleanStationName(name) {
+        return (name || '').replace(/ (Underground|Rail|DLR|Overground) Station$/i, '').replace(/ Station$/i, '').trim();
+    }
+
+    // TfL platform names look like "Westbound - Platform 1" — reduce to just the number when present
+    cleanPlatform(platformName) {
+        if (!platformName) return '-';
+        const num = String(platformName).match(/Platform\s*(\d+)/i) || String(platformName).match(/\b(\d+)\b/);
+        return num ? num[1] : '-';
+    }
+
+    // Derive platform -> direction labels from live arrivals (replaces hardcoded PLATFORM_DIRECTIONS)
+    getPlatformDirections(departures) {
+        const byPlatform = {};
+        departures.forEach(d => {
+            if (!d.platform || d.platform === '-') return;
+            const key = String(d.platform).match(/\d+/)?.[0] || d.platform;
+            byPlatform[key] = byPlatform[key] || {};
+            byPlatform[key][d.dest] = (byPlatform[key][d.dest] || 0) + 1;
+        });
+        const result = {};
+        Object.keys(byPlatform).forEach(p => {
+            const top = Object.entries(byPlatform[p]).sort((a, b) => b[1] - a[1])[0];
+            if (top) result[p] = `→ ${top[0]}`;
+        });
+        return result;
+    }
+
+    renderStationArrivals(station, departures) {
+        const container = document.getElementById(`arrivals-${station.id}`);
+        if (!container) return;
+        if (!departures || departures.length === 0) {
+            container.innerHTML = '<div class="no-data">No live arrivals</div>';
+            return;
+        }
+        const dir = station.platformDirections || {};
+        container.innerHTML = departures.slice(0, 6).map(dep => {
+            const pKey = String(dep.platform).match(/\d+/)?.[0] || dep.platform;
+            const dirLabel = (dep.platform && dep.platform !== '-') ? (dir[pKey] || '') : '';
+            return `
+            <div class="departure" data-dest="${this.escapeAttr(dep.dest)}">
+                <div class="departure-info">
+                    ${dep.platform && dep.platform !== '-' ? `<span class="departure-platform">P${this.escapeHtml(dep.platform)}</span>` : ''}
+                    ${dirLabel ? `<span class="departure-platform-dir">${dirLabel}</span>` : ''}
+                    <span class="departure-destination">${this.escapeHtml(dep.dest)}</span>
+                </div>
+                <div class="departure-time">
+                    <span class="departure-due ${dep.mins <= 3 ? 'urgent' : ''}">${dep.mins} min</span>
+                    ${dep.scheduledTime ? `<span class="departure-scheduled">${dep.scheduledTime}</span>` : ''}
+                </div>
+            </div>`;
+        }).join('');
+    }
+
+    renderBusStopArrivals(stopId, arrivals) {
+        const container = document.getElementById(`busstop-${stopId}`);
+        if (!container) return;
+        if (!arrivals || arrivals.length === 0) {
+            container.innerHTML = '<div class="no-data">No buses</div>';
+            return;
+        }
+        const sorted = arrivals.sort((a, b) => (a.timeToStation || 0) - (b.timeToStation || 0)).slice(0, 4);
+        container.innerHTML = sorted.map(bus => {
+            const mins = Math.floor((bus.timeToStation || 0) / 60);
+            const arrivalStr = (bus.expectedArrival ? new Date(bus.expectedArrival) : new Date(Date.now() + bus.timeToStation * 1000))
+                .toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+            const loc = bus.currentLocation || (mins <= 1 ? 'Arriving' : '');
+            return `
+                <div class="bus-arrival">
+                    <div class="bus-route">
+                        <span class="bus-number">${this.escapeHtml(bus.lineName)}</span>
+                        <div class="bus-info">
+                            <span class="bus-destination">${this.escapeHtml(bus.destinationName)}</span>
+                            ${loc ? `<span class="bus-location">${this.escapeHtml(loc)}</span>` : ''}
+                        </div>
+                    </div>
+                    <div class="bus-time-col">
+                        <span class="bus-time">${mins} min</span>
+                        <span class="bus-scheduled">${arrivalStr}</span>
+                    </div>
+                </div>`;
+        }).join('');
     }
 
     toggleComingSoon() {
@@ -193,7 +727,9 @@ class PengeDash {
         const keysToRemove = [];
         for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
-            if (key && key.startsWith('pengedash-') && key !== 'pengedash-destinations' && key !== 'pengedash-favorite-journeys') {
+            const preserve = ['pengedash-destinations', 'pengedash-favorite-journeys',
+                'pengedash-home', 'pengedash-saved-places'];
+            if (key && key.startsWith('pengedash-') && !preserve.includes(key)) {
                 keysToRemove.push(key);
             }
         }
@@ -329,7 +865,7 @@ class PengeDash {
             return goodMoods[Math.floor(Math.random() * goodMoods.length)];
         }
 
-        const hasOverground = issues.some(i => i.id === 'london-overground');
+        const hasOverground = issues.some(i => OVERGROUND_LINES.includes(i.id));
         const hasSouthern = issues.some(i => i.id === 'southern');
 
         if (hasSouthern) {
@@ -378,6 +914,37 @@ class PengeDash {
         modal.addEventListener('click', (e) => {
             if (e.target === modal) this.closeModal();
         });
+
+        // Generic detail modal (alerts, settings, etc.)
+        const detail = document.createElement('div');
+        detail.id = 'detail-modal';
+        detail.className = 'next-trains-modal';
+        detail.innerHTML = `
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div class="modal-title" id="detail-modal-title">Details</div>
+                    <button class="modal-close" id="detail-modal-close">&times;</button>
+                </div>
+                <div class="modal-departures" id="detail-modal-body"></div>
+            </div>
+        `;
+        document.body.appendChild(detail);
+        document.getElementById('detail-modal-close').addEventListener('click', () => this.closeDetailModal());
+        detail.addEventListener('click', (e) => {
+            if (e.target === detail) this.closeDetailModal();
+        });
+    }
+
+    openDetailModal(title, bodyHtml) {
+        const modal = document.getElementById('detail-modal');
+        document.getElementById('detail-modal-title').textContent = title;
+        document.getElementById('detail-modal-body').innerHTML = bodyHtml;
+        modal.classList.add('active');
+        return modal;
+    }
+
+    closeDetailModal() {
+        document.getElementById('detail-modal').classList.remove('active');
     }
 
     openModal(stationId, stationName, destination) {
@@ -393,13 +960,16 @@ class PengeDash {
             .filter(d => d.dest.toLowerCase().includes(destination.toLowerCase().split(' ')[0]))
             .slice(0, 6);
 
-        const dirLookup = PLATFORM_DIRECTIONS[stationId] || {};
+        // Prefer runtime-derived directions for dynamic stations; fall back to SE20 constant
+        const dynamicStation = (this.nearbyStations || []).find(s => s.id === stationId);
+        const dirLookup = (dynamicStation && dynamicStation.platformDirections) || PLATFORM_DIRECTIONS[stationId] || {};
 
         if (filtered.length === 0) {
             departuresEl.innerHTML = '<div class="no-data">No more trains to this destination</div>';
         } else {
             departuresEl.innerHTML = filtered.map((dep, i) => {
-                const dirLabel = dep.platform && dep.platform !== '-' ? (dirLookup[dep.platform] || '') : '';
+                const pKey = String(dep.platform).match(/\d+/)?.[0] || dep.platform;
+                const dirLabel = dep.platform && dep.platform !== '-' ? (dirLookup[dep.platform] || dirLookup[pKey] || '') : '';
                 const scheduledStr = dep.scheduledTime || (dep.mins != null ? new Date(Date.now() + dep.mins * 60000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '');
                 return `
                 <div class="modal-departure">
@@ -436,8 +1006,7 @@ class PengeDash {
     setupAutoRefresh() {
         setInterval(() => this.fetchWeather(), CONFIG.REFRESH_INTERVALS.weather);
         setInterval(() => this.fetchAirQuality(), CONFIG.REFRESH_INTERVALS.weather);
-        setInterval(() => this.fetchDarwinTrains(), CONFIG.REFRESH_INTERVALS.trains);
-        setInterval(() => this.fetchBuses(), CONFIG.REFRESH_INTERVALS.buses);
+        setInterval(() => this.fetchActiveTransit(), CONFIG.REFRESH_INTERVALS.trains);
         setInterval(() => this.fetchLineStatus(), CONFIG.REFRESH_INTERVALS.trains);
         setInterval(() => this.fetchTrafficDisruptions(), CONFIG.REFRESH_INTERVALS.traffic);
     }
@@ -509,8 +1078,7 @@ class PengeDash {
             await Promise.all([
                 this.fetchWeather(),
                 this.fetchAirQuality(),
-                this.fetchDarwinTrains(),
-                this.fetchBuses(),
+                this.fetchActiveTransit(),
                 this.fetchLineStatus(),
                 this.fetchTrafficDisruptions()
             ]);
@@ -535,7 +1103,7 @@ class PengeDash {
         const updateTime = document.getElementById('weather-updated');
 
         try {
-            const { lat, lon } = CONFIG.LOCATION;
+            const { lat, lon } = this.home || CONFIG.LOCATION;
             // Open-Meteo: Free, no API key required - now with hourly forecast + sunrise/sunset
             const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m&hourly=temperature_2m,precipitation_probability,weather_code&daily=sunrise,sunset&timezone=Europe/London&forecast_hours=12`;
 
@@ -1308,8 +1876,8 @@ class PengeDash {
         const container = document.getElementById('line-statuses');
 
         try {
-            // Fetch status for lines relevant to SE20
-            const lines = ['london-overground', 'jubilee', 'northern', 'victoria', 'elizabeth', 'southern', 'southeastern', 'thameslink'];
+            // Fetch status for relevant lines (location-aware)
+            const lines = this.getRelevantLineIds();
             let url = `https://api.tfl.gov.uk/Line/${lines.join(',')}/Status`;
 
             if (CONFIG.TFL_APP_KEY) {
@@ -1339,39 +1907,45 @@ class PengeDash {
         }
     }
 
+    getRelevantLineIds() {
+        const base = ['jubilee', 'northern', 'victoria', 'elizabeth',
+            'southern', 'southeastern', 'thameslink', ...OVERGROUND_LINES];
+        const nearby = [];
+        (this.nearbyStations || []).forEach(s =>
+            (s.lines || []).forEach(l => { if (l.id) nearby.push(l.id); }));
+        return [...new Set([...base, ...nearby])];
+    }
+
     displayLineStatus(lines) {
         const container = document.getElementById('line-statuses');
 
-        // Store line status data for smart journey insights
+        // Store line status data for smart journey insights (string map, used elsewhere)
         this.lineStatusData = {};
+        // Store full details for the tappable alert modal
+        this.lineDetails = {};
         lines.forEach(line => {
-            const status = line.lineStatuses[0]?.statusSeverityDescription || 'Unknown';
+            const ls = line.lineStatuses && line.lineStatuses[0];
+            const status = (ls && ls.statusSeverityDescription) || 'Unknown';
             this.lineStatusData[line.id] = status;
-            // Also store by name for matching
             if (line.name) this.lineStatusData[line.name.toLowerCase()] = status;
+            this.lineDetails[line.id] = {
+                name: (LINE_META[line.id] && LINE_META[line.id].name) || line.name,
+                status,
+                reason: (ls && ls.reason) || '',
+                disruption: (ls && ls.disruption && ls.disruption.description) || ''
+            };
         });
 
-        const lineNames = {
-            'london-overground': { name: 'Overground', class: 'overground' },
-            'jubilee': { name: 'Jubilee', class: 'jubilee' },
-            'northern': { name: 'Northern', class: 'northern' },
-            'victoria': { name: 'Victoria', class: 'victoria' },
-            'elizabeth': { name: 'Elizabeth', class: 'elizabeth' },
-            'southern': { name: 'Southern', class: 'southern' },
-            'southeastern': { name: 'Southeastern', class: 'southeastern' },
-            'thameslink': { name: 'Thameslink', class: 'thameslink' }
-        };
-
         container.innerHTML = lines.map(line => {
-            const lineInfo = lineNames[line.id] || { name: line.name, class: '' };
-            const status = line.lineStatuses[0];
-            const statusText = status.statusSeverityDescription;
+            const meta = LINE_META[line.id] || { name: line.name, class: '' };
+            const ls = line.lineStatuses && line.lineStatuses[0];
+            const statusText = (ls && ls.statusSeverityDescription) || 'Unknown';
             const statusClass = statusText.toLowerCase().replace(/\s+/g, '-');
 
             return `
-                <div class="line-status ${lineInfo.class}">
-                    <span class="line-name">${lineInfo.name}</span>
-                    <span class="line-status-badge ${statusClass}">${statusText}</span>
+                <div class="line-status ${meta.class}">
+                    <span class="line-name">${this.escapeHtml(meta.name)}</span>
+                    <span class="line-status-badge ${statusClass}">${this.escapeHtml(statusText)}</span>
                 </div>
             `;
         }).join('');
@@ -1382,17 +1956,10 @@ class PengeDash {
         const alertText = document.getElementById('alert-text');
         const statusMessage = document.getElementById('status-message');
 
-        const lineNames = {
-            'london-overground': 'Overground',
-            'southern': 'Southern',
-            'southeastern': 'Southeastern',
-            'thameslink': 'Thameslink'
-        };
-
         // Find lines with issues (not "Good Service")
         const issues = lines.filter(line => {
-            const status = line.lineStatuses[0].statusSeverityDescription;
-            return status !== 'Good Service';
+            const ls = line.lineStatuses && line.lineStatuses[0];
+            return ls && ls.statusSeverityDescription !== 'Good Service';
         });
 
         // Update status message with transport mood
@@ -1400,18 +1967,39 @@ class PengeDash {
 
         if (issues.length === 0) {
             alertBanner.style.display = 'none';
+            this._alertIssues = [];
             return;
         }
 
-        // Build alert message
-        const issueLines = issues.map(line => {
-            const name = lineNames[line.id] || line.name;
-            const status = line.lineStatuses[0].statusSeverityDescription;
-            return `${name}: ${status}`;
+        // Build alert summary + retain detail for the modal
+        this._alertIssues = issues.map(line => {
+            const ls = line.lineStatuses[0];
+            return {
+                name: (LINE_META[line.id] && LINE_META[line.id].name) || line.name,
+                status: ls.statusSeverityDescription,
+                reason: ls.reason || '',
+                disruption: (ls.disruption && ls.disruption.description) || ''
+            };
         });
 
-        alertText.textContent = issueLines.join(' | ');
+        const summary = this._alertIssues.map(i => `${i.name}: ${i.status}`);
+        alertText.textContent = summary.join(' | ');
         alertBanner.style.display = 'flex';
+    }
+
+    openAlertModal() {
+        const issues = this._alertIssues || [];
+        if (issues.length === 0) return;
+        const body = issues.map(i => {
+            const detail = i.reason || i.disruption || 'No further detail provided by TfL.';
+            return `
+                <div class="alert-detail-item">
+                    <div class="alert-detail-line">${this.escapeHtml(i.name)}</div>
+                    <div class="alert-detail-status">${this.escapeHtml(i.status)}</div>
+                    <div class="alert-detail-reason">${this.escapeHtml(detail)}</div>
+                </div>`;
+        }).join('');
+        this.openDetailModal('⚠️ Service disruptions', body);
     }
 
     // ==================== TRAFFIC DISRUPTIONS ====================
@@ -1441,7 +2029,7 @@ class PengeDash {
     }
 
     filterLocalDisruptions(disruptions) {
-        const { lat: homeLat, lon: homeLon } = CONFIG.LOCATION;
+        const { lat: homeLat, lon: homeLon } = this.home || CONFIG.LOCATION;
         const radiusKm = 3;
 
         return disruptions.filter(d => {
@@ -1539,6 +2127,7 @@ class PengeDash {
         this.defaultDestinations = ['Victoria', 'London Br', 'E.Croydon', 'Bromley S', 'Canary Whf'];
         this.journeyOrigin = 'home';
         this.journeyTimeOffset = 0;
+        this.journeyModes = null; // null = all modes
         this.currentLocation = null;
         this.fetchingLocation = false;
 
@@ -1596,6 +2185,21 @@ class PengeDash {
                 document.querySelectorAll('.time-pill').forEach(p => p.classList.remove('active'));
                 pill.classList.add('active');
                 this.journeyTimeOffset = parseInt(pill.dataset.offset, 10);
+            });
+        });
+
+        // Mode filter pill handlers (re-runs the search if one is active)
+        document.querySelectorAll('.mode-pill').forEach(pill => {
+            pill.addEventListener('click', () => {
+                document.querySelectorAll('.mode-pill').forEach(p => p.classList.remove('active'));
+                pill.classList.add('active');
+                const mode = pill.dataset.mode;
+                this.journeyModes = (mode === 'all') ? null : mode;
+                // If a destination is already entered, re-plan with the new mode
+                const dest = document.getElementById('destination-input').value.trim();
+                if (dest && document.getElementById('journey-results').style.display === 'block') {
+                    this.planJourney(dest);
+                }
             });
         });
     }
@@ -1816,8 +2420,12 @@ class PengeDash {
                 updateTime.textContent = 'No location';
                 return;
             } else {
-                // Default: from home (remove spaces for TfL API)
-                from = CONFIG.LOCATION.postcode.replace(/\s/g, '');
+                // Default: from the active home. Use postcode if we have one,
+                // otherwise fall back to the home's coordinates.
+                const home = this.home || CONFIG.LOCATION;
+                from = home.postcode
+                    ? home.postcode.replace(/\s/g, '')
+                    : `${home.lat},${home.lon}`;
             }
             const to = encodeURIComponent(destination);
 
@@ -1831,6 +2439,11 @@ class PengeDash {
                 const departTime = new Date(Date.now() + this.journeyTimeOffset * 60000);
                 const sep = url.includes('?') ? '&' : '?';
                 url += `${sep}dateTime=${departTime.toISOString().slice(0,16)}&timeIs=Departing`;
+            }
+            // Apply mode filter if set
+            if (this.journeyModes) {
+                const sep = url.includes('?') ? '&' : '?';
+                url += `${sep}mode=${this.journeyModes}`;
             }
 
             let response = await fetch(url);
@@ -1874,6 +2487,10 @@ class PengeDash {
                     const departTime = new Date(Date.now() + this.journeyTimeOffset * 60000);
                     const sep = resolvedUrl.includes('?') ? '&' : '?';
                     resolvedUrl += `${sep}dateTime=${departTime.toISOString().slice(0,16)}&timeIs=Departing`;
+                }
+                if (this.journeyModes) {
+                    const sep = resolvedUrl.includes('?') ? '&' : '?';
+                    resolvedUrl += `${sep}mode=${this.journeyModes}`;
                 }
 
                 response = await fetch(resolvedUrl);
@@ -2009,7 +2626,11 @@ class PengeDash {
             </div>
         `;
 
-        // Bind tap-to-expand on route cards
+        // Draw the first journey on the map
+        this._lastJourneys = journeys;
+        this.drawJourneyRoute(journeys[0]);
+
+        // Bind tap-to-expand on route cards (and redraw that route on the map)
         container.querySelectorAll('.route-card').forEach(card => {
             card.addEventListener('click', () => {
                 const wasActive = card.classList.contains('active');
@@ -2018,6 +2639,8 @@ class PengeDash {
                 // Toggle this one
                 if (!wasActive) {
                     card.classList.add('active');
+                    const idx = parseInt(card.dataset.index, 10);
+                    if (!isNaN(idx) && this._lastJourneys[idx]) this.drawJourneyRoute(this._lastJourneys[idx], true);
                     // Scroll into view
                     setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 100);
                 }
@@ -2081,7 +2704,7 @@ class PengeDash {
         const arrivalPoint = referenceJourney.legs[referenceJourney.legs.length - 1]?.arrivalPoint;
         if (!arrivalPoint?.lat || !arrivalPoint?.lon) return '';
 
-        const { lat, lon } = CONFIG.LOCATION;
+        const { lat, lon } = this.home || CONFIG.LOCATION;
         const distance = this.calculateDistance(lat, lon, arrivalPoint.lat, arrivalPoint.lon);
 
         // Only show walking if under 4km
@@ -2295,7 +2918,8 @@ class PengeDash {
             if (locationStatus) locationStatus.style.display = 'flex';
             this.getCurrentLocation();
         } else {
-            fromText.textContent = 'Home (SE20)';
+            fromText.textContent = (this.home && this.home.label)
+                || `Home (${((this.home && this.home.postcode) || 'SE20').split(' ')[0]})`;
             if (locationStatus) locationStatus.style.display = 'none';
             this.currentLocation = null;
         }
@@ -2454,6 +3078,211 @@ class PengeDash {
             chip.addEventListener('touchend', () => clearTimeout(pressTimer));
             chip.addEventListener('touchmove', () => clearTimeout(pressTimer));
         });
+    }
+
+    // ==================== MAP (Leaflet) ====================
+    initMap() {
+        if (this._mapInit) return;
+        const el = document.getElementById('map');
+        if (!el) return;
+        if (typeof L === 'undefined') {
+            // Leaflet not ready yet (slow CDN / offline) — try again on window load
+            window.addEventListener('load', () => { if (typeof L !== 'undefined') this.initMap(); }, { once: true });
+            return;
+        }
+        this._mapInit = true;
+        const center = this.home ? [this.home.lat, this.home.lon] : [CONFIG.LOCATION.lat, CONFIG.LOCATION.lon];
+        this.map = L.map(el, { zoomControl: true, attributionControl: true }).setView(center, 14);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap'
+        }).addTo(this.map);
+        this.markersLayer = L.layerGroup().addTo(this.map);
+        this.routeLayer = L.layerGroup().addTo(this.map);
+        this.updateMap();
+    }
+
+    updateMap() {
+        if (!this.map || typeof L === 'undefined') return;
+        this.markersLayer.clearLayers();
+        const center = [this.home.lat, this.home.lon];
+        this.map.setView(center, 14);
+
+        // Home pin
+        L.marker(center).addTo(this.markersLayer).bindPopup(`🏠 ${this.escapeHtml(this.home.label || 'Home')}`);
+
+        // Nearby station + bus markers
+        const mk = (lat, lon, emoji, label, onClick) => {
+            if (lat == null || lon == null) return;
+            const icon = L.divIcon({ className: 'map-pin', html: `<span>${emoji}</span>`, iconSize: [24, 24] });
+            const m = L.marker([lat, lon], { icon }).addTo(this.markersLayer).bindPopup(this.escapeHtml(label));
+            if (onClick) m.on('click', onClick);
+        };
+        (this.nearbyStations || []).forEach(s => {
+            const emoji = (s.modes || []).includes('tube') ? '🚇'
+                : (s.modes || []).includes('overground') ? '🚆'
+                : (s.modes || []).includes('dlr') ? '🚈' : '🚂';
+            mk(s.lat, s.lon, emoji, s.name, () => {
+                const card = document.querySelector(`.station-card[data-station-id="${s.id}"]`);
+                if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            });
+        });
+        (this.nearbyBusStops || []).forEach(b => mk(b.lat, b.lon, '🚌', b.name));
+
+        // Leaflet needs a size recalc when its container was hidden/resized
+        setTimeout(() => { if (this.map) this.map.invalidateSize(); }, 200);
+    }
+
+    drawJourneyRoute(journey, scrollToMap = false) {
+        if (!this.map || typeof L === 'undefined' || !journey) return;
+        this.routeLayer.clearLayers();
+        const allPoints = [];
+        const modeColour = { tube: '#dc241f', bus: '#e3221b', overground: '#ee7c0e',
+            'dlr': '#00afad', 'national-rail': '#1d1d1b', walking: '#888', 'elizabeth-line': '#6950a1' };
+
+        (journey.legs || []).forEach(leg => {
+            const mode = leg.mode?.id || 'walking';
+            const colour = modeColour[mode] || '#4361ee';
+            let pts = [];
+            try {
+                const ls = leg.path && leg.path.lineString;
+                if (ls) pts = JSON.parse(ls); // "[[lat,lon],...]"
+            } catch (e) { /* fall back below */ }
+            if (!pts || pts.length === 0) {
+                // Fall back to straight line between leg endpoints
+                const dp = leg.departurePoint, ap = leg.arrivalPoint;
+                if (dp && ap) pts = [[dp.lat, dp.lon], [ap.lat, ap.lon]];
+            }
+            if (pts.length > 0) {
+                L.polyline(pts, { color: colour, weight: 5, opacity: 0.8 }).addTo(this.routeLayer);
+                allPoints.push(...pts);
+            }
+        });
+
+        if (allPoints.length > 0) {
+            this.map.fitBounds(L.latLngBounds(allPoints).pad(0.15));
+            if (scrollToMap) document.getElementById('map-card').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+    }
+
+    // ==================== SETTINGS (home postcode + saved places) ====================
+    setupSettings() {
+        const btn = document.getElementById('settings-btn');
+        if (btn) btn.addEventListener('click', () => this.openSettingsModal());
+    }
+
+    openSettingsModal() {
+        const savedHtml = (this.savedPlaces || []).length === 0
+            ? '<div class="settings-empty">No saved places yet.</div>'
+            : this.savedPlaces.map(p => `
+                <div class="saved-place">
+                    <button class="saved-place-go" data-postcode="${this.escapeAttr(p.postcode || '')}" data-label="${this.escapeAttr(p.label)}">
+                        📍 ${this.escapeHtml(p.label)}
+                    </button>
+                    <button class="saved-place-remove" data-label="${this.escapeAttr(p.label)}">&times;</button>
+                </div>`).join('');
+
+        const body = `
+            <div class="settings-section">
+                <div class="settings-label">Home location</div>
+                <div class="settings-current">Currently: <strong>${this.escapeHtml(this.home.label || this.home.postcode || 'SE20')}</strong></div>
+                <div class="settings-input-row">
+                    <input type="text" id="settings-postcode" placeholder="Enter postcode (e.g. E1 6AN)" autocomplete="off">
+                    <button class="settings-set-btn" id="settings-set-home">Set</button>
+                </div>
+                <button class="settings-loc-btn" id="settings-use-location">📍 Use my current location</button>
+                <div class="settings-status" id="settings-status"></div>
+            </div>
+            <div class="settings-section">
+                <div class="settings-label">Saved places</div>
+                <div id="settings-saved-list">${savedHtml}</div>
+            </div>
+            ${this.home.isDefault ? '' : '<button class="settings-reset-btn" id="settings-reset">Reset to SE20 (Penge)</button>'}
+        `;
+        this.openDetailModal('⚙️ Settings', body);
+        this.wireSettingsHandlers();
+    }
+
+    wireSettingsHandlers() {
+        const status = document.getElementById('settings-status');
+        const setStatus = (msg, isErr) => { if (status) { status.textContent = msg; status.className = `settings-status ${isErr ? 'error' : ''}`; } };
+
+        const doResolve = async (input) => {
+            setStatus('Locating…', false);
+            try {
+                const home = await this.resolveLocation(input);
+                setStatus(`Moved to ${home.label}`, false);
+                setTimeout(() => this.closeDetailModal(), 700);
+            } catch (e) {
+                setStatus(e.message || 'Could not set that location', true);
+            }
+        };
+
+        const setBtn = document.getElementById('settings-set-home');
+        const input = document.getElementById('settings-postcode');
+        if (setBtn && input) {
+            setBtn.addEventListener('click', () => {
+                const v = input.value.trim();
+                if (v) doResolve(v);
+            });
+            input.addEventListener('keypress', (e) => { if (e.key === 'Enter') setBtn.click(); });
+        }
+
+        const locBtn = document.getElementById('settings-use-location');
+        if (locBtn) {
+            locBtn.addEventListener('click', async () => {
+                setStatus('Getting GPS…', false);
+                if (!navigator.geolocation) { setStatus('Geolocation not supported', true); return; }
+                navigator.geolocation.getCurrentPosition(
+                    (pos) => doResolve({ lat: pos.coords.latitude, lon: pos.coords.longitude, label: 'Current area', postcode: '' }),
+                    () => setStatus('Location denied or unavailable', true),
+                    { enableHighAccuracy: true, timeout: 8000 }
+                );
+            });
+        }
+
+        const reset = document.getElementById('settings-reset');
+        if (reset) reset.addEventListener('click', () => doResolve(CONFIG.DEFAULT_HOME.postcode));
+
+        document.querySelectorAll('.saved-place-go').forEach(b =>
+            b.addEventListener('click', () => {
+                const pc = b.dataset.postcode;
+                if (pc) doResolve(pc);
+            }));
+        document.querySelectorAll('.saved-place-remove').forEach(b =>
+            b.addEventListener('click', () => {
+                this.removeSavedPlace(b.dataset.label);
+                this.openSettingsModal(); // re-render list
+            }));
+    }
+
+    // ==================== QUICK NAV ====================
+    setupQuickNav() {
+        const nav = document.getElementById('quick-nav');
+        if (!nav) return;
+        nav.querySelectorAll('.quick-nav-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const target = document.getElementById(btn.dataset.target);
+                if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                nav.querySelectorAll('.quick-nav-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+            });
+        });
+
+        // Highlight active section while scrolling
+        if ('IntersectionObserver' in window) {
+            const sections = ['journey-section', 'transit-section', 'lines-section', 'weather-section'];
+            const obs = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        const id = entry.target.id;
+                        nav.querySelectorAll('.quick-nav-btn').forEach(b =>
+                            b.classList.toggle('active', b.dataset.target === id));
+                    }
+                });
+            }, { rootMargin: '-40% 0px -55% 0px' });
+            sections.forEach(id => { const el = document.getElementById(id); if (el) obs.observe(el); });
+        }
     }
 
     // ==================== UTILITIES ====================
