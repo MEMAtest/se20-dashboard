@@ -428,7 +428,8 @@ class PengeDash {
         this.nearbyStations.forEach(st => {
             const walk = Math.max(1, Math.round(st.distance / 80));
             const mode = this._stationMode(st);
-            const live = this._hasLiveArrivals(st);
+            // "live" = TfL live mode OR we have departures (e.g. National Rail via Darwin)
+            const live = this._hasLiveArrivals(st) || !!(st.nextDepartures && st.nextDepartures.length);
             const tagList = (st.modes || []).slice(0, 2)
                 .map(m => `<span class="ni-tag line">${this.escapeHtml(modeName[m] || m)}</span>`);
             if (!live) tagList.push('<span class="ni-tag">No live times</span>');
@@ -514,8 +515,9 @@ class PengeDash {
         const el = document.getElementById('modal-departures');
         const data = isBus ? ((this.busStopData || {})[id] || []) : (this.stationData[id] || []);
         const station = isBus ? null : (this.nearbyStations || []).find(s => s.id === id);
-        if (data.length === 0 && station && !this._hasLiveArrivals(station)) {
-            // National Rail station — TfL has no live arrivals feed; link out
+        const darwinCovered = station && this._darwinCovered()[(station.name || '').toLowerCase()];
+        if (data.length === 0 && station && !this._hasLiveArrivals(station) && !darwinCovered) {
+            // National Rail station with no live feed (not Darwin-covered) — link out
             el.innerHTML = `<div class="no-data">🚂 This is a National Rail station — live departures aren't available in TfL data here.<br><br>
                 <a href="https://www.nationalrail.co.uk/live-trains/departures/" target="_blank" rel="noopener" style="color:var(--blue);font-weight:600;">Check National Rail live times ↗</a></div>`;
         } else if (data.length === 0) {
@@ -595,6 +597,10 @@ class PengeDash {
             } catch (e) { /* skip */ }
         }));
 
+        // National Rail live times via the Darwin backend (SE20 default home only)
+        const darwinMerged = await this.fetchDarwinForDefault();
+        if (darwinMerged.length) merged.push(...darwinMerged);
+
         merged.sort((a, b) => a.mins - b.mins);
         this.liveDepartures = merged;
         this.renderLiveDepartures();
@@ -603,6 +609,67 @@ class PengeDash {
         ['departures-updated', 'nearby-updated'].forEach(id => {
             const el = document.getElementById(id); if (el) el.textContent = now;
         });
+    }
+
+    // National Rail stations the Darwin backend covers (SE20 default home)
+    _darwinCovered() { return { 'penge east': 'PNE', 'penge west': 'PNW', 'birkbeck': 'BKB' }; }
+
+    // Format raw Darwin TIPLOC codes the backend didn't resolve (SE20-area destinations)
+    _formatNRDest(s) {
+        const map = {
+            VICTRIC: 'Victoria', VICTRIA: 'Victoria', VICTRIE: 'Victoria',
+            LNDNBDE: 'London Bridge', LONBDGE: 'London Bridge', LNDNBDG: 'London Bridge',
+            BLFR: 'Blackfriars', CHRX: 'Charing Cross', CHARING: 'Charing Cross',
+            ORPNGTN: 'Orpington', BROMLYS: 'Bromley South', BRMLYSC: 'Bromley South',
+            BECKNHM: 'Beckenham Junction', BCKNHMJ: 'Beckenham Junction', BCKNHM: 'Beckenham Junction',
+            KENTHOS: 'Kent House', WDULWCH: 'West Dulwich', SYDENHL: 'Sydenham Hill',
+            HERNEHL: 'Herne Hill', HNHL: 'Herne Hill', WCROYDN: 'West Croydon',
+            CRYSTLP: 'Crystal Palace', NRWD: 'Norwood Junction', NORWDJ: 'Norwood Junction',
+            SYDENHM: 'Sydenham', SUTTON: 'Sutton', EPSOM: 'Epsom',
+            CLTHRPS: 'Clapham Junction', PRSP: 'Crystal Palace'
+        };
+        return map[s] || s;
+    }
+
+    // Pull live National Rail departures from the Darwin backend for SE20's NR stations.
+    // Returns merged rows for the Live-departures list; also sets per-station data inline.
+    async fetchDarwinForDefault() {
+        if (!this.home.isDefault) return [];
+        let data;
+        try {
+            data = await fetch(`${CONFIG.DARWIN_API_URL}/api/departures`).then(r => r.json());
+        } catch (e) { return []; }
+        if (!data || !data.stations) return [];
+
+        const map = this._darwinCovered();
+        const extra = [];
+        this.nearbyStations.forEach(st => {
+            const crs = map[(st.name || '').toLowerCase()];
+            if (!crs) return;
+            const raw = (data.stations[crs] && data.stations[crs].departures) || [];
+            const selfName = (st.name || '').toLowerCase();
+            const deps = raw
+                .filter(d => !d.cancelled && typeof d.mins === 'number' && d.mins >= -1 && (d.scheduledTime || d.expectedTime))
+                .map(d => ({
+                    dest: this._formatNRDest(this.cleanStationName(d.destination || 'Check board')),
+                    platform: (d.platform && d.platform !== '-') ? String(d.platform) : '-',
+                    line: st.line || '',
+                    mins: d.mins,
+                    scheduledTime: d.scheduledTime || ''
+                }))
+                // Drop self-referential garbage (dest === this station) and unresolved blanks
+                .filter(d => d.dest && d.dest.toLowerCase() !== selfName)
+                .sort((a, b) => a.mins - b.mins);
+            if (deps.length) {
+                st.nextDepartures = deps.slice(0, 3);
+                this.stationData[st.id] = deps;
+                deps.slice(0, 2).forEach(d => extra.push({
+                    mode: 'rail', station: st.name, dest: d.dest, line: '', mins: d.mins,
+                    platform: d.platform, id: st.id, name: st.name, isBus: false
+                }));
+            }
+        });
+        return extra;
     }
 
     cleanStationName(name) {
