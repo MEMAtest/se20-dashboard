@@ -297,6 +297,13 @@ input { font-family: inherit; }
 .leaflet-control-zoom a { border-radius: 8px !important; }
 [data-theme="dark"] .leaflet-tile { filter: brightness(0.82) contrast(1.05) hue-rotate(180deg) invert(1); }
 .map-pin { text-align: center; font-size: 16px; line-height: 26px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.4)); }
+.map-locate-btn {
+    width: 40px; height: 40px; border-radius: 50%;
+    background: var(--card); color: var(--blue); border: 1px solid var(--line);
+    font-size: 20px; line-height: 1; cursor: pointer; box-shadow: var(--shadow);
+    display: flex; align-items: center; justify-content: center; margin: 0 10px 10px 0;
+}
+.map-locate-btn:active { transform: scale(0.94); }
 
 .nearby-list, .departures-list, .lines-list, .alerts-list, .saved-list { display: flex; flex-direction: column; gap: 10px; }
 .nearby-item, .dep-item {
@@ -319,7 +326,13 @@ input { font-family: inherit; }
 .ni-tag { font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 8px; background: var(--card-alt); color: var(--text-2); }
 .ni-tag.good { background: var(--green-soft); color: var(--green); }
 .ni-tag.line { background: var(--blue-soft); color: var(--blue); }
-.ni-chev { color: var(--muted); font-size: 20px; }
+.ni-chev { color: var(--muted); font-size: 20px; align-self: center; }
+.ni-next { display: flex; flex-direction: column; gap: 3px; margin-top: 7px; }
+.ni-next-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.ni-next-dest { font-size: 12.5px; color: var(--text-2); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ni-next-mins { font-size: 13px; font-weight: 800; color: var(--green); white-space: nowrap; }
+.ni-next-mins.urgent { color: var(--amber); }
+.ni-next-empty { font-size: 12px; color: var(--muted); margin-top: 6px; font-style: italic; }
 
 .di-body { flex: 1; min-width: 0; }
 .di-title { font-size: 14.5px; font-weight: 700; }

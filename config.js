@@ -72,9 +72,9 @@ const CONFIG = {
 
     // Nearby auto-detection radii (metres) + result caps
     NEARBY: {
-        stationRadius: 1200,
+        stationRadius: 1500,
         busRadius: 500,
-        maxStations: 4,
+        maxStations: 6,
         maxBusStops: 4
     },
 

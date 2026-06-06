@@ -221,18 +221,6 @@ class PengeDash {
     }
 
     // Show curated SE20 cards for the default home; show dynamic nearby cards when relocated
-    applyHomeMode() {
-        const se20Cards = document.querySelectorAll('.se20-card');
-        const nearby = document.getElementById('nearby-section');
-        if (this.home && this.home.isDefault) {
-            se20Cards.forEach(c => { c.style.display = ''; });
-            if (nearby) nearby.style.display = 'none';
-        } else {
-            se20Cards.forEach(c => { c.style.display = 'none'; });
-            if (nearby) nearby.style.display = '';
-        }
-    }
-
     // ==================== GEOCODING + NEARBY DETECTION ====================
     async geocodePostcode(postcode) {
         const clean = (postcode || '').trim();
@@ -440,10 +428,20 @@ class PengeDash {
         this.nearbyStations.forEach(st => {
             const walk = Math.max(1, Math.round(st.distance / 80));
             const mode = this._stationMode(st);
+            const live = this._hasLiveArrivals(st);
             const tagList = (st.modes || []).slice(0, 2)
                 .map(m => `<span class="ni-tag line">${this.escapeHtml(modeName[m] || m)}</span>`);
-            if (!this._hasLiveArrivals(st)) tagList.push('<span class="ni-tag">No live times</span>');
+            if (!live) tagList.push('<span class="ni-tag">No live times</span>');
             const tags = tagList.join('');
+            // Inline next departures (live TfL modes only)
+            let nextHtml = '';
+            if (live && st.nextDepartures && st.nextDepartures.length) {
+                nextHtml = '<span class="ni-next">' + st.nextDepartures.slice(0, 2).map(d =>
+                    `<span class="ni-next-row"><span class="ni-next-dest">${d.line ? this.escapeHtml(d.line) + ' → ' : ''}${this.escapeHtml(d.dest)}</span><span class="ni-next-mins ${d.mins <= 3 ? 'urgent' : ''}">${d.mins} min</span></span>`
+                ).join('') + '</span>';
+            } else if (live) {
+                nextHtml = '<span class="ni-next-empty">No trains running right now</span>';
+            }
             items.push(`
                 <button class="nearby-item" data-station-id="${this.escapeAttr(st.id)}" data-station-name="${this.escapeAttr(st.name)}">
                     <span class="ni-icon ${mode}">${this._modeEmoji(mode)}</span>
@@ -451,6 +449,7 @@ class PengeDash {
                         <span class="ni-name">${this.escapeHtml(st.name)}</span>
                         <span class="ni-sub">${walk} min walk · ${st.distance} m</span>
                         <span class="ni-tags">${tags}</span>
+                        ${nextHtml}
                     </span>
                     <span class="ni-chev">›</span>
                 </button>`);
@@ -567,6 +566,7 @@ class PengeDash {
                 })).filter(d => d.mins >= 0).sort((a, b) => a.mins - b.mins);
 
                 st.platformDirections = this.getPlatformDirections(deps);
+                st.nextDepartures = deps.slice(0, 3);
                 this.stationData[st.id] = deps;
                 const mode = this._stationMode(st);
                 deps.slice(0, 2).forEach(d => merged.push({
@@ -598,6 +598,7 @@ class PengeDash {
         merged.sort((a, b) => a.mins - b.mins);
         this.liveDepartures = merged;
         this.renderLiveDepartures();
+        this.renderNearbyNow();   // refresh station rows with inline live times
         const now = this.getTimeAgo(new Date());
         ['departures-updated', 'nearby-updated'].forEach(id => {
             const el = document.getElementById(id); if (el) el.textContent = now;
@@ -630,122 +631,6 @@ class PengeDash {
             if (top) result[p] = `→ ${top[0]}`;
         });
         return result;
-    }
-
-    renderStationArrivals(station, departures) {
-        const container = document.getElementById(`arrivals-${station.id}`);
-        if (!container) return;
-        if (!departures || departures.length === 0) {
-            container.innerHTML = '<div class="no-data">No live arrivals</div>';
-            return;
-        }
-        const dir = station.platformDirections || {};
-        container.innerHTML = departures.slice(0, 6).map(dep => {
-            const pKey = String(dep.platform).match(/\d+/)?.[0] || dep.platform;
-            const dirLabel = (dep.platform && dep.platform !== '-') ? (dir[pKey] || '') : '';
-            return `
-            <div class="departure" data-dest="${this.escapeAttr(dep.dest)}">
-                <div class="departure-info">
-                    ${dep.platform && dep.platform !== '-' ? `<span class="departure-platform">P${this.escapeHtml(dep.platform)}</span>` : ''}
-                    ${dirLabel ? `<span class="departure-platform-dir">${dirLabel}</span>` : ''}
-                    <span class="departure-destination">${this.escapeHtml(dep.dest)}</span>
-                </div>
-                <div class="departure-time">
-                    <span class="departure-due ${dep.mins <= 3 ? 'urgent' : ''}">${dep.mins} min</span>
-                    ${dep.scheduledTime ? `<span class="departure-scheduled">${dep.scheduledTime}</span>` : ''}
-                </div>
-            </div>`;
-        }).join('');
-    }
-
-    renderBusStopArrivals(stopId, arrivals) {
-        const container = document.getElementById(`busstop-${stopId}`);
-        if (!container) return;
-        if (!arrivals || arrivals.length === 0) {
-            container.innerHTML = '<div class="no-data">No buses</div>';
-            return;
-        }
-        const sorted = arrivals.sort((a, b) => (a.timeToStation || 0) - (b.timeToStation || 0)).slice(0, 4);
-        container.innerHTML = sorted.map(bus => {
-            const mins = Math.floor((bus.timeToStation || 0) / 60);
-            const arrivalStr = (bus.expectedArrival ? new Date(bus.expectedArrival) : new Date(Date.now() + bus.timeToStation * 1000))
-                .toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-            const loc = bus.currentLocation || (mins <= 1 ? 'Arriving' : '');
-            return `
-                <div class="bus-arrival">
-                    <div class="bus-route">
-                        <span class="bus-number">${this.escapeHtml(bus.lineName)}</span>
-                        <div class="bus-info">
-                            <span class="bus-destination">${this.escapeHtml(bus.destinationName)}</span>
-                            ${loc ? `<span class="bus-location">${this.escapeHtml(loc)}</span>` : ''}
-                        </div>
-                    </div>
-                    <div class="bus-time-col">
-                        <span class="bus-time">${mins} min</span>
-                        <span class="bus-scheduled">${arrivalStr}</span>
-                    </div>
-                </div>`;
-        }).join('');
-    }
-
-    toggleComingSoon() {
-        const content = document.getElementById('coming-soon-content');
-        const icon = document.getElementById('collapsible-icon');
-        const isOpen = content.style.display !== 'none';
-
-        content.style.display = isOpen ? 'none' : 'block';
-        icon.classList.toggle('open', !isOpen);
-
-        // Load demo data if opening for first time
-        if (!isOpen && !this.demoDataLoaded) {
-            this.loadDemoStations();
-            this.demoDataLoaded = true;
-        }
-    }
-
-    toggleLineStatus() {
-        const content = document.getElementById('line-status-content');
-        const icon = document.getElementById('line-status-icon');
-        const isOpen = content.style.display !== 'none';
-
-        content.style.display = isOpen ? 'none' : 'block';
-        icon.classList.toggle('open', !isOpen);
-    }
-
-    loadDemoStations() {
-        ['pnw', 'pne', 'bkb'].forEach(station => this.displayMockTrains(station));
-    }
-
-    hideAlert() {
-        document.getElementById('service-alert').style.display = 'none';
-    }
-
-    setupPullToRefresh() {
-        let startY = 0;
-        let pulling = false;
-        const dashboard = document.getElementById('dashboard');
-
-        dashboard.addEventListener('touchstart', (e) => {
-            if (window.scrollY === 0) {
-                startY = e.touches[0].pageY;
-                pulling = true;
-            }
-        }, { passive: true });
-
-        dashboard.addEventListener('touchmove', (e) => {
-            if (!pulling) return;
-            const currentY = e.touches[0].pageY;
-            const diff = currentY - startY;
-
-            if (diff > 80 && !this.isRefreshing) {
-                pulling = false;
-                this.refreshAll();
-            }
-        }, { passive: true });
-
-        dashboard.addEventListener('touchend', () => {
-            pulling = false;
-        }, { passive: true });
     }
 
     // ==================== OFFLINE DETECTION & CACHING ====================
@@ -848,114 +733,6 @@ class PengeDash {
     }
 
     // ==================== QUIRKY PERSONALITY ====================
-    updateGreeting() {
-        const hour = new Date().getHours();
-        const greetingEl = document.getElementById('greeting');
-
-        let greeting;
-        if (hour >= 5 && hour < 12) {
-            const morningGreetings = [
-                "Morning! ☕",
-                "Rise and shine! ☀️",
-                "Good morning! 🌅",
-                "Morning, early bird! 🐦"
-            ];
-            greeting = morningGreetings[Math.floor(Math.random() * morningGreetings.length)];
-        } else if (hour >= 12 && hour < 17) {
-            const afternoonGreetings = [
-                "Afternoon! 🌤️",
-                "Hey there! 👋",
-                "Good afternoon! ☀️"
-            ];
-            greeting = afternoonGreetings[Math.floor(Math.random() * afternoonGreetings.length)];
-        } else if (hour >= 17 && hour < 21) {
-            const eveningGreetings = [
-                "Evening! 🏠",
-                "Heading home? 🚶",
-                "Good evening! 🌆",
-                "Home time! 🎉"
-            ];
-            greeting = eveningGreetings[Math.floor(Math.random() * eveningGreetings.length)];
-        } else {
-            const nightGreetings = [
-                "Night owl! 🦉",
-                "Late one? 🌙",
-                "Burning the midnight oil? 💫"
-            ];
-            greeting = nightGreetings[Math.floor(Math.random() * nightGreetings.length)];
-        }
-
-        greetingEl.textContent = greeting;
-    }
-
-    getWeatherSass(weatherCode, temp, rainChance) {
-        // Sassy weather commentary
-        if (weatherCode === 0) {
-            return temp > 20
-                ? "☀️ Finally! Don't waste it indoors"
-                : "☀️ Sun's out! About time, London";
-        }
-        if (weatherCode <= 3) {
-            return "Not bad! Could be worse 🤷";
-        }
-        if (weatherCode >= 51 && weatherCode <= 69) {
-            return "🌧️ Classic London... umbrella essential";
-        }
-        if (weatherCode >= 71 && weatherCode <= 79) {
-            return "❄️ Snow?! In SE20?! Chaos incoming";
-        }
-        if (weatherCode >= 95) {
-            return "⛈️ Stay inside if you can!";
-        }
-        if (temp <= 5) {
-            return "🥶 It's giving arctic vibes out there";
-        }
-        if (temp >= 25) {
-            return "🔥 Ice cream weather, no debate";
-        }
-        if (rainChance >= 70) {
-            return "🌧️ Rain's coming... you've been warned";
-        }
-        return "Standard London weather innit";
-    }
-
-    getTransportMood(issues) {
-        if (issues.length === 0) {
-            const goodMoods = [
-                "Smooth sailing today! 🚀",
-                "TfL gods are smiling 🙏",
-                "All systems go! ✨",
-                "No drama today 🎭"
-            ];
-            return goodMoods[Math.floor(Math.random() * goodMoods.length)];
-        }
-
-        const hasOverground = issues.some(i => OVERGROUND_LINES.includes(i.id));
-        const hasSouthern = issues.some(i => i.id === 'southern');
-
-        if (hasSouthern) {
-            return "Southern being Southern... 😤";
-        }
-        if (hasOverground) {
-            return "Overground's having a moment 🙄";
-        }
-        return "Bit of chaos out there... 🎢";
-    }
-
-    getDepartureHype(mins) {
-        if (mins <= 1) {
-            const hypes = ["Go go go! 🏃", "RUN! 🏃‍♂️", "NOW! ⚡"];
-            return hypes[Math.floor(Math.random() * hypes.length)];
-        }
-        if (mins <= 3) {
-            return "You've got this! 💪";
-        }
-        if (mins <= 5) {
-            return "Perfect timing ✨";
-        }
-        return null;
-    }
-
     createModal() {
         const modal = document.createElement('div');
         modal.id = 'next-trains-modal';
@@ -1012,60 +789,8 @@ class PengeDash {
         document.getElementById('detail-modal').classList.remove('active');
     }
 
-    openModal(stationId, stationName, destination) {
-        const modal = document.getElementById('next-trains-modal');
-        const titleEl = document.getElementById('modal-station-name');
-        const departuresEl = document.getElementById('modal-departures');
-
-        titleEl.textContent = `${stationName} → ${destination}`;
-
-        const data = this.stationData[stationId] || [];
-        // Filter by destination and show next 6
-        const filtered = data
-            .filter(d => d.dest.toLowerCase().includes(destination.toLowerCase().split(' ')[0]))
-            .slice(0, 6);
-
-        // Prefer runtime-derived directions for dynamic stations; fall back to SE20 constant
-        const dynamicStation = (this.nearbyStations || []).find(s => s.id === stationId);
-        const dirLookup = (dynamicStation && dynamicStation.platformDirections) || PLATFORM_DIRECTIONS[stationId] || {};
-
-        if (filtered.length === 0) {
-            departuresEl.innerHTML = '<div class="no-data">No more trains to this destination</div>';
-        } else {
-            departuresEl.innerHTML = filtered.map((dep, i) => {
-                const pKey = String(dep.platform).match(/\d+/)?.[0] || dep.platform;
-                const dirLabel = dep.platform && dep.platform !== '-' ? (dirLookup[dep.platform] || dirLookup[pKey] || '') : '';
-                const scheduledStr = dep.scheduledTime || (dep.mins != null ? new Date(Date.now() + dep.mins * 60000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '');
-                return `
-                <div class="modal-departure">
-                    <div class="modal-departure-info">
-                        <span class="modal-departure-dest">${this.escapeHtml(dep.dest)}</span>
-                        ${dep.platform && dep.platform !== '-' ? `<span class="modal-departure-platform">P${this.escapeHtml(dep.platform)}</span>` : ''}
-                        ${dirLabel ? `<span class="departure-platform-dir">${dirLabel}</span>` : ''}
-                    </div>
-                    <div class="modal-departure-time-col">
-                        <span class="modal-departure-time">${dep.mins} min</span>
-                        ${scheduledStr ? `<span class="departure-scheduled">${scheduledStr}</span>` : ''}
-                    </div>
-                </div>
-            `}).join('');
-        }
-
-        modal.classList.add('active');
-    }
-
     closeModal() {
         document.getElementById('next-trains-modal').classList.remove('active');
-    }
-
-    updateClock() {
-        const now = new Date();
-        const timeStr = now.toLocaleTimeString('en-GB', {
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: false
-        });
-        document.getElementById('current-time').textContent = timeStr;
     }
 
     setupAutoRefresh() {
@@ -1076,60 +801,7 @@ class PengeDash {
     }
 
     // ==================== DARWIN KEEP-ALIVE ====================
-    pingDarwinBackend() {
-        const ping = async () => {
-            try {
-                const response = await fetch(`${CONFIG.DARWIN_API_URL}/health`, {
-                    method: 'GET',
-                    mode: 'cors'
-                });
-                if (response.ok) {
-                    console.log('Darwin backend ping OK');
-                }
-            } catch (error) {
-                console.log('Darwin backend waking up...');
-            }
-        };
-
-        // Initial ping
-        ping();
-
-        // Repeat every 9 minutes while app is open
-        setInterval(ping, 9 * 60 * 1000);
-    }
-
     // ==================== AIR QUALITY ====================
-    async fetchAirQuality() {
-        try {
-            let url = 'https://api.tfl.gov.uk/AirQuality';
-            if (CONFIG.TFL_APP_KEY) {
-                url += `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}`;
-            }
-
-            const response = await fetch(url);
-            const data = await response.json();
-
-            this.displayAirQuality(data);
-        } catch (error) {
-            console.error('Air quality fetch error:', error);
-            document.getElementById('air-quality').textContent = 'Air: --';
-        }
-    }
-
-    displayAirQuality(data) {
-        const badge = document.getElementById('air-quality');
-        const forecast = data.currentForecast?.[0];
-
-        if (!forecast) {
-            badge.textContent = 'Air: --';
-            return;
-        }
-
-        const band = forecast.forecastBand || 'Low';
-        badge.textContent = `Air: ${band}`;
-        badge.className = `air-quality-badge ${band.toLowerCase().replace(/\s+/g, '-')}`;
-    }
-
     async refreshAll() {
         if (this.isRefreshing) return;
         this.isRefreshing = true;
@@ -1223,62 +895,6 @@ class PengeDash {
         return { icon: '🌤️', condition: 'Fair' };
     }
 
-    displayHourlyForecast(data) {
-        const container = document.getElementById('forecast-scroll');
-        const hourly = data.hourly;
-
-        if (!hourly || !hourly.time) {
-            container.innerHTML = '<div class="forecast-loading">No forecast data</div>';
-            return;
-        }
-
-        const currentHour = new Date().getHours();
-        const forecasts = [];
-
-        // Get next 8 hours
-        for (let i = 0; i < Math.min(8, hourly.time.length); i++) {
-            const time = new Date(hourly.time[i]);
-            const hour = time.getHours();
-
-            // Skip past hours
-            if (hour < currentHour && time.getDate() === new Date().getDate()) continue;
-
-            const temp = Math.round(hourly.temperature_2m[i]);
-            const rain = hourly.precipitation_probability[i] || 0;
-            const weatherCode = hourly.weather_code[i] || 0;
-            const { icon } = this.getWeatherFromCode(weatherCode);
-
-            forecasts.push({
-                hour: hour === currentHour ? 'Now' : `${hour}:00`,
-                icon,
-                temp,
-                rain
-            });
-
-            if (forecasts.length >= 8) break;
-        }
-
-        // Check for upcoming rain
-        const rainAlert = forecasts.find((f, i) => i > 0 && f.rain >= 50);
-
-        container.innerHTML = forecasts.map(f => `
-            <div class="forecast-hour">
-                <span class="forecast-time">${f.hour}</span>
-                <span class="forecast-icon">${f.icon}</span>
-                <span class="forecast-temp">${f.temp}°</span>
-                <span class="forecast-rain ${f.rain >= 50 ? 'high' : ''}">${f.rain}%</span>
-            </div>
-        `).join('');
-
-        // Add rain alert if needed
-        if (rainAlert) {
-            const alertDiv = document.createElement('div');
-            alertDiv.className = 'rain-alert warning';
-            alertDiv.innerHTML = `🌧️ Rain likely at ${rainAlert.hour}`;
-            container.parentElement.appendChild(alertDiv);
-        }
-    }
-
     updateClothingAdvice(feelsLike, rainChance, windSpeed) {
         const adviceEl = document.getElementById('clothing-advice');
         const iconEl = document.getElementById('clothing-icon');
@@ -1337,569 +953,12 @@ class PengeDash {
     }
 
     // ==================== SUNRISE/SUNSET ====================
-    displaySunTimes(data) {
-        const sunTimesEl = document.getElementById('sun-times');
-        const daylightEl = document.getElementById('daylight-remaining');
-
-        if (!sunTimesEl || !data.daily) return;
-
-        const sunrise = new Date(data.daily.sunrise[0]);
-        const sunset = new Date(data.daily.sunset[0]);
-        const now = new Date();
-
-        const sunriseStr = sunrise.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-        const sunsetStr = sunset.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-
-        sunTimesEl.innerHTML = `
-            <span class="sun-icon">🌅</span>
-            <span class="sun-time">${sunriseStr}</span>
-            <span class="sun-divider">·</span>
-            <span class="sun-icon">🌇</span>
-            <span class="sun-time">${sunsetStr}</span>
-        `;
-
-        // Calculate daylight remaining
-        if (daylightEl) {
-            if (now < sunrise) {
-                // Before sunrise
-                const minsToSunrise = Math.round((sunrise - now) / 60000);
-                const hrs = Math.floor(minsToSunrise / 60);
-                const mins = minsToSunrise % 60;
-                daylightEl.textContent = `☀️ Sunrise in ${hrs}h ${mins}m`;
-                daylightEl.className = 'daylight-badge before-sunrise';
-            } else if (now > sunset) {
-                // After sunset
-                daylightEl.textContent = '🌙 Sun has set';
-                daylightEl.className = 'daylight-badge after-sunset';
-            } else {
-                // During the day
-                const minsRemaining = Math.round((sunset - now) / 60000);
-                const hrs = Math.floor(minsRemaining / 60);
-                const mins = minsRemaining % 60;
-                daylightEl.textContent = `☀️ ${hrs}h ${mins}m daylight left`;
-                daylightEl.className = 'daylight-badge during-day';
-            }
-        }
-    }
-
     // ==================== DYNAMIC WEATHER BACKGROUNDS ====================
-    applyWeatherBackground(weatherCode) {
-        const weatherCard = document.querySelector('.weather-card');
-        if (!weatherCard) return;
-
-        // Remove any existing weather classes
-        weatherCard.classList.remove('weather-sunny', 'weather-cloudy', 'weather-rainy', 'weather-snow', 'weather-night', 'weather-storm');
-
-        const hour = new Date().getHours();
-        const isNight = hour >= 20 || hour < 6;
-
-        if (isNight) {
-            weatherCard.classList.add('weather-night');
-            return;
-        }
-
-        // Apply weather-based background
-        if (weatherCode === 0 || weatherCode === 1) {
-            // Clear / Mostly clear
-            weatherCard.classList.add('weather-sunny');
-        } else if (weatherCode >= 2 && weatherCode <= 3) {
-            // Partly cloudy / Overcast
-            weatherCard.classList.add('weather-cloudy');
-        } else if (weatherCode === 45 || weatherCode === 48) {
-            // Fog
-            weatherCard.classList.add('weather-cloudy');
-        } else if ((weatherCode >= 51 && weatherCode <= 67) || (weatherCode >= 80 && weatherCode <= 82)) {
-            // Drizzle / Rain / Rain showers
-            weatherCard.classList.add('weather-rainy');
-        } else if (weatherCode >= 71 && weatherCode <= 86) {
-            // Snow
-            weatherCard.classList.add('weather-snow');
-        } else if (weatherCode >= 95) {
-            // Thunderstorm
-            weatherCard.classList.add('weather-storm');
-        } else {
-            // Default
-            weatherCard.classList.add('weather-cloudy');
-        }
-    }
-
     // ==================== DARWIN TRAINS (All stations via backend) ====================
-    async fetchDarwinTrains() {
-        try {
-            const response = await fetch(`${CONFIG.DARWIN_API_URL}/api/departures`);
-            const data = await response.json();
-
-            if (!data.stations) {
-                console.warn('No Darwin data, using fallback');
-                this.fetchAnerleyTfL();
-                return;
-            }
-
-            // Process each station and build cache.
-            // NOTE: the Darwin backend's `mins` field is unreliable (often stuck ~59),
-            // so we recompute minutes from the scheduled/expected clock time instead.
-            // Anerley is Overground — Darwin returns garbage for it, so we use TfL (below).
-            const trainsCache = {};
-            ['PNW', 'PNE', 'BKB'].forEach(stationCode => {
-                const stationData = data.stations[stationCode];
-                if (stationData && stationData.departures) {
-                    const departures = stationData.departures.map(dep => ({
-                        dest: this.formatDestination(dep.destination),
-                        platform: dep.platform || '-',
-                        mins: this.parseTimeToMins(dep.expectedTime || dep.scheduledTime, dep.mins),
-                        scheduledTime: dep.scheduledTime,
-                        expectedTime: dep.expectedTime,
-                        cancelled: dep.cancelled,
-                        delayed: dep.delayed
-                    })).filter(d => d.mins !== null && d.mins >= 0)
-                       .sort((a, b) => a.mins - b.mins);
-
-                    this.stationData[stationCode.toLowerCase()] = departures;
-                    trainsCache[stationCode] = departures;
-                    this.displayStationDepartures(stationCode, departures);
-                }
-            });
-
-            // Cache train data
-            this.cacheData('trains', trainsCache);
-
-            // Anerley (Overground) — fetch correct live times from TfL
-            this.fetchAnerleyTfL();
-        } catch (error) {
-            console.error('Darwin fetch error:', error);
-            // Try cached data first
-            const cachedTrains = this.getCachedData('trains');
-            if (cachedTrains && Object.keys(cachedTrains).length > 0) {
-                ['PNW', 'PNE', 'BKB'].forEach(stationCode => {
-                    if (cachedTrains[stationCode]) {
-                        this.stationData[stationCode.toLowerCase()] = cachedTrains[stationCode];
-                        this.displayStationDepartures(stationCode, cachedTrains[stationCode]);
-                    }
-                });
-            }
-            // Anerley always comes from TfL (live Overground), even on Darwin failure
-            this.fetchAnerleyTfL();
-        }
-    }
-
-    formatDestination(tiploc) {
-        // Convert TIPLOC codes to readable names
-        const names = {
-            'VICTRIC': 'Victoria', 'VICTRIA': 'Victoria',
-            'LNDNBDE': 'London Bridge', 'LONBDGE': 'London Bridge',
-            'CHRX': 'Charing Cross', 'CHARING': 'Charing Cross',
-            'CANNON': 'Cannon Street', 'CANNS': 'Cannon Street',
-            'BNKCHSX': 'Beckenham Junction', 'BCKJN': 'Beckenham Junction',
-            'WIMBLDN': 'Wimbledon', 'WMBLEDN': 'Wimbledon',
-            'ORPNGTN': 'Orpington', 'ORPINTN': 'Orpington',
-            'HGHBYIS': 'Highbury & Islington',
-            'WCROYDN': 'West Croydon',
-            'CRYSTLP': 'Crystal Palace',
-            'PENEW': 'Penge West', 'PENGEW': 'Penge West',
-            'PENGE': 'Penge East', 'PENGEE': 'Penge East',
-            'SYDENHM': 'Sydenham', 'NRWD': 'Norwood Junction',
-            'BCKNHMJ': 'Beckenham Junction', 'ELMERSE': 'Elmers End'
-        };
-        return names[tiploc] || tiploc || 'Unknown';
-    }
-
     // Parse "HH:MM" clock time into minutes-from-now (handles midnight rollover).
     // Falls back to the provided value if parsing fails.
-    parseTimeToMins(timeStr, fallback = null) {
-        if (!timeStr || !/^\d{1,2}:\d{2}$/.test(String(timeStr))) return fallback;
-        const [h, m] = String(timeStr).split(':').map(Number);
-        const now = new Date();
-        const t = new Date(now);
-        t.setHours(h, m, 0, 0);
-        let diff = Math.round((t - now) / 60000);
-        if (diff < -60) diff += 1440; // departure is after midnight
-        return diff;
-    }
-
-    displayStationDepartures(stationCode, departures) {
-        const stationId = stationCode.toLowerCase();
-
-        // Anerley uses platform-based display
-        if (stationCode === 'ANR') {
-            const platform1 = departures.filter(d => d.platform.includes('1')).slice(0, 3);
-            const platform2 = departures.filter(d => d.platform.includes('2')).slice(0, 3);
-            this.displayPlatformTrains('anr-platform-1', platform1);
-            this.displayPlatformTrains('anr-platform-2', platform2);
-            return;
-        }
-
-        // Other stations - display in their containers if they exist
-        const container = document.getElementById(`${stationId}-departures`);
-        if (!container) return;
-
-        if (!departures || departures.length === 0) {
-            container.innerHTML = '<div class="no-data">No departures</div>';
-            return;
-        }
-
-        const stationNames = { 'pnw': 'Penge West', 'pne': 'Penge East', 'bkb': 'Birkbeck', 'anr': 'Anerley' };
-
-        const dirLookup = PLATFORM_DIRECTIONS[stationId] || {};
-
-        container.innerHTML = departures.slice(0, 6).map(dep => {
-            const dirLabel = dep.platform && dep.platform !== '-' ? (dirLookup[dep.platform] || '') : '';
-            const scheduledStr = dep.scheduledTime || (dep.mins != null ? new Date(Date.now() + dep.mins * 60000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '');
-            return `
-            <div class="departure ${dep.cancelled ? 'cancelled' : ''}" onclick="pengeDash.openModal('${this.escapeAttr(stationId)}', '${this.escapeAttr(stationNames[stationId])}', '${this.escapeAttr(dep.dest)}')">
-                <div class="departure-info">
-                    ${dep.platform && dep.platform !== '-' ? `<span class="departure-platform">P${this.escapeHtml(dep.platform)}</span>` : ''}
-                    ${dirLabel ? `<span class="departure-platform-dir">${dirLabel}</span>` : ''}
-                    <span class="departure-destination">${this.escapeHtml(dep.dest)}${dep.cancelled ? ' ❌' : ''}${dep.delayed ? ' ⚠️' : ''}</span>
-                </div>
-                <div class="departure-time">
-                    <span class="departure-due ${dep.mins <= 3 ? 'urgent' : ''}">${dep.mins} min</span>
-                    ${scheduledStr ? `<span class="departure-scheduled">${scheduledStr}</span>` : ''}
-                </div>
-            </div>
-        `}).join('');
-    }
-
     // ==================== ANERLEY OVERGROUND (TfL Fallback) ====================
-    async fetchAnerleyTfL() {
-        try {
-            let url = 'https://api.tfl.gov.uk/StopPoint/910GANERLEY/Arrivals';
-            if (CONFIG.TFL_APP_KEY) {
-                url += `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}`;
-            }
-
-            const response = await fetch(url);
-            const data = await response.json();
-
-            if (!Array.isArray(data) || data.length === 0) {
-                this.displayMockAnerley();
-                document.getElementById('anerley-updated').textContent = 'No trains';
-                return;
-            }
-
-            // Transform data
-            const departures = data.map(dep => ({
-                dest: dep.destinationName || dep.towards,
-                platform: dep.platformName || '-',
-                mins: Math.floor(dep.timeToStation / 60),
-                currentLocation: dep.currentLocation || ''
-            })).sort((a, b) => a.mins - b.mins);
-
-            // Store all data for modal
-            this.stationData['anr'] = departures;
-
-            // Split by platform (Platform 1 = Highbury, Platform 2 = West Croydon)
-            const platform1 = departures.filter(d => d.platform.includes('1')).slice(0, 3);
-            const platform2 = departures.filter(d => d.platform.includes('2')).slice(0, 3);
-
-            this.displayPlatformTrains('anr-platform-1', platform1);
-            this.displayPlatformTrains('anr-platform-2', platform2);
-            document.getElementById('anerley-updated').textContent = this.getTimeAgo(new Date());
-        } catch (error) {
-            console.error('Anerley TfL fetch error:', error);
-            this.displayMockAnerley();
-            document.getElementById('anerley-updated').textContent = 'Error';
-        }
-    }
-
-    displayPlatformTrains(containerId, departures) {
-        const container = document.getElementById(containerId);
-
-        if (!departures || departures.length === 0) {
-            container.innerHTML = '<div class="no-data">No trains</div>';
-            return;
-        }
-
-        container.innerHTML = departures.map((dep, index) => {
-            // Use real currentLocation from TfL API, fall back to estimated stops
-            let locationText;
-            if (dep.currentLocation) {
-                locationText = dep.currentLocation;
-            } else {
-                locationText = dep.mins <= 1 ? 'Arriving' : 'On time';
-            }
-
-            // Only show hype for first departure
-            const hype = index === 0 ? this.getDepartureHype(dep.mins) : null;
-
-            const scheduledStr = dep.scheduledTime || (dep.mins != null ? new Date(Date.now() + dep.mins * 60000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '');
-
-            return `
-                <div class="departure" onclick="pengeDash.openModal('anr', 'Anerley', '${this.escapeAttr(dep.dest)}')">
-                    <div class="departure-info">
-                        <span class="departure-destination">${this.escapeHtml(dep.dest)}</span>
-                        <span class="departure-location">${this.escapeHtml(locationText)}</span>
-                    </div>
-                    <div class="departure-time">
-                        <span class="departure-due ${dep.mins <= 3 ? 'urgent' : ''}">${dep.mins} min</span>
-                        ${scheduledStr ? `<span class="departure-scheduled">${scheduledStr}</span>` : ''}
-                        ${hype ? `<span class="departure-hype">${hype}</span>` : ''}
-                    </div>
-                </div>
-            `;
-        }).join('');
-    }
-
-    displayMockAnerley() {
-        const mockPlatform1 = [
-            { dest: 'Highbury & Islington', mins: 6 },
-            { dest: 'Highbury & Islington', mins: 21 },
-            { dest: 'Highbury & Islington', mins: 36 }
-        ];
-        const mockPlatform2 = [
-            { dest: 'West Croydon', mins: 11 },
-            { dest: 'West Croydon', mins: 26 },
-            { dest: 'West Croydon', mins: 41 }
-        ];
-
-        this.displayPlatformTrains('anr-platform-1', mockPlatform1);
-        this.displayPlatformTrains('anr-platform-2', mockPlatform2);
-    }
-
-    displayTrains(stationId, departures) {
-        const container = document.getElementById(`${stationId}-departures`);
-        const stationNames = {
-            'pnw': 'Penge West',
-            'pne': 'Penge East',
-            'bkb': 'Birkbeck',
-            'anr': 'Anerley'
-        };
-
-        if (!departures || departures.length === 0) {
-            container.innerHTML = '<div class="no-data">No departures found</div>';
-            return;
-        }
-
-        container.innerHTML = departures.map(dep => `
-            <div class="departure" onclick="pengeDash.openModal('${this.escapeAttr(stationId)}', '${this.escapeAttr(stationNames[stationId])}', '${this.escapeAttr(dep.dest)}')">
-                <div class="departure-info">
-                    ${dep.platform && dep.platform !== '-' ? `<span class="departure-platform">P${this.escapeHtml(dep.platform)}</span>` : ''}
-                    <span class="departure-destination">${this.escapeHtml(dep.dest)}</span>
-                </div>
-                <div class="departure-time">
-                    <span class="departure-due">${dep.mins} min</span>
-                </div>
-            </div>
-        `).join('');
-    }
-
-    displayMockTrains(stationId) {
-        // Anerley uses platform-based display
-        if (stationId === 'anr') {
-            this.displayMockAnerley();
-            return;
-        }
-
-        const container = document.getElementById(`${stationId}-departures`);
-        const stationNames = {
-            'pnw': 'Penge West',
-            'pne': 'Penge East',
-            'bkb': 'Birkbeck'
-        };
-
-        const mockData = {
-            pnw: [
-                { dest: 'Victoria', platform: '1', mins: 3 },
-                { dest: 'London Bridge', platform: '2', mins: 8 },
-                { dest: 'Victoria', platform: '1', mins: 18 },
-                { dest: 'London Bridge', platform: '2', mins: 23 },
-                { dest: 'Victoria', platform: '1', mins: 33 },
-                { dest: 'London Bridge', platform: '2', mins: 38 }
-            ],
-            pne: [
-                { dest: 'London Bridge', platform: '1', mins: 5 },
-                { dest: 'Orpington', platform: '2', mins: 12 },
-                { dest: 'London Bridge', platform: '1', mins: 20 },
-                { dest: 'Orpington', platform: '2', mins: 27 },
-                { dest: 'London Bridge', platform: '1', mins: 35 },
-                { dest: 'Orpington', platform: '2', mins: 42 }
-            ],
-            bkb: [
-                { dest: 'Beckenham Junction', platform: '1', mins: 4 },
-                { dest: 'Wimbledon', platform: '2', mins: 9 },
-                { dest: 'West Croydon', platform: '1', mins: 15 },
-                { dest: 'Beckenham Junction', platform: '1', mins: 19 },
-                { dest: 'Wimbledon', platform: '2', mins: 24 },
-                { dest: 'West Croydon', platform: '1', mins: 30 }
-            ],
-            anr: [
-                { dest: 'Highbury & Islington', platform: '1', mins: 6 },
-                { dest: 'West Croydon', platform: '2', mins: 11 },
-                { dest: 'Highbury & Islington', platform: '1', mins: 21 },
-                { dest: 'West Croydon', platform: '2', mins: 26 },
-                { dest: 'Highbury & Islington', platform: '1', mins: 36 },
-                { dest: 'West Croydon', platform: '2', mins: 41 }
-            ]
-        };
-
-        const data = mockData[stationId] || [];
-
-        // Store all data for modal
-        this.stationData[stationId] = data;
-
-        // Display first 3
-        const displayData = data.slice(0, 3);
-
-        const dirLookup = PLATFORM_DIRECTIONS[stationId] || {};
-
-        container.innerHTML = displayData.map(dep => {
-            const dirLabel = dep.platform ? (dirLookup[dep.platform] || '') : '';
-            const scheduledStr = new Date(Date.now() + dep.mins * 60000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-            return `
-            <div class="departure" onclick="pengeDash.openModal('${this.escapeAttr(stationId)}', '${this.escapeAttr(stationNames[stationId])}', '${this.escapeAttr(dep.dest)}')">
-                <div class="departure-info">
-                    ${dep.platform ? `<span class="departure-platform">P${this.escapeHtml(dep.platform)}</span>` : ''}
-                    ${dirLabel ? `<span class="departure-platform-dir">${dirLabel}</span>` : ''}
-                    <span class="departure-destination">${this.escapeHtml(dep.dest)}</span>
-                </div>
-                <div class="departure-time">
-                    <span class="departure-due">${dep.mins} min</span>
-                    <span class="departure-scheduled">${scheduledStr}</span>
-                </div>
-            </div>
-        `}).join('');
-    }
-
     // ==================== BUSES ====================
-    async fetchBuses() {
-        if (CONFIG.USE_MOCK_DATA) {
-            this.displayMockBuses();
-            return;
-        }
-
-        try {
-            // Fetch from both stops separately
-            const eastStop = CONFIG.BUS_STOPS[0]; // 490009371E - towards Crystal Palace
-            const westStop = CONFIG.BUS_STOPS[1]; // 490009371W - towards Beckenham
-
-            const fetchStop = async (stopId) => {
-                let url = `https://api.tfl.gov.uk/StopPoint/${stopId}/Arrivals`;
-                if (CONFIG.TFL_APP_KEY) {
-                    url += `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}`;
-                }
-                const response = await fetch(url);
-                return response.json();
-            };
-
-            const [eastArrivals, westArrivals] = await Promise.all([
-                fetchStop(eastStop),
-                fetchStop(westStop)
-            ]);
-
-            // Cache bus data
-            this.cacheData('buses', { east: eastArrivals, west: westArrivals });
-
-            this.displayBuses(eastArrivals, westArrivals);
-            document.getElementById('buses-updated').textContent = this.getTimeAgo(new Date());
-        } catch (error) {
-            console.error('Bus fetch error:', error);
-            // Try cached data first
-            const cachedBuses = this.getCachedData('buses');
-            if (cachedBuses) {
-                this.displayBuses(cachedBuses.east, cachedBuses.west);
-                document.getElementById('buses-updated').textContent = 'Cached';
-            } else {
-                this.displayMockBuses();
-            }
-        }
-    }
-
-    displayBuses(eastArrivals, westArrivals) {
-        const eastContainer = document.getElementById('bus-arrivals-east');
-        const westContainer = document.getElementById('bus-arrivals-west');
-
-        // Store bus data for smart journey insights
-        this.busArrivalData = [...(eastArrivals || []), ...(westArrivals || [])];
-
-        // Helper to render bus list
-        const renderBuses = (container, arrivals) => {
-            if (!arrivals || arrivals.length === 0) {
-                container.innerHTML = '<div class="no-data">No buses</div>';
-                return;
-            }
-
-            // Sort by time and take first 4
-            const sorted = arrivals
-                .sort((a, b) => a.timeToStation - b.timeToStation)
-                .slice(0, 4);
-
-            container.innerHTML = sorted.map(bus => {
-                const mins = Math.floor(bus.timeToStation / 60);
-                // Use real currentLocation from TfL API, fall back to estimated stops
-                let locationText;
-                if (bus.currentLocation) {
-                    locationText = bus.currentLocation;
-                } else {
-                    const stopsAway = Math.max(1, Math.round(mins / 2));
-                    locationText = mins <= 1 ? 'Arriving' : `~${stopsAway} stop${stopsAway > 1 ? 's' : ''}`;
-                }
-
-                // Scheduled arrival time
-                const arrivalTime = bus.expectedArrival
-                    ? new Date(bus.expectedArrival)
-                    : new Date(Date.now() + bus.timeToStation * 1000);
-                const arrivalStr = arrivalTime.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-
-                return `
-                    <div class="bus-arrival">
-                        <div class="bus-route">
-                            <span class="bus-number">${this.escapeHtml(bus.lineName)}</span>
-                            <div class="bus-info">
-                                <span class="bus-destination">${this.escapeHtml(bus.destinationName)}</span>
-                                <span class="bus-location">${this.escapeHtml(locationText)}</span>
-                            </div>
-                        </div>
-                        <div class="bus-time-col">
-                            <span class="bus-time">${mins} min</span>
-                            <span class="bus-scheduled">${arrivalStr}</span>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-        };
-
-        renderBuses(eastContainer, eastArrivals);
-        renderBuses(westContainer, westArrivals);
-    }
-
-    displayMockBuses() {
-        const eastContainer = document.getElementById('bus-arrivals-east');
-        const westContainer = document.getElementById('bus-arrivals-west');
-
-        const mockEastBuses = [
-            { route: '227', dest: 'Crystal Palace', mins: 3 },
-            { route: '176', dest: 'Tottenham Ct Rd', mins: 8 },
-            { route: '227', dest: 'Crystal Palace', mins: 15 },
-            { route: '176', dest: 'Tottenham Ct Rd', mins: 22 }
-        ];
-
-        const mockWestBuses = [
-            { route: '176', dest: 'Penge', mins: 2 },
-            { route: '227', dest: 'Bromley North', mins: 6 },
-            { route: '354', dest: 'Bromley', mins: 11 },
-            { route: '176', dest: 'Penge', mins: 17 }
-        ];
-
-        const renderMockBus = (bus) => {
-            const arrivalStr = new Date(Date.now() + bus.mins * 60000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-            return `
-            <div class="bus-arrival">
-                <div class="bus-route">
-                    <span class="bus-number">${bus.route}</span>
-                    <span class="bus-destination">${bus.dest}</span>
-                </div>
-                <div class="bus-time-col">
-                    <span class="bus-time">${bus.mins} min</span>
-                    <span class="bus-scheduled">${arrivalStr}</span>
-                </div>
-            </div>
-        `};
-
-        eastContainer.innerHTML = mockEastBuses.map(renderMockBus).join('');
-        westContainer.innerHTML = mockWestBuses.map(renderMockBus).join('');
-
-        document.getElementById('buses-updated').textContent = 'Demo data';
-    }
-
     // ==================== LINE STATUS ====================
     async fetchLineStatus() {
         const container = document.getElementById('line-statuses');
@@ -2708,262 +1767,7 @@ class PengeDash {
             : mode === 'tube' ? 'tube' : mode === 'elizabeth-line' ? 'elizabeth' : 'rail';
     }
 
-    getPrimaryMode(journey) {
-        // Find the main non-walking leg
-        const nonWalkingLegs = journey.legs.filter(l => l.mode?.id !== 'walking');
-        if (nonWalkingLegs.length === 0) return { mode: 'walking', line: '' };
-
-        // If multiple different modes, it's mixed
-        const modes = new Set(nonWalkingLegs.map(l => l.mode?.id));
-        if (modes.size > 1) {
-            return { mode: 'mixed', line: '' };
-        }
-
-        const mainLeg = nonWalkingLegs[0];
-        return {
-            mode: mainLeg.mode?.id || 'walking',
-            line: mainLeg.routeOptions?.[0]?.name || ''
-        };
-    }
-
-    getRouteModeClass(primaryMode) {
-        const mode = primaryMode.mode;
-        const line = (primaryMode.line || '').toLowerCase();
-
-        if (mode === 'walking') return 'mode-walk';
-        if (mode === 'bus') return 'mode-bus';
-        if (mode === 'tube') return 'mode-tube';
-        if (mode === 'overground') return 'mode-overground';
-        if (mode === 'mixed') return 'mode-mixed';
-        if (mode === 'national-rail') {
-            if (line.includes('southeastern')) return 'mode-southeastern';
-            return 'mode-train';
-        }
-        return 'mode-mixed';
-    }
-
-    getRouteSummary(journey) {
-        const nonWalkingLegs = journey.legs.filter(l => l.mode?.id !== 'walking');
-        if (nonWalkingLegs.length === 0) return 'Walk';
-
-        return nonWalkingLegs.map(leg => {
-            const lineName = leg.routeOptions?.[0]?.name || '';
-            const mode = leg.mode?.id || '';
-            const via = leg.departurePoint?.commonName || '';
-
-            if (mode === 'bus') return `Bus ${lineName}`;
-            if (lineName) return `${lineName}${via ? ` via ${via.split(' ')[0]}` : ''}`;
-            return this.getJourneyModeIcon(mode);
-        }).join(' → ');
-    }
-
-    getWalkingOption(destination, referenceJourney) {
-        if (!referenceJourney) return '';
-
-        // Estimate walking distance from journey endpoint
-        const arrivalPoint = referenceJourney.legs[referenceJourney.legs.length - 1]?.arrivalPoint;
-        if (!arrivalPoint?.lat || !arrivalPoint?.lon) return '';
-
-        const { lat, lon } = this.home || CONFIG.LOCATION;
-        const distance = this.calculateDistance(lat, lon, arrivalPoint.lat, arrivalPoint.lon);
-
-        // Only show walking if under 4km
-        if (distance > 4) return '';
-
-        const walkingMins = Math.round((distance * 1.3) / (5 / 60)); // 5 km/h, 1.3x for non-straight paths
-        const weatherInsight = this.getWeatherInsight('walking', walkingMins);
-
-        const insightHtml = weatherInsight ? `
-            <div class="route-card-smart">
-                <div class="smart-insight ${weatherInsight.type}">${weatherInsight.text}</div>
-            </div>
-        ` : '';
-
-        return `
-            <div class="route-card mode-walk" data-index="walk">
-                <div class="route-card-header">
-                    <span class="route-mode-icon">🚶</span>
-                    <span class="route-summary">Walk (${distance.toFixed(1)} km)</span>
-                    <span class="route-duration">${walkingMins} min</span>
-                </div>
-                <div class="route-card-meta">Direct walking route</div>
-                ${insightHtml}
-            </div>
-        `;
-    }
-
     // ==================== SMART INSIGHTS ====================
-    getSmartInsight(journey) {
-        const insights = [];
-
-        journey.legs.forEach(leg => {
-            const mode = leg.mode?.id;
-
-            // Train insight: match against live station data
-            if (mode === 'national-rail' || mode === 'overground') {
-                const stationName = (leg.departurePoint?.commonName || '').toLowerCase();
-                const stationMap = {
-                    'penge west': 'pnw',
-                    'penge east': 'pne',
-                    'anerley': 'anr',
-                    'birkbeck': 'bkb'
-                };
-
-                for (const [name, id] of Object.entries(stationMap)) {
-                    if (stationName.includes(name)) {
-                        const liveData = this.stationData[id];
-                        if (liveData && liveData.length > 0) {
-                            const next = liveData[0];
-                            const platformText = next.platform && next.platform !== '-' ? ` from Platform ${next.platform}` : '';
-                            insights.push({
-                                type: 'live',
-                                text: `⚡ Next train in ${next.mins} min${platformText}`
-                            });
-                        }
-                        break;
-                    }
-                }
-            }
-
-            // Bus insight: match against live bus data
-            if (mode === 'bus') {
-                const routeName = leg.routeOptions?.[0]?.name;
-                if (routeName && this.busArrivalData) {
-                    const matchingBus = this.busArrivalData
-                        .filter(b => b.lineName === routeName)
-                        .sort((a, b) => a.timeToStation - b.timeToStation)[0];
-
-                    if (matchingBus) {
-                        const mins = Math.floor(matchingBus.timeToStation / 60);
-                        insights.push({
-                            type: 'live',
-                            text: `🚌 ${routeName} arriving in ${mins} min`
-                        });
-                    }
-                }
-            }
-        });
-
-        return insights;
-    }
-
-    getWeatherInsight(mode, durationMins) {
-        if (!this.currentWeather) return null;
-
-        const { temp, rainChance, condition } = this.currentWeather;
-
-        if (mode === 'walking') {
-            if (rainChance >= 60) {
-                return { type: 'weather', text: '🌧️ Rain right now — consider other options' };
-            }
-            if (temp >= 10 && temp <= 25 && rainChance < 30) {
-                return { type: 'weather', text: '🌤️ Nice weather — great for walking' };
-            }
-            if (temp < 5) {
-                return { type: 'weather', text: '🥶 Cold out — wrap up if walking' };
-            }
-        }
-
-        // For any mode: rain warning if expected during journey
-        if (rainChance >= 50 && this.currentWeather.hourlyData) {
-            const currentHour = new Date().getHours();
-            const hoursAhead = Math.ceil(durationMins / 60);
-            for (let i = 1; i <= hoursAhead && i < 12; i++) {
-                const idx = currentHour + i;
-                if (idx < this.currentWeather.hourlyData.precipitation_probability?.length) {
-                    const prob = this.currentWeather.hourlyData.precipitation_probability[idx];
-                    if (prob >= 60) {
-                        const rainTime = `${(idx % 24).toString().padStart(2, '0')}:00`;
-                        return { type: 'weather', text: `☔ Rain expected at ${rainTime} — bring umbrella` };
-                    }
-                }
-            }
-        }
-
-        return null;
-    }
-
-    getDisruptionInsight(journey) {
-        const insights = [];
-        if (!this.lineStatusData) return insights;
-
-        journey.legs.forEach(leg => {
-            if (leg.mode?.id === 'walking') return;
-
-            const lineName = (leg.routeOptions?.[0]?.name || '').toLowerCase();
-
-            // Check against stored line status data
-            for (const [lineId, status] of Object.entries(this.lineStatusData)) {
-                if (status === 'Good Service') continue;
-
-                if (lineName.includes(lineId) || lineId.includes(lineName.split(' ')[0])) {
-                    const icon = status.toLowerCase().includes('severe') ? '🚫' : '⚠️';
-                    const displayName = lineName.charAt(0).toUpperCase() + lineName.slice(1);
-                    insights.push({
-                        type: 'warning',
-                        text: `${icon} ${displayName}: ${status.toLowerCase()}`
-                    });
-                    break;
-                }
-            }
-        });
-
-        return insights;
-    }
-
-    getJourneyModeIcon(mode) {
-        const icons = {
-            'walking': '🚶',
-            'bus': '🚌',
-            'tube': '🚇',
-            'overground': '🚆',
-            'dlr': '🚈',
-            'national-rail': '🚂',
-            'elizabeth-line': '🚇',
-            'tram': '🚊',
-            'cycle': '🚴',
-            'coach': '🚌'
-        };
-        return icons[mode] || '🚆';
-    }
-
-    getLineClass(lineName) {
-        if (!lineName) return '';
-        const name = lineName.toLowerCase();
-
-        if (name.includes('overground')) return 'overground';
-        if (name.includes('southern')) return 'southern';
-        if (name.includes('southeastern')) return 'southeastern';
-        if (name.includes('thameslink')) return 'thameslink';
-        if (name.includes('victoria')) return 'victoria';
-        if (name.includes('northern')) return 'northern';
-        if (name.includes('central')) return 'central';
-        if (name.includes('jubilee')) return 'jubilee';
-        if (name.includes('district')) return 'district';
-        if (name.includes('circle')) return 'circle';
-        if (name.includes('piccadilly')) return 'piccadilly';
-        if (name.includes('bakerloo')) return 'bakerloo';
-        if (name.includes('hammersmith')) return 'hammersmith';
-        if (name.includes('metropolitan')) return 'metropolitan';
-        if (name.includes('dlr')) return 'dlr';
-        if (name.includes('elizabeth')) return 'elizabeth';
-        if (/^\d+$/.test(name.trim())) return 'bus'; // Bus numbers
-
-        return '';
-    }
-
-    formatLegTime(leg) {
-        const dep = leg.departureTime ? new Date(leg.departureTime) : null;
-        const arr = leg.arrivalTime ? new Date(leg.arrivalTime) : null;
-
-        if (dep && arr) {
-            const depStr = dep.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-            const arrStr = arr.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-            return `${depStr} → ${arrStr}`;
-        }
-        return '';
-    }
-
     // ==================== ORIGIN TOGGLE (From Home / Current Location) ====================
     homeLabel() {
         return (this.home && this.home.label) || `Home (${((this.home && this.home.postcode) || 'SE20').split(' ')[0]})`;
@@ -3107,16 +1911,38 @@ class PengeDash {
             maxZoom: 19,
             attribution: '&copy; OpenStreetMap'
         }).addTo(this.map);
+        this.radiusLayer = L.layerGroup().addTo(this.map);
         this.markersLayer = L.layerGroup().addTo(this.map);
+        this.userLayer = L.layerGroup().addTo(this.map);
         this.routeLayer = L.layerGroup().addTo(this.map);
+
+        // "Locate me" control (pinpoints the user's real position)
+        const LocateCtl = L.Control.extend({
+            options: { position: 'bottomright' },
+            onAdd: () => {
+                const btn = L.DomUtil.create('button', 'map-locate-btn');
+                btn.innerHTML = '◎';
+                btn.title = 'Find my location';
+                L.DomEvent.on(btn, 'click', (e) => { L.DomEvent.stop(e); this.locateMe(); });
+                return btn;
+            }
+        });
+        this.map.addControl(new LocateCtl());
+
         this.updateMap();
     }
 
     updateMap() {
         if (!this.map || typeof L === 'undefined') return;
         this.markersLayer.clearLayers();
+        this.radiusLayer.clearLayers();
         const center = [this.home.lat, this.home.lon];
         this.map.setView(center, 14);
+
+        // Walk-radius rings (~80 m/min): 5 min and 10 min
+        [{ r: 400, label: '5 min walk' }, { r: 800, label: '10 min walk' }].forEach(c => {
+            L.circle(center, { radius: c.r, color: '#2f6bff', weight: 1, opacity: 0.5, fillColor: '#2f6bff', fillOpacity: 0.05, dashArray: '4 4' }).addTo(this.radiusLayer);
+        });
 
         // Home pin
         const homeIcon = L.divIcon({ className: 'map-pin', html: '<span>🏠</span>', iconSize: [28, 28] });
@@ -3136,6 +1962,24 @@ class PengeDash {
 
         // Leaflet needs a size recalc when its container was hidden/resized
         setTimeout(() => { if (this.map) this.map.invalidateSize(); }, 200);
+    }
+
+    locateMe() {
+        if (!this.map || typeof L === 'undefined' || !navigator.geolocation) return;
+        this.showScreen('nearby');
+        navigator.geolocation.getCurrentPosition((pos) => {
+            const here = [pos.coords.latitude, pos.coords.longitude];
+            this.userLayer.clearLayers();
+            // Pulsing blue "you are here" dot
+            L.circleMarker(here, { radius: 8, color: '#fff', weight: 3, fillColor: '#2f6bff', fillOpacity: 1 })
+                .addTo(this.userLayer).bindPopup('📍 You are here').openPopup();
+            L.circle(here, { radius: pos.coords.accuracy || 60, color: '#2f6bff', weight: 1, opacity: 0.4, fillColor: '#2f6bff', fillOpacity: 0.08 })
+                .addTo(this.userLayer);
+            this.map.setView(here, 15);
+            setTimeout(() => this.map.invalidateSize(), 100);
+        }, () => {
+            // Permission denied / unavailable — no-op (home pin stays)
+        }, { enableHighAccuracy: true, timeout: 8000 });
     }
 
     drawJourneyRoute(journey, scrollToMap = false) {
