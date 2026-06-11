@@ -34,17 +34,19 @@ const CONFIG = {
     // LOCATION is the legacy/default home. It is used as the first-run default
     // and as an offline fallback. The live "home" is now stored at runtime in
     // localStorage ('pengedash-home') and can be relocated to any postcode.
+    // Coordinates are the geocoded centroid of the postcode (postcodes.io) — keep
+    // them in sync with the postcode, otherwise the map pin lands in the wrong place.
     LOCATION: {
-        lat: 51.4178,
-        lon: -0.0542,
+        lat: 51.405312,
+        lon: -0.062353,
         postcode: 'SE20 7UA'
     },
 
     // Default home (SE20) used when no saved home exists. isDefault enables the
     // Darwin National Rail backend (which only covers the SE20 stations below).
     DEFAULT_HOME: {
-        lat: 51.4178,
-        lon: -0.0542,
+        lat: 51.405312,
+        lon: -0.062353,
         postcode: 'SE20 7UA',
         label: 'Home (SE20)',
         isDefault: true

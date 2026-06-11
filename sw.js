@@ -1,5 +1,5 @@
 // Penge Dash SE20 - Service Worker
-const CACHE_VERSION = 'v7';
+const CACHE_VERSION = 'v8';
 const TILE_CACHE = 'penge-dash-tiles-v1';
 const MAX_TILES = 300;
 const CACHE_NAME = `penge-dash-${CACHE_VERSION}`;

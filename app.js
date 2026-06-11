@@ -157,6 +157,12 @@ class PengeDash {
             this.home.isDefault = (this.home.postcode || '').replace(/\s/g, '').toUpperCase()
                 === CONFIG.DEFAULT_HOME.postcode.replace(/\s/g, '').toUpperCase();
         }
+        // If on the default home, always trust the current (corrected) default
+        // coordinates — fixes stale coords persisted by older versions.
+        if (this.home.isDefault) {
+            this.home.lat = CONFIG.DEFAULT_HOME.lat;
+            this.home.lon = CONFIG.DEFAULT_HOME.lon;
+        }
     }
 
     saveHome() {
@@ -195,9 +201,15 @@ class PengeDash {
         } catch (e) { /* ignore */ }
     }
 
+    _coordSig(lat, lon) { return `${(+lat).toFixed(4)},${(+lon).toFixed(4)}`; }
+
     loadCachedNearby() {
         const cached = this.getCachedData('nearby-cache');
-        if (cached && cached.home && cached.home === (this.home && this.home.postcode)) {
+        // Only reuse the cache when BOTH the postcode and the coordinates match —
+        // otherwise a corrected/relocated home would show stale nearby stations.
+        const sigOk = cached && cached.sig && this.home &&
+            cached.sig === this._coordSig(this.home.lat, this.home.lon);
+        if (cached && cached.home && cached.home === (this.home && this.home.postcode) && sigOk) {
             this.nearbyStations = cached.stations || [];
             this.nearbyBusStops = cached.busStops || [];
         }
@@ -351,7 +363,7 @@ class PengeDash {
         this.busStopData = {};
         this.liveDepartures = [];
         this.saveHome();
-        this.cacheData('nearby-cache', { home: home.postcode, stations: nearby.stations, busStops: nearby.busStops });
+        this.cacheData('nearby-cache', { home: home.postcode, sig: this._coordSig(home.lat, home.lon), stations: nearby.stations, busStops: nearby.busStops });
 
         // Optionally remember as a saved place
         if (opts.savePlace !== false) {
@@ -380,7 +392,7 @@ class PengeDash {
                 }
                 this.nearbyStations = nearby.stations;
                 this.nearbyBusStops = nearby.busStops;
-                this.cacheData('nearby-cache', { home: this.home.postcode, stations: nearby.stations, busStops: nearby.busStops });
+                this.cacheData('nearby-cache', { home: this.home.postcode, sig: this._coordSig(this.home.lat, this.home.lon), stations: nearby.stations, busStops: nearby.busStops });
                 this.renderNearbyNow();
                 this.updateMap();
                 await this.fetchNearbyArrivals();
