@@ -128,7 +128,22 @@
 
             <!-- ============ NEARBY ============ -->
             <section class="screen" id="screen-nearby">
+                <!-- Search any station / stop -->
+                <div class="station-search">
+                    <span class="ss-icon">🔍</span>
+                    <input type="text" id="station-search-input" placeholder="Search any station or stop…" autocomplete="off">
+                    <button class="ri-clear" id="station-search-clear" aria-label="Clear" style="display:none;">&times;</button>
+                    <div class="autocomplete-dropdown" id="station-search-dropdown"></div>
+                </div>
+
                 <div class="card map-card" id="map-card"><div id="map"></div></div>
+
+                <!-- Saved (favourite) stations -->
+                <div class="section-head" id="fav-stations-head" style="display:none;">
+                    <h3>⭐ Saved stations</h3>
+                    <span class="updated" id="fav-updated">--</span>
+                </div>
+                <div class="nearby-list" id="fav-stations-list"></div>
 
                 <div class="section-head">
                     <h3>Nearby now</h3>

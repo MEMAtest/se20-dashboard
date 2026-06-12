@@ -305,6 +305,32 @@ input { font-family: inherit; }
 }
 .map-locate-btn:active { transform: scale(0.94); }
 
+/* Station search (Nearby) */
+.station-search {
+    position: relative;
+    display: flex; align-items: center; gap: 10px;
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 14px; padding: 4px 14px; margin-bottom: 14px;
+    box-shadow: var(--shadow);
+}
+.station-search .ss-icon { font-size: 14px; }
+#station-search-input {
+    flex: 1; min-width: 0; background: none; border: none; outline: none;
+    font-size: 15px; font-weight: 500; color: var(--text); padding: 11px 0;
+}
+#station-search-input::placeholder { color: var(--muted); }
+
+/* Favourite stations */
+.fav-item { position: relative; }
+.fav-item .saved-item-x { flex-shrink: 0; }
+.modal-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.modal-fav {
+    background: var(--card-alt); border: none; color: var(--muted);
+    width: 34px; height: 34px; border-radius: 50%; font-size: 18px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+}
+.modal-fav.active { color: #f5b301; background: rgba(245,179,1,0.12); }
+
 .nearby-list, .departures-list, .lines-list, .alerts-list, .saved-list { display: flex; flex-direction: column; gap: 10px; }
 .nearby-item, .dep-item {
     display: flex; align-items: center; gap: 12px;

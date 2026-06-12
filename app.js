@@ -38,6 +38,7 @@ class PengeDash {
         this.stationData = {}; // Store all departures for modal
         this.home = null;              // {lat, lon, postcode, label, isDefault}
         this.savedPlaces = [];         // [{label, postcode, lat, lon}]
+        this.favStations = [];         // [{id, name, modes, isBus}] — pinned live boards
         this.nearbyStations = [];      // dynamic stations (relocated homes)
         this.nearbyBusStops = [];      // dynamic bus stops (relocated homes)
         this.lineStatusData = {};      // {id: {status, reason, disruption, name}}
@@ -48,6 +49,7 @@ class PengeDash {
         // Load persisted home + saved places before anything renders
         this.loadHome();
         this.loadSavedPlaces();
+        this.loadFavStations();
         this.loadCachedNearby();
         this.updateHeaderLocation();
 
@@ -72,6 +74,10 @@ class PengeDash {
         this.setupSettings();
         this.renderSavedPlaces();
         this.renderRecents();
+
+        // Station search + favourite stations (Nearby screen)
+        this.setupStationSearch();
+        this.fetchFavArrivals();
 
         // Map (Leaflet) — guarded if library/offline
         this.initMap();
@@ -524,9 +530,12 @@ class PengeDash {
         document.getElementById('modal-station-name').textContent = name || 'Departures';
         const sub = modal.querySelector('.modal-subtitle');
         if (sub) sub.textContent = 'Next live departures';
+        // Remember which stop this modal is showing (for the favourite toggle)
+        const station = isBus ? null : (this.nearbyStations || []).concat(this.favStations || []).find(s => s.id === id);
+        this._currentModalStop = { id, name, isBus, modes: (station && station.modes) || [] };
+        this._updateModalFav();
         const el = document.getElementById('modal-departures');
         const data = isBus ? ((this.busStopData || {})[id] || []) : (this.stationData[id] || []);
-        const station = isBus ? null : (this.nearbyStations || []).find(s => s.id === id);
         const darwinCovered = station && this._darwinCovered()[(station.name || '').toLowerCase()];
         if (data.length === 0 && station && !this._hasLiveArrivals(station) && !darwinCovered) {
             // National Rail station with no live feed (not Darwin-covered) — link out
@@ -548,6 +557,203 @@ class PengeDash {
                 </div>`).join('');
         }
         modal.classList.add('active');
+    }
+
+    // ==================== FAVOURITE STATIONS ====================
+    loadFavStations() {
+        try {
+            const saved = localStorage.getItem('pengedash-fav-stations');
+            this.favStations = saved ? JSON.parse(saved) : [];
+        } catch (e) { this.favStations = []; }
+    }
+
+    saveFavStations() {
+        try { localStorage.setItem('pengedash-fav-stations', JSON.stringify(this.favStations)); } catch (e) { /* ignore */ }
+    }
+
+    isFavStation(id) {
+        return (this.favStations || []).some(s => s.id === id);
+    }
+
+    toggleModalFav() {
+        const stop = this._currentModalStop;
+        if (!stop || !stop.id) return;
+        if (this.isFavStation(stop.id)) {
+            this.favStations = this.favStations.filter(s => s.id !== stop.id);
+        } else {
+            this.favStations.unshift({ id: stop.id, name: stop.name, modes: stop.modes || [], isBus: !!stop.isBus });
+            this.favStations = this.favStations.slice(0, 8);
+        }
+        this.saveFavStations();
+        this._updateModalFav();
+        this.fetchFavArrivals();
+    }
+
+    _updateModalFav() {
+        const btn = document.getElementById('modal-fav');
+        if (!btn || !this._currentModalStop) return;
+        const fav = this.isFavStation(this._currentModalStop.id);
+        btn.textContent = fav ? '★' : '☆';
+        btn.classList.toggle('active', fav);
+        btn.title = fav ? 'Remove from saved' : 'Save station';
+    }
+
+    // Fetch + render live boards for favourite stations (also reuses nearby data when overlapping)
+    async fetchFavArrivals() {
+        const favs = this.favStations || [];
+        const head = document.getElementById('fav-stations-head');
+        const list = document.getElementById('fav-stations-list');
+        if (!head || !list) return;
+        if (favs.length === 0) { head.style.display = 'none'; list.innerHTML = ''; return; }
+        head.style.display = '';
+
+        await Promise.all(favs.map(async (fav) => {
+            // Reuse data only for stops the nearby cycle keeps fresh; others refetch
+            const isNearby = (this.nearbyStations || []).some(s => s.id === fav.id) ||
+                (this.nearbyBusStops || []).some(s => s.id === fav.id);
+            const cached = fav.isBus ? (this.busStopData || {})[fav.id] : this.stationData[fav.id];
+            if (isNearby && cached && cached.length) { fav.nextDepartures = cached.slice(0, 3); return; }
+            try {
+                const deps = await this._fetchStopArrivals(fav.id);
+                fav.nextDepartures = deps.slice(0, 3);
+                if (fav.isBus) { this.busStopData = this.busStopData || {}; this.busStopData[fav.id] = deps; }
+                else this.stationData[fav.id] = deps;
+            } catch (e) { fav.nextDepartures = []; }
+        }));
+
+        this.renderFavStations();
+        const upd = document.getElementById('fav-updated');
+        if (upd) upd.textContent = this.getTimeAgo(new Date());
+    }
+
+    renderFavStations() {
+        const list = document.getElementById('fav-stations-list');
+        if (!list) return;
+        const favs = this.favStations || [];
+        list.innerHTML = favs.map(fav => {
+            const mode = fav.isBus ? 'bus' : this._stationMode(fav);
+            const next = (fav.nextDepartures || []).slice(0, 2).map(d =>
+                `<span class="ni-next-row"><span class="ni-next-dest">${d.line ? this.escapeHtml(d.line) + ' → ' : ''}${this.escapeHtml(d.dest)}</span><span class="ni-next-mins ${d.mins <= 3 ? 'urgent' : ''}">${d.mins} min</span></span>`).join('');
+            const nextHtml = next ? `<span class="ni-next">${next}</span>`
+                : '<span class="ni-next-empty">No live departures right now</span>';
+            return `
+                <div class="nearby-item fav-item" data-id="${this.escapeAttr(fav.id)}" data-name="${this.escapeAttr(fav.name)}" data-bus="${fav.isBus ? '1' : ''}">
+                    <span class="ni-icon ${mode}">${this._modeEmoji(mode, fav.isBus)}</span>
+                    <span class="ni-body">
+                        <span class="ni-name">⭐ ${this.escapeHtml(fav.name)}</span>
+                        ${nextHtml}
+                    </span>
+                    <button class="saved-item-x fav-x" data-remove="${this.escapeAttr(fav.id)}" aria-label="Remove">&times;</button>
+                </div>`;
+        }).join('');
+
+        list.querySelectorAll('.fav-item').forEach(el => {
+            el.addEventListener('click', (e) => {
+                if (e.target.closest('.fav-x')) return;
+                this.openStopModal(el.dataset.id, el.dataset.name, el.dataset.bus === '1');
+            });
+        });
+        list.querySelectorAll('.fav-x').forEach(x => x.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.favStations = this.favStations.filter(s => s.id !== x.dataset.remove);
+            this.saveFavStations();
+            this.fetchFavArrivals();
+        }));
+    }
+
+    // Hub ids (HUB...) have no arrivals of their own — resolve to child station ids
+    async _resolveHubChildren(hubId) {
+        const tflAuth = CONFIG.TFL_APP_KEY ? `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+        try {
+            const sp = await fetch(`https://api.tfl.gov.uk/StopPoint/${hubId}${tflAuth}`).then(r => r.json());
+            const ids = [];
+            const walk = (node) => {
+                if (!node) return;
+                if (/^(940G|910G)/.test(node.id || '') && node.id !== hubId) ids.push(node.id);
+                (node.children || []).forEach(walk);
+            };
+            walk(sp);
+            return [...new Set(ids)].slice(0, 3); // cap requests
+        } catch (e) { return []; }
+    }
+
+    // Shared: fetch + map TfL arrivals for any stop id (hubs resolved to children)
+    async _fetchStopArrivals(id) {
+        const tflAuth = CONFIG.TFL_APP_KEY ? `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+        let ids = [id];
+        if (/^HUB/i.test(id)) {
+            const children = await this._resolveHubChildren(id);
+            if (children.length) ids = children;
+        }
+        const results = await Promise.all(ids.map(i =>
+            fetch(`https://api.tfl.gov.uk/StopPoint/${i}/Arrivals${tflAuth}`).then(r => r.json()).catch(() => [])));
+        const data = results.flat();
+        return (Array.isArray(data) ? data : []).map(a => ({
+            dest: this.cleanStationName(a.destinationName || a.towards || 'Check board'),
+            platform: this.cleanPlatform(a.platformName),
+            line: a.lineName || '',
+            mins: Math.floor((a.timeToStation || 0) / 60),
+            scheduledTime: a.expectedArrival
+                ? new Date(a.expectedArrival).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : ''
+        })).filter(d => d.mins >= 0).sort((a, b) => a.mins - b.mins);
+    }
+
+    // ==================== STATION SEARCH (Nearby screen) ====================
+    setupStationSearch() {
+        const input = document.getElementById('station-search-input');
+        const dropdown = document.getElementById('station-search-dropdown');
+        const clearBtn = document.getElementById('station-search-clear');
+        if (!input || !dropdown) return;
+
+        let timer = null;
+        const hide = () => { dropdown.classList.remove('visible'); dropdown.innerHTML = ''; };
+
+        input.addEventListener('input', () => {
+            clearTimeout(timer);
+            clearBtn.style.display = input.value ? 'flex' : 'none';
+            const q = input.value.trim();
+            if (q.length < 2) { hide(); return; }
+            timer = setTimeout(async () => {
+                try {
+                    let url = `https://api.tfl.gov.uk/StopPoint/Search?query=${encodeURIComponent(q)}&modes=tube,bus,national-rail,overground,dlr,elizabeth-line,tram&maxResults=6`;
+                    if (CONFIG.TFL_APP_KEY) url += `&app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}`;
+                    const data = await fetch(url).then(r => r.json());
+                    const matches = (data.matches || []).filter(m => m.id);
+                    if (!matches.length) { hide(); return; }
+                    const icons = { tube: '🚇', bus: '🚌', 'national-rail': '🚂', overground: '🚆', dlr: '🚈', 'elizabeth-line': '🟣', tram: '🚊' };
+                    dropdown.innerHTML = matches.map(m => `
+                        <div class="autocomplete-item" data-id="${this.escapeAttr(m.id)}" data-name="${this.escapeAttr(m.name)}" data-modes="${this.escapeAttr((m.modes || []).join(','))}">
+                            <div class="ac-name">${this.escapeHtml(m.name)}</div>
+                            <div class="ac-modes">${(m.modes || []).map(x => icons[x] || '').filter(Boolean).join(' ')}</div>
+                        </div>`).join('');
+                    dropdown.classList.add('visible');
+                    dropdown.querySelectorAll('.autocomplete-item').forEach(item => {
+                        item.addEventListener('mousedown', async (e) => {
+                            e.preventDefault();
+                            hide();
+                            input.value = item.dataset.name;
+                            clearBtn.style.display = 'flex';
+                            await this.openSearchedStation(item.dataset.id, item.dataset.name, (item.dataset.modes || '').split(','));
+                        });
+                    });
+                } catch (err) { hide(); }
+            }, 300);
+        });
+        input.addEventListener('keydown', (e) => { if (e.key === 'Escape') hide(); });
+        input.addEventListener('blur', () => setTimeout(hide, 200));
+        clearBtn.addEventListener('click', () => { input.value = ''; clearBtn.style.display = 'none'; hide(); input.focus(); });
+    }
+
+    // Open a searched station: fetch its live board, then show the modal (with ☆ to save)
+    async openSearchedStation(id, name, modes) {
+        const isBus = (modes || []).includes('bus') && !(modes || []).some(m => ['tube', 'overground', 'dlr', 'elizabeth-line', 'tram', 'national-rail'].includes(m));
+        try {
+            const deps = await this._fetchStopArrivals(id);
+            if (isBus) { this.busStopData = this.busStopData || {}; this.busStopData[id] = deps; }
+            else this.stationData[id] = deps;
+        } catch (e) { /* modal will show empty state */ }
+        this._currentModalStop = { id, name, isBus, modes: modes || [] };
+        this.openStopModal(id, name, isBus);
     }
 
     async fetchActiveTransit() {
@@ -617,6 +823,7 @@ class PengeDash {
         this.liveDepartures = merged;
         this.renderLiveDepartures();
         this.renderNearbyNow();   // refresh station rows with inline live times
+        this.fetchFavArrivals();  // keep favourite stations' boards current too
         const now = this.getTimeAgo(new Date());
         ['departures-updated', 'nearby-updated'].forEach(id => {
             const el = document.getElementById(id); if (el) el.textContent = now;
@@ -785,7 +992,7 @@ class PengeDash {
         for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
             const preserve = ['pengedash-destinations', 'pengedash-favorite-journeys',
-                'pengedash-home', 'pengedash-saved-places'];
+                'pengedash-home', 'pengedash-saved-places', 'pengedash-fav-stations'];
             if (key && key.startsWith('pengedash-') && !preserve.includes(key)) {
                 keysToRemove.push(key);
             }
@@ -823,7 +1030,10 @@ class PengeDash {
                         <div class="modal-title" id="modal-station-name">Station</div>
                         <div class="modal-subtitle">Tap a train to see next departures</div>
                     </div>
-                    <button class="modal-close" id="modal-close">&times;</button>
+                    <div class="modal-actions">
+                        <button class="modal-fav" id="modal-fav" title="Save station" aria-label="Save station">☆</button>
+                        <button class="modal-close" id="modal-close">&times;</button>
+                    </div>
                 </div>
                 <div class="modal-departures" id="modal-departures"></div>
             </div>
@@ -832,6 +1042,8 @@ class PengeDash {
 
         // Close modal handlers
         document.getElementById('modal-close').addEventListener('click', () => this.closeModal());
+        // Favourite toggle (state + handler set per-open)
+        document.getElementById('modal-fav').addEventListener('click', () => this.toggleModalFav());
         modal.addEventListener('click', (e) => {
             if (e.target === modal) this.closeModal();
         });
