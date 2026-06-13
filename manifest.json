@@ -1,11 +1,11 @@
 {
-    "name": "Penge Dash SE20",
-    "short_name": "Penge Dash",
-    "description": "Hyper-local transport and weather dashboard for SE20",
+    "name": "Journey — London Transit",
+    "short_name": "Journey",
+    "description": "Live trains, Overground, tram and buses around you — plan smarter journeys across London",
     "start_url": "/",
     "display": "standalone",
-    "background_color": "#0f0f1a",
-    "theme_color": "#1a1a2e",
+    "background_color": "#0c1020",
+    "theme_color": "#111936",
     "orientation": "portrait",
     "icons": [
         {

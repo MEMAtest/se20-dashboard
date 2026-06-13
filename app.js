@@ -291,7 +291,6 @@ class PengeDash {
             fetch(busUrl).then(r => r.json()).catch(() => ({ stopPoints: [] }))
         ]);
 
-        const seenStation = new Set();
         const stations = (stationsRes.stopPoints || [])
             .sort((a, b) => (a.distance || 0) - (b.distance || 0))
             .map(sp => ({
@@ -304,15 +303,31 @@ class PengeDash {
                 lines: (sp.lines || []).map(l => ({ id: l.id, name: l.name })),
                 platformDirections: {}
             }))
-            // Drop entries with no usable id/name, then dedup hub variants, keep nearest
-            .filter(s => {
-                if (!s.id || !s.name) return false;
-                const key = s.name.toLowerCase();
-                if (seenStation.has(key)) return false;
-                seenStation.add(key);
-                return true;
-            })
-            .slice(0, CONFIG.NEARBY.maxStations);
+            .filter(s => s.id && s.name);
+
+        // Dedup name variants ("Birkbeck" + "Birkbeck Tram Stop" are one place),
+        // preferring the variant that has live TfL arrivals, then the nearest.
+        const groups = new Map();
+        stations.forEach(s => {
+            const key = s.name.toLowerCase().replace(/ (tram stop|station)$/i, '').trim();
+            const cur = groups.get(key);
+            const sLive = (s.modes || []).some(m => ['tube', 'overground', 'dlr', 'elizabeth-line', 'tram'].includes(m));
+            const curLive = cur && (cur.modes || []).some(m => ['tube', 'overground', 'dlr', 'elizabeth-line', 'tram'].includes(m));
+            if (!cur || (sLive && !curLive)) groups.set(key, s);
+        });
+        // Mode diversity: tram stops are dense and can crowd out train stations —
+        // cap tram-only entries so rail/overground stations still make the list.
+        const sorted = [...groups.values()].sort((a, b) => (a.distance || 0) - (b.distance || 0));
+        const MAX_TRAM = 3;
+        let tramCount = 0;
+        const dedupedStations = [];
+        for (const s of sorted) {
+            if (dedupedStations.length >= CONFIG.NEARBY.maxStations) break;
+            const tramOnly = (s.modes || []).every(m => m === 'tram');
+            if (tramOnly && tramCount >= MAX_TRAM) continue;
+            if (tramOnly) tramCount++;
+            dedupedStations.push(s);
+        }
 
         const busStops = (busRes.stopPoints || [])
             .filter(sp => sp.id || sp.naptanId)
@@ -328,7 +343,7 @@ class PengeDash {
                 distance: Math.round(sp.distance || 0)
             }));
 
-        return { stations, busStops };
+        return { stations: dedupedStations, busStops };
     }
 
     _stopProp(stopPoint, key) {
@@ -845,7 +860,8 @@ class PengeDash {
             HERNEHL: 'Herne Hill', HNHL: 'Herne Hill', WCROYDN: 'West Croydon',
             CRYSTLP: 'Crystal Palace', NRWD: 'Norwood Junction', NORWDJ: 'Norwood Junction',
             SYDENHM: 'Sydenham', SUTTON: 'Sutton', EPSOM: 'Epsom',
-            CLTHRPS: 'Clapham Junction', PRSP: 'Crystal Palace'
+            CLTHRPS: 'Cleethorpes', PRSP: 'Crystal Palace',
+            ELLBNLL: 'Elmers End', GRVPK: 'Grove Park', SYDENHH: 'Sydenham Hill'
         };
         return map[s] || s;
     }
