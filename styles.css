@@ -309,6 +309,17 @@ input { font-family: inherit; }
     display: flex; align-items: center; justify-content: center; margin: 0 10px 10px 0;
 }
 .map-locate-btn:active { transform: scale(0.94); }
+.map-locate-btn.busy { opacity: .6; pointer-events: none; }
+
+/* Transient toast (e.g. location errors) */
+.app-toast {
+    position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%) translateY(10px);
+    background: rgba(20,20,25,.95); color: #fff;
+    padding: 10px 16px; border-radius: 12px; font-size: 13px; font-weight: 600;
+    box-shadow: 0 4px 16px rgba(0,0,0,.3); z-index: 9999; max-width: 90vw; text-align: center;
+    opacity: 0; transition: opacity .2s, transform .2s; pointer-events: none;
+}
+.app-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
 /* Station search (Nearby) */
 .station-search {
@@ -550,6 +561,37 @@ input { font-family: inherit; }
 .departure-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .departure-platform { font-size: 10px; font-weight: 700; color: var(--blue); }
 .departure-platform-dir { font-size: 11px; color: var(--muted); }
+
+/* Platform badge — prominent pill on departure cards and modal rows */
+.plat-badge {
+    display: inline-flex; align-items: center;
+    background: var(--blue); color: #fff;
+    font-size: 11px; font-weight: 800; letter-spacing: 0.02em;
+    padding: 2px 7px; border-radius: 20px;
+    white-space: nowrap; flex-shrink: 0;
+}
+.modal-departure .plat-badge {
+    font-size: 12px; padding: 3px 9px; margin-top: 4px;
+}
+/* Cancelled badge */
+.cancelled-badge {
+    display: inline-flex; align-items: center;
+    background: #e53e3e; color: #fff;
+    font-size: 10px; font-weight: 800; letter-spacing: 0.04em;
+    padding: 2px 6px; border-radius: 20px; text-transform: uppercase;
+    white-space: nowrap;
+}
+.modal-departure.cancelled-row { opacity: 0.65; }
+.modal-departure.cancelled-row .modal-departure-time { color: #e53e3e; }
+/* Delay reason text */
+.delay-reason {
+    font-size: 11px; color: var(--amber); font-style: italic;
+    margin-top: 2px; display: block;
+}
+/* Alternative service hint below a cancelled row */
+.next-service-hint {
+    font-size: 11.5px; color: var(--muted); margin-top: 3px; display: block;
+}
 .departure-destination { font-size: 14px; font-weight: 600; }
 .departure-location { font-size: 11.5px; color: var(--muted); }
 .departure-time { text-align: right; }

@@ -49,6 +49,7 @@ class PengeDash {
         // Load persisted home + saved places before anything renders
         this.loadHome();
         this.loadSavedPlaces();
+        this.seedDefaultSavedPlace();   // keep SE20 tappable even after GPS relocates
         this.loadFavStations();
         this.loadCachedNearby();
         this.updateHeaderLocation();
@@ -103,6 +104,11 @@ class PengeDash {
 
         // Auto-refresh intervals
         this.setupAutoRefresh();
+
+        // Ask for the device's location on open — the whole app follows GPS when
+        // granted, falling back to the saved home (SE20) when denied. Non-blocking
+        // so it runs after the first paint above.
+        this.initGeolocation();
     }
 
     // ==================== NAVIGATION (screens) ====================
@@ -352,7 +358,12 @@ class PengeDash {
         return found ? found.value : '';
     }
 
-    // Full relocation: geocode -> detect nearby -> persist -> rebuild everything
+    // Full relocation: geocode -> detect nearby -> persist -> rebuild everything.
+    // opts.persist (default true): when false, don't overwrite the saved home in
+    //   localStorage — used for a live GPS fix so a denied location next open still
+    //   falls back to the saved SE20/explicit home.
+    // opts.isCurrentLocation (default false): treat as a transient GPS position —
+    //   label from the nearest detected stop and never store it as a saved place.
     async resolveLocation(input, opts = {}) {
         // input can be a postcode string, or {lat, lon, label} for "use current location"
         let home;
@@ -370,11 +381,19 @@ class PengeDash {
         // Is this the SE20 default?
         const defPc = CONFIG.DEFAULT_HOME.postcode.replace(/\s/g, '').toUpperCase();
         home.isDefault = (home.postcode || '').replace(/\s/g, '').toUpperCase() === defPc;
+        home.isCurrentLocation = !!opts.isCurrentLocation;
 
         // Detect nearby (widen radius once if empty)
         let nearby = await this.detectNearby(home.lat, home.lon);
         if (nearby.stations.length === 0) {
             nearby = await this.detectNearby(home.lat, home.lon, CONFIG.NEARBY.stationRadius * 2);
+        }
+
+        // For a live GPS fix, name the location from the nearest detected stop
+        // (reuses the detection above — no extra geocode round-trip).
+        if (opts.isCurrentLocation && (!input || !input.label || input.label === 'Current area')) {
+            const nearest = nearby.stations[0] || nearby.busStops[0];
+            home.label = nearest ? `📍 Near ${nearest.name}` : 'Current location';
         }
 
         this.home = home;
@@ -383,11 +402,11 @@ class PengeDash {
         this.stationData = {};        // clear previous location's departures
         this.busStopData = {};
         this.liveDepartures = [];
-        this.saveHome();
+        if (opts.persist !== false) this.saveHome();
         this.cacheData('nearby-cache', { home: home.postcode, sig: this._coordSig(home.lat, home.lon), stations: nearby.stations, busStops: nearby.busStops });
 
-        // Optionally remember as a saved place
-        if (opts.savePlace !== false) {
+        // Optionally remember as a saved place (never for a transient GPS position)
+        if (opts.savePlace !== false && !opts.isCurrentLocation) {
             this.saveSavedPlace({ label: home.label, postcode: home.postcode, lat: home.lat, lon: home.lon });
         }
 
@@ -400,6 +419,50 @@ class PengeDash {
         this.updateMap();
         await this.refreshAll();
         return home;
+    }
+
+    // Recentre the whole app on live GPS coordinates (Nearby, map, journey "From").
+    // Transient: does not overwrite the saved home, so denying location next open
+    // still falls back to SE20. Coalesced so rapid taps don't stack detections.
+    async relocateToCoords(lat, lon) {
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+        this._userPickedLocation = true;   // suppress a late startup fix from overriding
+        if (this._relocating) return this._relocating;
+        this._relocating = this.resolveLocation(
+            { lat, lon, postcode: '', label: 'Current area' },
+            { isCurrentLocation: true, persist: false, savePlace: false }
+        ).finally(() => { this._relocating = null; });
+        return this._relocating;
+    }
+
+    // Ask for the device's location once on open. On success the whole app
+    // recentres on the user (transiently — see relocateToCoords). On denial /
+    // timeout we keep the saved home (SE20) and never nag again. Non-blocking:
+    // called after the first paint so the UI upgrades in place when GPS resolves.
+    initGeolocation() {
+        if (!navigator.geolocation) return;
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                if (this._userPickedLocation) return;   // user already chose a location this session
+                this.relocateToCoords(pos.coords.latitude, pos.coords.longitude);
+            },
+            () => { /* denied / unavailable / timeout — keep saved home, no nagging */ },
+            { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
+        );
+    }
+
+    // Ensure SE20 is always available as a saved place so the user can tap back to
+    // it (which persists and re-enables the SE20 board), even after GPS has
+    // transiently moved the app elsewhere. Appended (not unshifted) so it sits
+    // below the user's own places.
+    seedDefaultSavedPlace() {
+        const d = CONFIG.DEFAULT_HOME;
+        const exists = (this.savedPlaces || []).some(p =>
+            (p.label || '').toLowerCase() === d.label.toLowerCase());
+        if (exists) return;
+        this.savedPlaces = [...(this.savedPlaces || []),
+            { label: d.label, postcode: d.postcode, lat: d.lat, lon: d.lon }].slice(0, 8);
+        try { localStorage.setItem('pengedash-saved-places', JSON.stringify(this.savedPlaces)); } catch (e) { /* ignore */ }
     }
 
     async detectNearbyForHome() {
@@ -522,7 +585,9 @@ class PengeDash {
                 : `${this.escapeHtml(d.line || d.station)} to ${this.escapeHtml(d.dest)}`;
             const sub = d.isBus
                 ? `From ${this.escapeHtml(d.station)}`
-                : `${this.escapeHtml(d.station)}${d.platform && d.platform !== '-' ? ' · Platform ' + this.escapeHtml(d.platform) : ''}`;
+                : this.escapeHtml(d.station);
+            const platBadge = (!d.isBus && d.platform && d.platform !== '-')
+                ? `<span class="plat-badge">Plat ${this.escapeHtml(d.platform)}</span>` : '';
             return `
             <button class="dep-item" data-id="${this.escapeAttr(d.id)}" data-bus="${d.isBus ? '1' : ''}" data-name="${this.escapeAttr(d.name)}">
                 <span class="di-icon">${icon}</span>
@@ -531,6 +596,7 @@ class PengeDash {
                     <span class="di-sub">${sub}</span>
                 </span>
                 <span class="di-right">
+                    ${platBadge}
                     <span class="di-mins ${d.mins <= 3 ? 'urgent' : ''}">${d.mins} min</span>
                     <span class="ni-chev">›</span>
                 </span>
@@ -551,25 +617,51 @@ class PengeDash {
         this._updateModalFav();
         const el = document.getElementById('modal-departures');
         const data = isBus ? ((this.busStopData || {})[id] || []) : (this.stationData[id] || []);
-        const darwinCovered = station && this._darwinCovered()[(station.name || '').toLowerCase()];
-        if (data.length === 0 && station && !this._hasLiveArrivals(station) && !darwinCovered) {
-            // National Rail station with no live feed (not Darwin-covered) — link out
-            el.innerHTML = `<div class="no-data">🚂 This is a National Rail station — live departures aren't available in TfL data here.<br><br>
+        const isNR = station && (station.modes || []).includes('national-rail');
+        if (data.length === 0 && isNR && !this._hasLiveArrivals(station)) {
+            // Pure National Rail station whose live board hasn't populated yet — the
+            // backend warms a station shortly after it's first requested.
+            el.innerHTML = `<div class="no-data">🚂 Loading live National Rail departures — check back in a moment.<br><br>
                 <a href="https://www.nationalrail.co.uk/live-trains/departures/" target="_blank" rel="noopener" style="color:var(--blue);font-weight:600;">Check National Rail live times ↗</a></div>`;
         } else if (data.length === 0) {
             el.innerHTML = '<div class="no-data">No live departures right now</div>';
         } else {
-            el.innerHTML = data.slice(0, 8).map(d => `
+            const rows = data.slice(0, 8);
+            el.innerHTML = rows.map((d, i) => {
+                if (d.cancelled) {
+                    // Find the next non-cancelled service to the same destination
+                    const next = rows.slice(i + 1).find(x => !x.cancelled && x.dest === d.dest)
+                        || data.slice(8).find(x => !x.cancelled && x.dest === d.dest);
+                    const nextHint = next
+                        ? `<span class="next-service-hint">Next: ${this.escapeHtml(next.dest)} · ${next.mins} min${next.platform && next.platform !== '-' ? ' · <b>Plat ' + this.escapeHtml(next.platform) + '</b>' : ''}</span>` : '';
+                    const reasonHtml = d.reason ? `<span class="delay-reason">Due to ${this.escapeHtml(d.reason)}</span>` : '';
+                    return `
+                    <div class="modal-departure cancelled-row">
+                        <div class="modal-departure-info">
+                            <span class="modal-departure-dest">${isBus && d.line ? this.escapeHtml(d.line) + ' · ' : ''}${this.escapeHtml(d.dest)} <span class="cancelled-badge">Cancelled</span></span>
+                            ${reasonHtml}${nextHint}
+                        </div>
+                        <div class="modal-departure-time-col">
+                            <span class="modal-departure-time" style="color:#e53e3e">${d.scheduledTime || ''}</span>
+                        </div>
+                    </div>`;
+                }
+                const platHtml = (d.platform && d.platform !== '-')
+                    ? `<span class="plat-badge">Platform ${this.escapeHtml(d.platform)}</span>` : '';
+                const reasonHtml = (d.delayed && d.reason)
+                    ? `<span class="delay-reason">Due to ${this.escapeHtml(d.reason)}</span>` : '';
+                return `
                 <div class="modal-departure">
                     <div class="modal-departure-info">
                         <span class="modal-departure-dest">${isBus && d.line ? this.escapeHtml(d.line) + ' · ' : ''}${this.escapeHtml(d.dest)}</span>
-                        ${d.platform && d.platform !== '-' ? `<span class="departure-platform-dir">Platform ${this.escapeHtml(d.platform)}</span>` : ''}
+                        ${platHtml}${reasonHtml}
                     </div>
                     <div class="modal-departure-time-col">
                         <span class="modal-departure-time">${d.mins} min</span>
                         ${d.scheduledTime ? `<span class="departure-scheduled">${d.scheduledTime}</span>` : ''}
                     </div>
-                </div>`).join('');
+                </div>`;
+            }).join('');
         }
         modal.classList.add('active');
     }
@@ -782,13 +874,14 @@ class PengeDash {
 
     async fetchNearbyArrivals() {
         const tflAuth = CONFIG.TFL_APP_KEY ? `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
-        const merged = [];
         this.busStopData = this.busStopData || {};
+        this.stationData = this.stationData || {};
 
-        const liveStations = this.nearbyStations.filter(st =>
+        // TfL live arrivals for tube/overground/DLR/Elizabeth/tram stations
+        const tflStations = this.nearbyStations.filter(st =>
             (st.modes || []).some(m => ['tube', 'overground', 'dlr', 'elizabeth-line', 'tram'].includes(m)));
 
-        await Promise.all(liveStations.map(async (st) => {
+        await Promise.all(tflStations.map(async (st) => {
             try {
                 const data = await fetch(`https://api.tfl.gov.uk/StopPoint/${st.id}/Arrivals${tflAuth}`).then(r => r.json());
                 const deps = (Array.isArray(data) ? data : []).map(a => ({
@@ -803,14 +896,15 @@ class PengeDash {
                 st.platformDirections = this.getPlatformDirections(deps);
                 st.nextDepartures = deps.slice(0, 3);
                 this.stationData[st.id] = deps;
-                const mode = this._stationMode(st);
-                deps.slice(0, 2).forEach(d => merged.push({
-                    mode, station: st.name, dest: d.dest, line: d.line, mins: d.mins,
-                    platform: d.platform, id: st.id, name: st.name, isBus: false
-                }));
             } catch (e) { /* skip */ }
         }));
 
+        // National Rail live times + real platform numbers via the Darwin backend,
+        // for every nearby National-Rail station (nationwide). Overlays the TfL data
+        // above where it has platform-bearing departures.
+        await this.fetchNationalRailBoards();
+
+        // Bus arrivals
         await Promise.all((this.nearbyBusStops || []).map(async (stop) => {
             try {
                 const data = await fetch(`https://api.tfl.gov.uk/StopPoint/${stop.id}/Arrivals${tflAuth}`).then(r => r.json());
@@ -823,16 +917,26 @@ class PengeDash {
                         .toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
                 })).filter(d => d.mins >= 0).sort((a, b) => a.mins - b.mins);
                 this.busStopData[stop.id] = arr;
-                if (arr[0]) merged.push({
-                    mode: 'bus', station: stop.name, dest: arr[0].dest, line: arr[0].line,
-                    mins: arr[0].mins, id: stop.id, name: stop.name, isBus: true
-                });
             } catch (e) { /* skip */ }
         }));
 
-        // National Rail live times via the Darwin backend (SE20 default home only)
-        const darwinMerged = await this.fetchDarwinForDefault();
-        if (darwinMerged.length) merged.push(...darwinMerged);
+        // Build the merged Live-departures list from the per-station data
+        const merged = [];
+        (this.nearbyStations || []).forEach(st => {
+            const mode = this._stationMode(st);
+            (this.stationData[st.id] || []).filter(d => !d.cancelled).slice(0, 2).forEach(d => merged.push({
+                mode, station: st.name, dest: d.dest, line: d.line || '', mins: d.mins,
+                platform: d.platform, id: st.id, name: st.name, isBus: false,
+                delayed: d.delayed || false, reason: d.reason || null
+            }));
+        });
+        (this.nearbyBusStops || []).forEach(stop => {
+            const arr = this.busStopData[stop.id] || [];
+            if (arr[0]) merged.push({
+                mode: 'bus', station: stop.name, dest: arr[0].dest, line: arr[0].line,
+                mins: arr[0].mins, id: stop.id, name: stop.name, isBus: true
+            });
+        });
 
         merged.sort((a, b) => a.mins - b.mins);
         this.liveDepartures = merged;
@@ -845,66 +949,42 @@ class PengeDash {
         });
     }
 
-    // National Rail stations the Darwin backend covers (SE20 default home)
-    _darwinCovered() { return { 'penge east': 'PNE', 'penge west': 'PNW', 'birkbeck': 'BKB' }; }
-
-    // Format raw Darwin TIPLOC codes the backend didn't resolve (SE20-area destinations)
-    _formatNRDest(s) {
-        const map = {
-            VICTRIC: 'Victoria', VICTRIA: 'Victoria', VICTRIE: 'Victoria',
-            LNDNBDE: 'London Bridge', LONBDGE: 'London Bridge', LNDNBDG: 'London Bridge',
-            BLFR: 'Blackfriars', CHRX: 'Charing Cross', CHARING: 'Charing Cross',
-            ORPNGTN: 'Orpington', BROMLYS: 'Bromley South', BRMLYSC: 'Bromley South',
-            BECKNHM: 'Beckenham Junction', BCKNHMJ: 'Beckenham Junction', BCKNHM: 'Beckenham Junction',
-            KENTHOS: 'Kent House', WDULWCH: 'West Dulwich', SYDENHL: 'Sydenham Hill',
-            HERNEHL: 'Herne Hill', HNHL: 'Herne Hill', WCROYDN: 'West Croydon',
-            CRYSTLP: 'Crystal Palace', NRWD: 'Norwood Junction', NORWDJ: 'Norwood Junction',
-            SYDENHM: 'Sydenham', SUTTON: 'Sutton', EPSOM: 'Epsom',
-            CLTHRPS: 'Cleethorpes', PRSP: 'Crystal Palace',
-            ELLBNLL: 'Elmers End', GRVPK: 'Grove Park', SYDENHH: 'Sydenham Hill'
-        };
-        return map[s] || s;
-    }
-
-    // Pull live National Rail departures from the Darwin backend for SE20's NR stations.
-    // Returns merged rows for the Live-departures list; also sets per-station data inline.
-    async fetchDarwinForDefault() {
-        if (!this.home.isDefault) return [];
-        let data;
-        try {
-            data = await fetch(`${CONFIG.DARWIN_API_URL}/api/departures`).then(r => r.json());
-        } catch (e) { return []; }
-        if (!data || !data.stations) return [];
-
-        const map = this._darwinCovered();
-        const extra = [];
-        this.nearbyStations.forEach(st => {
-            const crs = map[(st.name || '').toLowerCase()];
-            if (!crs) return;
-            const raw = (data.stations[crs] && data.stations[crs].departures) || [];
-            const selfName = (st.name || '').toLowerCase();
-            const deps = raw
-                .filter(d => !d.cancelled && typeof d.mins === 'number' && d.mins >= -1 && (d.scheduledTime || d.expectedTime))
-                .map(d => ({
-                    dest: this._formatNRDest(this.cleanStationName(d.destination || 'Check board')),
-                    platform: (d.platform && d.platform !== '-') ? String(d.platform) : '-',
-                    line: st.line || '',
-                    mins: d.mins,
-                    scheduledTime: d.scheduledTime || ''
-                }))
-                // Drop self-referential garbage (dest === this station) and unresolved blanks
-                .filter(d => d.dest && d.dest.toLowerCase() !== selfName)
-                .sort((a, b) => a.mins - b.mins);
-            if (deps.length) {
-                st.nextDepartures = deps.slice(0, 3);
-                this.stationData[st.id] = deps;
-                deps.slice(0, 2).forEach(d => extra.push({
-                    mode: 'rail', station: st.name, dest: d.dest, line: '', mins: d.mins,
-                    platform: d.platform, id: st.id, name: st.name, isBus: false
-                }));
-            }
-        });
-        return extra;
+    // Live National Rail departures + platforms from the Darwin backend, for every
+    // nearby national-rail station (nationwide — the backend resolves the station
+    // from its coordinates). Overlays any TfL data with the platform-bearing board.
+    async fetchNationalRailBoards() {
+        const nr = (this.nearbyStations || []).filter(st =>
+            (st.modes || []).includes('national-rail') && Number.isFinite(+st.lat) && Number.isFinite(+st.lon));
+        if (!nr.length) return;
+        await Promise.all(nr.map(async (st) => {
+            try {
+                const url = `${CONFIG.DARWIN_API_URL}/api/board?lat=${st.lat}&lon=${st.lon}`;
+                const data = await fetch(url).then(r => r.ok ? r.json() : null);
+                if (!data || !Array.isArray(data.departures)) return;
+                const selfName = (st.name || '').toLowerCase();
+                const deps = data.departures
+                    .filter(d => typeof d.mins === 'number' && d.mins >= -1)
+                    .map(d => ({
+                        dest: d.destination ? this.cleanStationName(d.destination) : null,
+                        platform: (d.platform && d.platform !== '-') ? String(d.platform) : '-',
+                        line: '',
+                        mins: d.mins,
+                        scheduledTime: d.scheduledTime || '',
+                        cancelled: d.cancelled || false,
+                        delayed: d.delayed || false,
+                        reason: d.reason || null
+                    }))
+                    // Drop rows with no resolved destination and self-referential rows
+                    .filter(d => d.dest && d.dest.toLowerCase() !== selfName)
+                    .sort((a, b) => a.mins - b.mins);
+                if (deps.length) {
+                    // Overlay TfL: the Darwin board carries real platform numbers
+                    st.platformDirections = this.getPlatformDirections(deps);
+                    st.nextDepartures = deps.slice(0, 3);
+                    this.stationData[st.id] = deps;
+                }
+            } catch (e) { /* skip */ }
+        }));
     }
 
     cleanStationName(name) {
@@ -2240,26 +2320,38 @@ class PengeDash {
     }
 
     updateMap() {
-        if (!this.map || typeof L === 'undefined') return;
+        if (!this.map || typeof L === 'undefined' || !this.home) return;
         this.markersLayer.clearLayers();
         this.radiusLayer.clearLayers();
-        const center = [this.home.lat, this.home.lon];
-        this.map.setView(center, 14);
+
+        // Validate the centre — an undefined/NaN coord makes Leaflet fall back to a
+        // zoomed-out world view (the "map shows the whole world" bug). Fall back to
+        // the SE20 default coordinates if the home coords are somehow invalid.
+        let lat = +this.home.lat, lon = +this.home.lon;
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+            lat = CONFIG.LOCATION.lat; lon = CONFIG.LOCATION.lon;
+        }
+        const center = [lat, lon];
 
         // Walk-radius rings (~80 m/min): 5 min and 10 min
-        [{ r: 400, label: '5 min walk' }, { r: 800, label: '10 min walk' }].forEach(c => {
+        [{ r: 400 }, { r: 800 }].forEach(c => {
             L.circle(center, { radius: c.r, color: '#2f6bff', weight: 1, opacity: 0.5, fillColor: '#2f6bff', fillOpacity: 0.05, dashArray: '4 4' }).addTo(this.radiusLayer);
         });
 
-        // Home pin
-        const homeIcon = L.divIcon({ className: 'map-pin', html: '<span>🏠</span>', iconSize: [28, 28] });
-        L.marker(center, { icon: homeIcon }).addTo(this.markersLayer).bindPopup(`🏠 ${this.escapeHtml(this.home.label || 'Home')}`);
+        // Centre pin — "you are here" on a live GPS position, else the home base
+        const onCurrent = !!this.home.isCurrentLocation;
+        const centreEmoji = onCurrent ? '📍' : '🏠';
+        const centreIcon = L.divIcon({ className: 'map-pin', html: `<span>${centreEmoji}</span>`, iconSize: [28, 28] });
+        L.marker(center, { icon: centreIcon }).addTo(this.markersLayer)
+            .bindPopup(`${centreEmoji} ${this.escapeHtml(this.home.label || (onCurrent ? 'You are here' : 'Home'))}`);
 
-        const mk = (lat, lon, emoji, label, onClick) => {
-            if (lat == null || lon == null) return;
+        const bounds = [center];
+        const mk = (mlat, mlon, emoji, label, onClick) => {
+            if (mlat == null || mlon == null || !Number.isFinite(+mlat) || !Number.isFinite(+mlon)) return;
             const icon = L.divIcon({ className: 'map-pin', html: `<span>${emoji}</span>`, iconSize: [26, 26] });
-            const m = L.marker([lat, lon], { icon }).addTo(this.markersLayer).bindPopup(this.escapeHtml(label));
+            const m = L.marker([mlat, mlon], { icon }).addTo(this.markersLayer).bindPopup(this.escapeHtml(label));
             if (onClick) m.on('click', onClick);
+            bounds.push([+mlat, +mlon]);
         };
         (this.nearbyStations || []).forEach(s => {
             const emoji = this._modeEmoji(this._stationMode(s));
@@ -2267,14 +2359,54 @@ class PengeDash {
         });
         (this.nearbyBusStops || []).forEach(b => mk(b.lat, b.lon, '🚌', b.name, () => this.openStopModal(b.id, b.name, true)));
 
+        // Frame the local area: fit to the centre + nearby markers (never the whole
+        // world). With no markers, just centre at a sensible walking zoom.
+        if (bounds.length > 1) {
+            this.map.fitBounds(L.latLngBounds(bounds).pad(0.2), { maxZoom: 15 });
+        } else {
+            this.map.setView(center, 14);
+        }
+
         // Leaflet needs a size recalc when its container was hidden/resized
         setTimeout(() => { if (this.map) this.map.invalidateSize(); }, 200);
     }
 
+    // Small transient toast (used for location errors etc.)
+    _toast(msg) {
+        if (!msg) return;
+        let el = document.getElementById('app-toast');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'app-toast';
+            el.className = 'app-toast';
+            document.body.appendChild(el);
+        }
+        el.textContent = msg;
+        // reflow so the transition runs each time
+        void el.offsetWidth;
+        el.classList.add('show');
+        clearTimeout(this._toastTimer);
+        this._toastTimer = setTimeout(() => el.classList.remove('show'), 3200);
+    }
+
+    _setLocateBusy(busy) {
+        const btn = document.querySelector('.map-locate-btn');
+        if (!btn) return;
+        btn.classList.toggle('busy', busy);
+        btn.innerHTML = busy ? '⏳' : '◎';
+    }
+
+    // Blue map button: find the user's real position, drop a "you are here" dot,
+    // AND recentre the whole app (Nearby list + map + journey) on it — not just a
+    // temporary map pan. Fast, low-accuracy fix; visible error if it fails.
     locateMe() {
-        if (!this.map || typeof L === 'undefined' || !navigator.geolocation) return;
+        if (!this.map || typeof L === 'undefined' || !navigator.geolocation) {
+            this._toast('Location isn’t available on this device.');
+            return;
+        }
         this.showScreen('nearby');
-        navigator.geolocation.getCurrentPosition((pos) => {
+        this._setLocateBusy(true);
+        navigator.geolocation.getCurrentPosition(async (pos) => {
             const here = [pos.coords.latitude, pos.coords.longitude];
             this.userLayer.clearLayers();
             // Pulsing blue "you are here" dot
@@ -2284,9 +2416,15 @@ class PengeDash {
                 .addTo(this.userLayer);
             this.map.setView(here, 15);
             setTimeout(() => this.map.invalidateSize(), 100);
-        }, () => {
-            // Permission denied / unavailable — no-op (home pin stays)
-        }, { enableHighAccuracy: true, timeout: 8000 });
+            // Recentre the WHOLE app on the real position (Nearby list + map + journey)
+            try { await this.relocateToCoords(here[0], here[1]); } catch (e) { /* keep the dot */ }
+            this._setLocateBusy(false);
+        }, (err) => {
+            this._setLocateBusy(false);
+            this._toast(err && err.code === 1
+                ? 'Location permission denied — enable it to find nearby stops.'
+                : 'Couldn’t get your location. Please try again.');
+        }, { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 });
     }
 
     drawJourneyRoute(journey, scrollToMap = false) {
