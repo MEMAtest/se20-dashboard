@@ -1994,6 +1994,11 @@ class PengeDash {
             const status = this.routeStatus(journey);
             const fare = (journey.fare && journey.fare.totalCost != null) ? `£${(journey.fare.totalCost / 100).toFixed(2)}` : '—';
             const walkTotal = walks[index];
+            // Where you board the first train + a live platform slot (filled async).
+            const board = this._boardingLeg(journey);
+            const boardLine = board && board.station
+                ? `<div class="route-board">🚉 Board at <b>${this.escapeHtml(board.station)}</b><span class="jp-plat" data-fmt="short" data-lat="${board.lat}" data-lon="${board.lon}" data-time="${this.escapeAttr(board.time)}"></span></div>`
+                : '';
             return `
                 <div class="route-card ${tag ? tag.cls : ''}" data-index="${index}">
                     ${tag ? `<span class="route-tag">${tag.label}</span>` : ''}
@@ -2005,6 +2010,7 @@ class PengeDash {
                         <span class="route-status ${status.cls}">${status.label}</span>
                     </div>
                     <div class="route-modes">${this.buildModeStrip(journey)}</div>
+                    ${boardLine}
                     <div class="route-meta">Leaves in <b>${leaveMins} min</b> · ${depStr}–${arrStr}</div>
                     <div class="route-foot">
                         <span class="route-foot-item">💷 ${fare}</span>
@@ -2016,6 +2022,9 @@ class PengeDash {
 
         container.style.display = 'block';
         container.innerHTML = cards;
+
+        // Fill live platform numbers on the cards (async, non-blocking).
+        this._enrichJourneyPlatforms();
 
         // Draw fastest on the map (no auto-scroll)
         this.drawJourneyRoute(journeys[idxFast >= 0 ? idxFast : 0]);
@@ -2071,13 +2080,21 @@ class PengeDash {
     // has no live board for that station yet (it warms on first request).
     async _enrichJourneyPlatforms() {
         const toMins = t => { const [h, m] = String(t).split(':').map(Number); return h * 60 + m; };
-        const slots = [...document.querySelectorAll('.tl-plat[data-lat]')];
+        // One selector for both surfaces: the results-card slots (data-fmt="short",
+        // render "P4") and the detail-timeline slots (data-fmt="long", "Platform 4").
+        // Cache boards per lat/lon so several cards for the same station fetch once.
+        const slots = [...document.querySelectorAll('.jp-plat[data-lat]')];
+        const boardCache = new Map();
         await Promise.all(slots.map(async slot => {
-            const { lat, lon, time } = slot.dataset;
+            const { lat, lon, time, fmt } = slot.dataset;
             if (!lat || !lon || !time) return;
             try {
-                const data = await fetch(`${CONFIG.DARWIN_API_URL}/api/board?lat=${lat}&lon=${lon}`)
-                    .then(r => r.ok ? r.json() : null);
+                const key = `${lat},${lon}`;
+                if (!boardCache.has(key)) {
+                    boardCache.set(key, fetch(`${CONFIG.DARWIN_API_URL}/api/board?lat=${lat}&lon=${lon}`)
+                        .then(r => r.ok ? r.json() : null).catch(() => null));
+                }
+                const data = await boardCache.get(key);
                 const deps = (data && Array.isArray(data.departures)) ? data.departures : [];
                 const withPlat = deps.filter(d => d.platform && d.platform !== '-' && d.scheduledTime);
                 if (!withPlat.length) return;
@@ -2088,9 +2105,28 @@ class PengeDash {
                     withPlat.sort((a, b) => Math.abs(toMins(a.scheduledTime) - target) - Math.abs(toMins(b.scheduledTime) - target));
                     if (Math.abs(toMins(withPlat[0].scheduledTime) - target) <= 3) match = withPlat[0];
                 }
-                if (match) slot.innerHTML = ` · <b class="tl-plat-badge">Platform ${this.escapeHtml(String(match.platform))}</b>`;
+                if (!match) return;
+                const p = this.escapeHtml(String(match.platform));
+                slot.innerHTML = fmt === 'short'
+                    ? ` · <b class="rc-plat-badge">P${p}</b>`
+                    : ` · <b class="tl-plat-badge">Platform ${p}</b>`;
             } catch (e) { /* leave slot blank on failure */ }
         }));
+    }
+
+    // First Darwin-served rail leg of a journey: where the passenger boards a train
+    // (the station + scheduled time we can resolve a live platform for). null if the
+    // journey has no such leg (e.g. bus/tube only).
+    _boardingLeg(journey) {
+        const DARWIN_MODES = ['national-rail', 'overground', 'elizabeth-line', 'tflrail'];
+        const leg = (journey.legs || []).find(l =>
+            DARWIN_MODES.includes(l.mode?.id) && l.departurePoint &&
+            Number.isFinite(l.departurePoint.lat) && Number.isFinite(l.departurePoint.lon));
+        if (!leg) return null;
+        const dp = leg.departurePoint;
+        const time = leg.departureTime
+            ? new Date(leg.departureTime).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '';
+        return { station: this.cleanStationName(dp.commonName || ''), lat: dp.lat, lon: dp.lon, time };
     }
 
     showJourneyDetail(journey, destination) {
@@ -2132,7 +2168,7 @@ class PengeDash {
                 const dp = leg.departurePoint;
                 const fromName = this.cleanStationName(dp?.commonName || '');
                 if (DARWIN_MODES.includes(mode) && dp && Number.isFinite(dp.lat) && Number.isFinite(dp.lon) && depAt) {
-                    platHolder = `<span class="tl-plat" data-lat="${dp.lat}" data-lon="${dp.lon}" data-time="${this.escapeAttr(depAt)}" data-from="${this.escapeAttr(fromName)}"></span>`;
+                    platHolder = `<span class="jp-plat" data-fmt="long" data-lat="${dp.lat}" data-lon="${dp.lon}" data-time="${this.escapeAttr(depAt)}" data-from="${this.escapeAttr(fromName)}"></span>`;
                 }
             }
             const lineCls = mode === 'walking' ? 'green' : mode === 'bus' ? 'red' : '';
