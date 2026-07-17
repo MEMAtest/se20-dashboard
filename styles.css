@@ -594,6 +594,72 @@ input { font-family: inherit; }
 }
 /* Live platform on a journey-planner rail leg */
 .tl-plat-badge { color: var(--blue); font-weight: 800; }
+
+/* ---- Commute quick-boards ---- */
+.commute-card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    padding: 12px 14px; margin-bottom: 12px;
+}
+.commute-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.commute-title { font-size: 13px; font-weight: 800; color: var(--muted); letter-spacing: 0.02em; }
+.commute-edit { background: none; border: none; color: var(--muted); font-size: 14px; cursor: pointer; padding: 2px 6px; }
+.commute-setup {
+    width: 100%; text-align: left; background: var(--blue-soft); color: var(--blue);
+    border: 1px dashed var(--blue); border-radius: 12px; padding: 11px 13px;
+    font-size: 13.5px; font-weight: 700; cursor: pointer;
+}
+.commute-btns { display: flex; flex-direction: column; gap: 8px; }
+.commute-btn {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    background: var(--card-alt); border: 1px solid var(--line); border-radius: 12px;
+    padding: 11px 13px; cursor: pointer; text-align: left; width: 100%;
+}
+.commute-btn.primary { background: var(--blue-soft); border-color: var(--blue); }
+.commute-btn .cb-route { font-size: 13.5px; font-weight: 700; color: var(--text); }
+.commute-btn .cb-arrow { color: var(--muted); margin: 0 2px; }
+.commute-btn .cb-go { font-size: 12px; font-weight: 700; color: var(--blue); white-space: nowrap; }
+
+/* ---- Pinned-train status strip ---- */
+.pinned-strip {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(var(--bottomnav-h, 64px) + env(safe-area-inset-bottom, 0px) + 8px);
+    width: min(560px, calc(100% - 24px)); z-index: 50;
+    display: flex; align-items: center; gap: 8px;
+    background: var(--card); border: 1px solid var(--line);
+    border-left: 4px solid var(--blue);
+    border-radius: 14px; padding: 8px 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+}
+.pinned-strip.ok { border-left-color: var(--green); }
+.pinned-strip.warn { border-left-color: var(--amber); }
+.pinned-strip.cancelled, .pinned-strip.gone { border-left-color: #e53e3e; }
+.pinned-strip .ps-body {
+    display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0;
+    background: none; border: none; cursor: pointer; text-align: left; padding: 0;
+}
+.pinned-strip .ps-pin { font-size: 15px; flex-shrink: 0; }
+.pinned-strip .ps-main { display: flex; flex-direction: column; min-width: 0; }
+.pinned-strip .ps-dest { font-size: 14px; font-weight: 800; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pinned-strip .ps-sub { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pinned-strip .ps-right { display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
+.pinned-strip .ps-plat {
+    background: var(--blue); color: #fff; font-size: 11px; font-weight: 800;
+    padding: 2px 7px; border-radius: 20px; white-space: nowrap;
+}
+.pinned-strip .ps-status { font-size: 13px; font-weight: 800; color: var(--green); white-space: nowrap; }
+.pinned-strip .ps-status.warn { color: var(--amber); }
+.pinned-strip .ps-status.cancelled, .pinned-strip .ps-status.gone { color: #e53e3e; }
+.pinned-strip .ps-close {
+    background: none; border: none; color: var(--muted); font-size: 15px;
+    cursor: pointer; padding: 2px 6px; flex-shrink: 0;
+}
+/* Pin button on a modal departure row */
+.dep-pin {
+    background: none; border: none; font-size: 15px; cursor: pointer;
+    padding: 4px 6px; margin-left: 4px; align-self: center; opacity: 0.7;
+}
+.dep-pin:hover { opacity: 1; }
+.modal-departure { position: relative; }
 /* Boarding line + compact platform pill on a journey option card */
 .route-board { font-size: 12.5px; color: var(--muted); margin: 6px 0 2px; }
 .route-board b { color: var(--text); font-weight: 700; }

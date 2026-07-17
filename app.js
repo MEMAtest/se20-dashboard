@@ -42,6 +42,8 @@ class PengeDash {
         this.nearbyStations = [];      // dynamic stations (relocated homes)
         this.nearbyBusStops = [];      // dynamic bus stops (relocated homes)
         this.lineStatusData = {};      // {id: {status, reason, disruption, name}}
+        this.workPlace = null;         // {label, postcode, lat, lon} — commute destination
+        this.pinnedTrain = null;       // {lat, lon, name, scheduledTime, dest} — tracked service
         this.init();
     }
 
@@ -51,6 +53,8 @@ class PengeDash {
         this.loadSavedPlaces();
         this.seedDefaultSavedPlace();   // keep SE20 tappable even after GPS relocates
         this.loadFavStations();
+        this.loadWork();                // commute destination (Home ⇄ Work)
+        this.loadPinnedTrain();         // tracked-service strip
         this.loadCachedNearby();
         this.updateHeaderLocation();
 
@@ -75,6 +79,10 @@ class PengeDash {
         this.setupSettings();
         this.renderSavedPlaces();
         this.renderRecents();
+
+        // Commute quick-boards + pinned-train strip (P1)
+        this.renderCommuteCard();
+        this.renderPinnedStrip();
 
         // Station search + favourite stations (Nearby screen)
         this.setupStationSearch();
@@ -613,7 +621,8 @@ class PengeDash {
         if (sub) sub.textContent = 'Next live departures';
         // Remember which stop this modal is showing (for the favourite toggle)
         const station = isBus ? null : (this.nearbyStations || []).concat(this.favStations || []).find(s => s.id === id);
-        this._currentModalStop = { id, name, isBus, modes: (station && station.modes) || [] };
+        this._currentModalStop = { id, name, isBus, modes: (station && station.modes) || [],
+            lat: station ? station.lat : undefined, lon: station ? station.lon : undefined };
         this._updateModalFav();
         const el = document.getElementById('modal-departures');
         const data = isBus ? ((this.busStopData || {})[id] || []) : (this.stationData[id] || []);
@@ -650,6 +659,14 @@ class PengeDash {
                     ? `<span class="plat-badge">Platform ${this.escapeHtml(d.platform)}</span>` : '';
                 const reasonHtml = (d.delayed && d.reason)
                     ? `<span class="delay-reason">Due to ${this.escapeHtml(d.reason)}</span>` : '';
+                // Pin affordance — only for Darwin-served stations (NR/Overground/Elizabeth),
+                // since the strip resolves live status from the Darwin board.
+                const darwinServed = (this._currentModalStop?.modes || [])
+                    .some(m => ['national-rail', 'overground', 'elizabeth-line'].includes(m));
+                const canPin = !isBus && d.scheduledTime && darwinServed
+                    && Number.isFinite(+this._currentModalStop.lat);
+                const pinBtn = canPin
+                    ? `<button class="dep-pin" data-time="${this.escapeAttr(d.scheduledTime)}" data-dest="${this.escapeAttr(d.dest)}" aria-label="Track this train">📌</button>` : '';
                 return `
                 <div class="modal-departure">
                     <div class="modal-departure-info">
@@ -660,8 +677,17 @@ class PengeDash {
                         <span class="modal-departure-time">${d.mins} min</span>
                         ${d.scheduledTime ? `<span class="departure-scheduled">${d.scheduledTime}</span>` : ''}
                     </div>
+                    ${pinBtn}
                 </div>`;
             }).join('');
+            // Wire the pin buttons to track a specific train in the strip.
+            el.querySelectorAll('.dep-pin').forEach(btn => btn.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                const s = this._currentModalStop || {};
+                this.pinTrain({ lat: s.lat, lon: s.lon, name: s.name, stopId: s.id,
+                    dest: btn.dataset.dest, scheduledTime: btn.dataset.time });
+                btn.textContent = '📍';
+            }));
         }
         modal.classList.add('active');
     }
@@ -1088,7 +1114,8 @@ class PengeDash {
         for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
             const preserve = ['pengedash-destinations', 'pengedash-favorite-journeys',
-                'pengedash-home', 'pengedash-saved-places', 'pengedash-fav-stations'];
+                'pengedash-home', 'pengedash-saved-places', 'pengedash-fav-stations',
+                'pengedash-work', 'pengedash-pinned-train'];
             if (key && key.startsWith('pengedash-') && !preserve.includes(key)) {
                 keysToRemove.push(key);
             }
@@ -1180,11 +1207,166 @@ class PengeDash {
         document.getElementById('next-trains-modal').classList.remove('active');
     }
 
+    // ==================== COMMUTE BOARDS (Home ⇄ Work) ====================
+    loadWork() {
+        try { this.workPlace = JSON.parse(localStorage.getItem('pengedash-work')) || null; }
+        catch (e) { this.workPlace = null; }
+    }
+    saveWork(place) {
+        this.workPlace = place;
+        try { localStorage.setItem('pengedash-work', JSON.stringify(place)); } catch (e) { /* ignore */ }
+        this.renderCommuteCard();
+    }
+    _placeShort(label) {
+        return (label || '').replace(/^(Home|Work)\s*\(?/i, '').replace(/\)\s*$/, '').trim() || (label || '');
+    }
+    _commuteDefaultDir() { return new Date().getHours() < 14 ? 'toWork' : 'toHome'; }  // AM → Work, PM → Home
+
+    renderCommuteCard() {
+        const el = document.getElementById('commute-card');
+        if (!el) return;
+        if (!this.workPlace) {
+            el.innerHTML = `
+                <div class="commute-head"><span class="commute-title">🚉 My commute</span></div>
+                <button class="commute-setup" id="commute-set-work">＋ Set work location for one-tap boards</button>`;
+            const b = document.getElementById('commute-set-work');
+            if (b) b.addEventListener('click', () => this.setWorkLocation());
+            return;
+        }
+        const dir = this._commuteDefaultDir();
+        const home = this.home || CONFIG.LOCATION;
+        const homeName = this._placeShort(home.label || 'Home');
+        const workName = this._placeShort(this.workPlace.label || 'Work');
+        el.innerHTML = `
+            <div class="commute-head">
+                <span class="commute-title">🚉 My commute</span>
+                <button class="commute-edit" id="commute-edit-work" aria-label="Change work location">✎</button>
+            </div>
+            <div class="commute-btns">
+                <button class="commute-btn ${dir === 'toWork' ? 'primary' : ''}" data-dir="toWork">
+                    <span class="cb-route">🏠 ${this.escapeHtml(homeName)} <span class="cb-arrow">→</span> 💼 ${this.escapeHtml(workName)}</span>
+                    <span class="cb-go">Routes ›</span>
+                </button>
+                <button class="commute-btn ${dir === 'toHome' ? 'primary' : ''}" data-dir="toHome">
+                    <span class="cb-route">💼 ${this.escapeHtml(workName)} <span class="cb-arrow">→</span> 🏠 ${this.escapeHtml(homeName)}</span>
+                    <span class="cb-go">Routes ›</span>
+                </button>
+            </div>`;
+        el.querySelectorAll('.commute-btn').forEach(b =>
+            b.addEventListener('click', () => this.planCommute(b.dataset.dir)));
+        const edit = document.getElementById('commute-edit-work');
+        if (edit) edit.addEventListener('click', () => this.setWorkLocation());
+    }
+
+    async setWorkLocation() {
+        const input = prompt('Your work postcode or station (e.g. "EC2M 7PY" or "Liverpool Street"):');
+        if (!input || !input.trim()) return;
+        try {
+            const geo = await this.geocodePostcode(input.trim());
+            const short = (geo.label || '').replace(/^Home\s*\(?/, '').replace(/\)\s*$/, '') || input.trim();
+            this.saveWork({ label: `Work (${short})`, postcode: geo.postcode, lat: geo.lat, lon: geo.lon });
+        } catch (e) {
+            alert('Could not find that location. Try a postcode or a station name.');
+        }
+    }
+
+    planCommute(dir) {
+        if (!this.workPlace) { this.setWorkLocation(); return; }
+        const home = this.home || CONFIG.LOCATION;
+        if (dir === 'toHome') {
+            this.planJourney(this._placeShort(home.label || 'Home') || 'Home', { originPlace: this.workPlace, destPlace: home });
+        } else {
+            this.planJourney(this._placeShort(this.workPlace.label) || 'Work', { originPlace: home, destPlace: this.workPlace });
+        }
+    }
+
+    // ==================== PINNED TRAIN STRIP ====================
+    loadPinnedTrain() {
+        try { this.pinnedTrain = JSON.parse(localStorage.getItem('pengedash-pinned-train')) || null; }
+        catch (e) { this.pinnedTrain = null; }
+    }
+    savePinnedTrain() {
+        try {
+            if (this.pinnedTrain) localStorage.setItem('pengedash-pinned-train', JSON.stringify(this.pinnedTrain));
+            else localStorage.removeItem('pengedash-pinned-train');
+        } catch (e) { /* ignore */ }
+    }
+    pinTrain(train) {
+        // train: {lat, lon, name, stopId, dest, scheduledTime}
+        if (!train || !Number.isFinite(+train.lat) || !Number.isFinite(+train.lon)) return;
+        this.pinnedTrain = { ...train, live: null, pinnedAt: Date.now() };
+        this.savePinnedTrain();
+        this.renderPinnedStrip();
+        this.updatePinnedTrain();
+    }
+    unpinTrain() {
+        this.pinnedTrain = null;
+        this.savePinnedTrain();
+        this.renderPinnedStrip();
+    }
+    async updatePinnedTrain() {
+        const p = this.pinnedTrain;
+        if (!p || !Number.isFinite(+p.lat) || !Number.isFinite(+p.lon)) return;
+        try {
+            const data = await fetch(`${CONFIG.DARWIN_API_URL}/api/board?lat=${p.lat}&lon=${p.lon}`)
+                .then(r => r.ok ? r.json() : null);
+            const deps = (data && Array.isArray(data.departures)) ? data.departures : [];
+            // Match by scheduled time, preferring the same destination.
+            let match = deps.find(d => d.scheduledTime === p.scheduledTime && (!p.dest || d.destination === p.dest))
+                || deps.find(d => d.scheduledTime === p.scheduledTime);
+            if (match) {
+                p.live = {
+                    mins: match.mins, platform: match.platform, cancelled: match.cancelled,
+                    delayed: match.delayed, reason: match.reason, dest: match.destination || p.dest
+                };
+            } else if (p.live) {
+                p.live.stale = true; // train left the board — keep last known, mark stale
+            }
+            p.lastChecked = Date.now();
+            this.renderPinnedStrip();
+        } catch (e) { /* keep last known */ }
+    }
+    renderPinnedStrip() {
+        const el = document.getElementById('pinned-strip');
+        if (!el) return;
+        const p = this.pinnedTrain;
+        if (!p) { el.style.display = 'none'; el.innerHTML = ''; return; }
+        const live = p.live || {};
+        const dest = live.dest || p.dest || 'Train';
+        let status, cls = '';
+        if (live.cancelled) { status = 'Cancelled'; cls = 'cancelled'; }
+        else if (live.mins != null && live.mins <= -2) { status = 'Departed'; cls = 'gone'; }
+        else if (live.mins != null) {
+            status = (live.mins <= 0 ? 'Due' : `${live.mins} min`) + (live.delayed ? ' · delayed' : '');
+            cls = live.delayed ? 'warn' : 'ok';
+        } else { status = 'Checking…'; }
+        const plat = (live.platform && live.platform !== '-')
+            ? `<span class="ps-plat">Plat ${this.escapeHtml(String(live.platform))}</span>` : '';
+        el.style.display = 'flex';
+        el.className = `pinned-strip ${cls}`;
+        el.innerHTML = `
+            <button class="ps-body" id="ps-open">
+                <span class="ps-pin">📌</span>
+                <span class="ps-main">
+                    <span class="ps-dest">${this.escapeHtml(dest)}</span>
+                    <span class="ps-sub">${this.escapeHtml(p.scheduledTime || '')}${p.name ? ' · ' + this.escapeHtml(this._placeShort(p.name)) : ''}</span>
+                </span>
+            </button>
+            <span class="ps-right">${plat}<span class="ps-status ${cls}">${status}</span></span>
+            <button class="ps-close" id="ps-unpin" aria-label="Unpin train">✕</button>`;
+        const open = document.getElementById('ps-open');
+        if (open && p.stopId) open.addEventListener('click', () => this.openStopModal(p.stopId, p.name, false));
+        const close = document.getElementById('ps-unpin');
+        if (close) close.addEventListener('click', () => this.unpinTrain());
+    }
+
     setupAutoRefresh() {
         setInterval(() => this.fetchWeather(), CONFIG.REFRESH_INTERVALS.weather);
         setInterval(() => this.fetchActiveTransit(), CONFIG.REFRESH_INTERVALS.trains);
         setInterval(() => this.fetchLineStatus(), CONFIG.REFRESH_INTERVALS.trains);
         setInterval(() => this.fetchTrafficDisruptions(), CONFIG.REFRESH_INTERVALS.traffic);
+        setInterval(() => this.updatePinnedTrain(), CONFIG.REFRESH_INTERVALS.trains);
+        this.updatePinnedTrain();
     }
 
     // ==================== DARWIN KEEP-ALIVE ====================
@@ -1859,10 +2041,12 @@ class PengeDash {
         return url;
     }
 
-    async planJourney(destination) {
+    async planJourney(destination, opts = {}) {
         const resultsContainer = document.getElementById('journey-results');
         const updateTime = document.getElementById('journey-updated');
         this._hasSearched = true;
+        // Remember an explicit origin label (e.g. "Work") for the detail header.
+        this._activeOriginLabel = opts.originPlace ? opts.originPlace.label : null;
         this.showScreen('plan');
 
         // Show loading state
@@ -1873,7 +2057,11 @@ class PengeDash {
         try {
             // Determine origin based on mode
             let from;
-            if (this.journeyOrigin === 'here' && this.currentLocation) {
+            if (opts.originPlace) {
+                // Explicit origin (commute boards): use its postcode or coordinates.
+                const o = opts.originPlace;
+                from = o.postcode ? o.postcode.replace(/\s/g, '') : `${o.lat},${o.lon}`;
+            } else if (this.journeyOrigin === 'here' && this.currentLocation) {
                 // Use current GPS coordinates
                 from = `${this.currentLocation.lat},${this.currentLocation.lon}`;
             } else if (this.journeyOrigin === 'here' && !this.currentLocation) {
@@ -1894,7 +2082,11 @@ class PengeDash {
                     ? home.postcode.replace(/\s/g, '')
                     : `${home.lat},${home.lon}`;
             }
-            const to = encodeURIComponent(destination);
+            // Explicit destination place (commute boards) → use coords/postcode, which
+            // TfL resolves without disambiguation. Otherwise resolve the typed string.
+            const to = opts.destPlace
+                ? (opts.destPlace.postcode ? opts.destPlace.postcode.replace(/\s/g, '') : `${opts.destPlace.lat},${opts.destPlace.lon}`)
+                : encodeURIComponent(destination);
 
             let url = `https://api.tfl.gov.uk/Journey/JourneyResults/${from}/to/${to}`;
             if (CONFIG.TFL_APP_KEY) {
@@ -2134,7 +2326,7 @@ class PengeDash {
         if (!content) return;
         this.drawJourneyRoute(journey, false);
 
-        const fromLabel = this.journeyOrigin === 'here' ? 'Here' : (this.home.label || 'Home');
+        const fromLabel = this._activeOriginLabel || (this.journeyOrigin === 'here' ? 'Here' : (this.home.label || 'Home'));
         const dep = new Date(journey.startDateTime);
         const arr = new Date(journey.arrivalDateTime);
         const arrStr = arr.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
