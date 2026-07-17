@@ -2065,6 +2065,34 @@ class PengeDash {
         return `<span class="roundel ${cls}"></span>`;
     }
 
+    // Warm each rail leg's origin station on the Darwin backend and fill in the
+    // platform number, matched by scheduled departure time. Runs after the journey
+    // card renders so it never blocks the UI. Leaves the slot blank if the backend
+    // has no live board for that station yet (it warms on first request).
+    async _enrichJourneyPlatforms() {
+        const toMins = t => { const [h, m] = String(t).split(':').map(Number); return h * 60 + m; };
+        const slots = [...document.querySelectorAll('.tl-plat[data-lat]')];
+        await Promise.all(slots.map(async slot => {
+            const { lat, lon, time } = slot.dataset;
+            if (!lat || !lon || !time) return;
+            try {
+                const data = await fetch(`${CONFIG.DARWIN_API_URL}/api/board?lat=${lat}&lon=${lon}`)
+                    .then(r => r.ok ? r.json() : null);
+                const deps = (data && Array.isArray(data.departures)) ? data.departures : [];
+                const withPlat = deps.filter(d => d.platform && d.platform !== '-' && d.scheduledTime);
+                if (!withPlat.length) return;
+                // Exact scheduled-time match first, else the closest within 3 minutes.
+                let match = withPlat.find(d => d.scheduledTime === time);
+                if (!match) {
+                    const target = toMins(time);
+                    withPlat.sort((a, b) => Math.abs(toMins(a.scheduledTime) - target) - Math.abs(toMins(b.scheduledTime) - target));
+                    if (Math.abs(toMins(withPlat[0].scheduledTime) - target) <= 3) match = withPlat[0];
+                }
+                if (match) slot.innerHTML = ` · <b class="tl-plat-badge">Platform ${this.escapeHtml(String(match.platform))}</b>`;
+            } catch (e) { /* leave slot blank on failure */ }
+        }));
+    }
+
     showJourneyDetail(journey, destination) {
         const content = document.getElementById('journey-detail-content');
         if (!content) return;
@@ -2080,6 +2108,8 @@ class PengeDash {
         const walkTotal = legs.filter(l => l.mode?.id === 'walking').reduce((s, l) => s + (l.duration || 0), 0);
 
         // Timeline steps
+        // Darwin serves live platform numbers for these National-Rail-family modes.
+        const DARWIN_MODES = ['national-rail', 'overground', 'elizabeth-line', 'tflrail'];
         const steps = legs.map((leg, i) => {
             const mode = leg.mode?.id || 'walking';
             const dur = leg.duration || 0;
@@ -2087,7 +2117,7 @@ class PengeDash {
             const icon = mode === 'walking' ? '🚶' : mode === 'bus' ? '🚌' : this._modeEmoji(this._legMode(mode));
             const lineName = leg.routeOptions?.[0]?.name || '';
             const toName = this.cleanStationName(leg.arrivalPoint?.commonName || (i === legs.length - 1 ? destination : 'next stop'));
-            let title, sub;
+            let title, sub, platHolder = '';
             if (mode === 'walking') {
                 title = `Walk to ${this.escapeHtml(toName)}`;
                 sub = `${dur} min${leg.distance ? ' · ' + (leg.distance >= 1000 ? (leg.distance / 1000).toFixed(1) + ' km' : Math.round(leg.distance) + ' m') : ''}`;
@@ -2096,6 +2126,14 @@ class PengeDash {
                 title = `${verb} to ${this.escapeHtml(toName)}`;
                 const depAt = leg.departureTime ? new Date(leg.departureTime).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '';
                 sub = `${dur} min${depAt ? ' · departs ' + depAt : ''}`;
+                // Async platform slot: filled by _enrichJourneyPlatforms() after render,
+                // by warming the leg's origin station on the Darwin backend and matching
+                // the departure by scheduled time.
+                const dp = leg.departurePoint;
+                const fromName = this.cleanStationName(dp?.commonName || '');
+                if (DARWIN_MODES.includes(mode) && dp && Number.isFinite(dp.lat) && Number.isFinite(dp.lon) && depAt) {
+                    platHolder = `<span class="tl-plat" data-lat="${dp.lat}" data-lon="${dp.lon}" data-time="${this.escapeAttr(depAt)}" data-from="${this.escapeAttr(fromName)}"></span>`;
+                }
             }
             const lineCls = mode === 'walking' ? 'green' : mode === 'bus' ? 'red' : '';
             return `
@@ -2106,7 +2144,7 @@ class PengeDash {
                     </div>
                     <div class="tl-card">
                         <div class="tl-card-title">${title}</div>
-                        <div class="tl-card-sub">${sub}</div>
+                        <div class="tl-card-sub">${sub}${platHolder}</div>
                     </div>
                 </div>`;
         }).join('');
@@ -2145,6 +2183,9 @@ class PengeDash {
             this.saveFavouriteJourney(destination);
             saveBtn.textContent = '✓ Saved';
         });
+
+        // Fill in live platform numbers for rail legs (async, non-blocking).
+        this._enrichJourneyPlatforms();
 
         this.showScreen('journey');
     }
