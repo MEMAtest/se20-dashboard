@@ -653,6 +653,25 @@ input { font-family: inherit; }
     background: none; border: none; color: var(--muted); font-size: 15px;
     cursor: pointer; padding: 2px 6px; flex-shrink: 0;
 }
+/* Calling points (does this train stop at X?) */
+.call-toggle {
+    background: none; border: none; color: var(--blue); font-size: 11.5px; font-weight: 700;
+    cursor: pointer; padding: 2px 0; margin-top: 3px; display: block; text-align: left;
+}
+.calling-points { padding: 4px 2px 8px; }
+.cp-loading { font-size: 12px; color: var(--muted); font-style: italic; }
+.cp-list { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; }
+.cp-stop { font-size: 12px; color: var(--text); font-weight: 600; }
+.cp-stop.cancelled { text-decoration: line-through; color: var(--muted); }
+.cp-time { color: var(--muted); font-weight: 500; font-size: 11px; }
+.cp-arrow { color: var(--muted); font-size: 11px; }
+
+/* Crowding pill on the Nearby list */
+.ni-tag.crowd { font-weight: 700; }
+.ni-tag.crowd.quiet { background: var(--green-soft); color: var(--green); }
+.ni-tag.crowd.moderate { background: var(--amber-soft); color: var(--amber); }
+.ni-tag.crowd.busy { background: #fdecec; color: #e53e3e; }
+
 /* Pin button on a modal departure row */
 .dep-pin {
     background: none; border: none; font-size: 15px; cursor: pointer;

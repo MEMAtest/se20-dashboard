@@ -44,6 +44,8 @@ class PengeDash {
         this.lineStatusData = {};      // {id: {status, reason, disruption, name}}
         this.workPlace = null;         // {label, postcode, lat, lon} — commute destination
         this.pinnedTrain = null;       // {lat, lon, name, scheduledTime, dest} — tracked service
+        this.crowdingData = {};        // {stationId: {level, pct}} — TfL live station busyness
+        this._crowdingAt = 0;          // last crowding fetch (5-min cache)
         this.init();
     }
 
@@ -537,6 +539,11 @@ class PengeDash {
             const tagList = (st.modes || []).slice(0, 2)
                 .map(m => `<span class="ni-tag line">${this.escapeHtml(modeName[m] || m)}</span>`);
             if (!live) tagList.push('<span class="ni-tag">No live times</span>');
+            const cr = this.crowdingData[st.id];
+            if (cr) {
+                const label = cr.level === 'quiet' ? '🟢 Quiet' : cr.level === 'busy' ? '🔴 Busy' : '🟡 Moderate';
+                tagList.push(`<span class="ni-tag crowd ${cr.level}">${label}</span>`);
+            }
             const tags = tagList.join('');
             // Inline next departures (live TfL modes only)
             let nextHtml = '';
@@ -614,6 +621,41 @@ class PengeDash {
             el.addEventListener('click', () => this.openStopModal(el.dataset.id, el.dataset.name, el.dataset.bus === '1')));
     }
 
+    // Expand/collapse a departure's calling pattern (lazy-fetched from /api/service).
+    async _toggleCallingPoints(btn) {
+        const wrap = btn.closest('.md-wrap');
+        if (!wrap) return;
+        const box = wrap.querySelector('.calling-points');
+        if (box.style.display !== 'none' && box.dataset.loaded) {
+            box.style.display = 'none'; btn.textContent = 'Calling at ›'; return;
+        }
+        btn.textContent = 'Calling at ⌄';
+        box.style.display = 'block';
+        if (box.dataset.loaded) return;
+        box.innerHTML = '<span class="cp-loading">Loading stops…</span>';
+        try {
+            const data = await fetch(`${CONFIG.DARWIN_API_URL}/api/service?rid=${encodeURIComponent(btn.dataset.rid)}`)
+                .then(r => r.ok ? r.json() : null);
+            box.dataset.loaded = '1';
+            box.innerHTML = this._renderCallingPoints((data && data.callingPoints) || [], this._currentModalStop && this._currentModalStop.name);
+        } catch (e) {
+            box.innerHTML = '<span class="cp-loading">Couldn\'t load the calling pattern.</span>';
+        }
+    }
+
+    _renderCallingPoints(pts, currentName) {
+        if (!pts.length) return '<span class="cp-loading">Calling pattern not available yet.</span>';
+        // Show only the onward stops from the current station.
+        const cur = this.normaliseName ? this.normaliseName(currentName || '') : (currentName || '').toLowerCase();
+        const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        const idx = pts.findIndex(p => { const n = norm(p.name); return n && (n.includes(norm(currentName)) || norm(currentName).includes(n)); });
+        const onward = idx >= 0 ? pts.slice(idx + 1) : pts;
+        if (!onward.length) return '<span class="cp-loading">Terminates here.</span>';
+        return '<div class="cp-list">' + onward.map(p =>
+            `<span class="cp-stop${p.cancelled ? ' cancelled' : ''}">${this.escapeHtml(this.cleanStationName(p.name))}${p.time ? ` <span class="cp-time">${this.escapeHtml(p.time)}</span>` : ''}</span>`
+        ).join('<span class="cp-arrow">›</span>') + '</div>';
+    }
+
     openStopModal(id, name, isBus = false) {
         const modal = document.getElementById('next-trains-modal');
         document.getElementById('modal-station-name').textContent = name || 'Departures';
@@ -667,17 +709,23 @@ class PengeDash {
                     && Number.isFinite(+this._currentModalStop.lat);
                 const pinBtn = canPin
                     ? `<button class="dep-pin" data-time="${this.escapeAttr(d.scheduledTime)}" data-dest="${this.escapeAttr(d.dest)}" aria-label="Track this train">📌</button>` : '';
+                // "Calling at ›" toggle for Darwin services (needs a rid to look up the pattern).
+                const callBtn = (d.rid && darwinServed)
+                    ? `<button class="call-toggle" data-rid="${this.escapeAttr(d.rid)}">Calling at ›</button>` : '';
                 return `
-                <div class="modal-departure">
-                    <div class="modal-departure-info">
-                        <span class="modal-departure-dest">${isBus && d.line ? this.escapeHtml(d.line) + ' · ' : ''}${this.escapeHtml(d.dest)}</span>
-                        ${platHtml}${reasonHtml}
+                <div class="md-wrap">
+                    <div class="modal-departure">
+                        <div class="modal-departure-info">
+                            <span class="modal-departure-dest">${isBus && d.line ? this.escapeHtml(d.line) + ' · ' : ''}${this.escapeHtml(d.dest)}</span>
+                            ${platHtml}${reasonHtml}${callBtn}
+                        </div>
+                        <div class="modal-departure-time-col">
+                            <span class="modal-departure-time">${d.mins} min</span>
+                            ${d.scheduledTime ? `<span class="departure-scheduled">${d.scheduledTime}</span>` : ''}
+                        </div>
+                        ${pinBtn}
                     </div>
-                    <div class="modal-departure-time-col">
-                        <span class="modal-departure-time">${d.mins} min</span>
-                        ${d.scheduledTime ? `<span class="departure-scheduled">${d.scheduledTime}</span>` : ''}
-                    </div>
-                    ${pinBtn}
+                    <div class="calling-points" style="display:none;"></div>
                 </div>`;
             }).join('');
             // Wire the pin buttons to track a specific train in the strip.
@@ -687,6 +735,11 @@ class PengeDash {
                 this.pinTrain({ lat: s.lat, lon: s.lon, name: s.name, stopId: s.id,
                     dest: btn.dataset.dest, scheduledTime: btn.dataset.time });
                 btn.textContent = '📍';
+            }));
+            // Wire the calling-points toggles (lazy-fetch the pattern on first open).
+            el.querySelectorAll('.call-toggle').forEach(btn => btn.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                this._toggleCallingPoints(btn);
             }));
         }
         modal.classList.add('active');
@@ -930,6 +983,9 @@ class PengeDash {
         // above where it has platform-bearing departures.
         await this.fetchNationalRailBoards();
 
+        // Live Tube-station busyness (cached 5 min, non-blocking).
+        this.fetchCrowding();
+
         // Bus arrivals
         await Promise.all((this.nearbyBusStops || []).map(async (stop) => {
             try {
@@ -975,6 +1031,27 @@ class PengeDash {
         });
     }
 
+    // TfL live station busyness (percentageOfBaseline) for nearby Tube stations.
+    // Cached 5 min. Renders a Quiet / Moderate / Busy pill on the Nearby list.
+    async fetchCrowding() {
+        if (Date.now() - (this._crowdingAt || 0) < 5 * 60 * 1000) return;
+        const tube = (this.nearbyStations || []).filter(st => (st.modes || []).includes('tube') && st.id);
+        if (!tube.length) return;
+        this._crowdingAt = Date.now();
+        const auth = CONFIG.TFL_APP_KEY ? `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+        await Promise.all(tube.map(async st => {
+            try {
+                const d = await fetch(`https://api.tfl.gov.uk/crowding/${encodeURIComponent(st.id)}/Live${auth}`)
+                    .then(r => r.ok ? r.json() : null);
+                if (d && d.dataAvailable && typeof d.percentageOfBaseline === 'number') {
+                    const p = d.percentageOfBaseline;
+                    this.crowdingData[st.id] = { level: p < 0.6 ? 'quiet' : (p <= 1.0 ? 'moderate' : 'busy'), pct: p };
+                }
+            } catch (e) { /* skip this station */ }
+        }));
+        this.renderNearbyNow();
+    }
+
     // Live National Rail departures + platforms from the Darwin backend, for every
     // nearby national-rail station (nationwide — the backend resolves the station
     // from its coordinates). Overlays any TfL data with the platform-bearing board.
@@ -998,7 +1075,8 @@ class PengeDash {
                         scheduledTime: d.scheduledTime || '',
                         cancelled: d.cancelled || false,
                         delayed: d.delayed || false,
-                        reason: d.reason || null
+                        reason: d.reason || null,
+                        rid: d.rid || null
                     }))
                     // Drop rows with no resolved destination and self-referential rows
                     .filter(d => d.dest && d.dest.toLowerCase() !== selfName)
@@ -1791,6 +1869,7 @@ class PengeDash {
         this.journeyModes = null;      // null = all modes
         this.journeyPref = '';         // '' | leastwalking | leastinterchange
         this.journeyStepFree = false;
+        try { this.journeyStepFree = localStorage.getItem('pengedash-stepfree') === '1'; } catch (e) { /* ignore */ }
         this.currentLocation = null;
         this.fetchingLocation = false;
         this._hasSearched = false;
@@ -1831,6 +1910,7 @@ class PengeDash {
                 if (pill.dataset.stepfree) {
                     this.journeyStepFree = !this.journeyStepFree;
                     pill.classList.toggle('active', this.journeyStepFree);
+                    try { localStorage.setItem('pengedash-stepfree', this.journeyStepFree ? '1' : '0'); } catch (e) { /* ignore */ }
                 } else {
                     document.querySelectorAll('#journey-pref-row .pill:not([data-stepfree])').forEach(p => p.classList.remove('active'));
                     pill.classList.add('active');
@@ -1839,6 +1919,8 @@ class PengeDash {
                 this._replanIfActive();
             });
         });
+        // Reflect the persisted step-free preference in the pill on load.
+        if (this.journeyStepFree) document.querySelector('#journey-pref-row .pill[data-stepfree]')?.classList.add('active');
 
         // Mode pills
         document.querySelectorAll('#journey-mode-row .pill').forEach(pill => {
