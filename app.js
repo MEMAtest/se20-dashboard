@@ -1419,6 +1419,7 @@ class PengeDash {
         try {
             const data = await fetch(`${CONFIG.DARWIN_API_URL}/api/board?lat=${p.lat}&lon=${p.lon}`)
                 .then(r => r.ok ? r.json() : null);
+            if (data && data.station && data.station.crs) p.crs = data.station.crs;  // needed for push alerts
             const deps = (data && Array.isArray(data.departures)) ? data.departures : [];
             // Match by stable service id (rid) first; fall back to scheduled time +
             // destination for older pins saved before rid was stored.
@@ -1437,6 +1438,65 @@ class PengeDash {
             this.renderPinnedStrip();
         } catch (e) { /* keep last known */ }
     }
+    // ---- Push alerts for the pinned train (platform change / cancellation) ----
+    _vapidToBytes(base64) {
+        const pad = '='.repeat((4 - base64.length % 4) % 4);
+        const b64 = (base64 + pad).replace(/-/g, '+').replace(/_/g, '/');
+        const raw = atob(b64);
+        return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+    }
+
+    async toggleTrainAlerts() {
+        const p = this.pinnedTrain;
+        if (!p) return;
+        if (p.alertOn) return this.unsubscribeTrainAlerts();
+        return this.subscribeTrainAlerts();
+    }
+
+    async subscribeTrainAlerts() {
+        const p = this.pinnedTrain;
+        if (!p) return;
+        if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+            this._toast('Alerts aren’t supported on this device.'); return;
+        }
+        if (!p.rid || !p.crs) { this._toast('Waiting for live train info — try again in a moment.'); return; }
+        try {
+            const perm = await Notification.requestPermission();
+            if (perm !== 'granted') { this._toast('Turn on notifications to get platform alerts.'); return; }
+            const meta = await fetch(`${CONFIG.DARWIN_API_URL}/api/push/vapid`).then(r => r.json());
+            if (!meta || !meta.enabled || !meta.publicKey) { this._toast('Alerts aren’t available yet.'); return; }
+            const reg = await navigator.serviceWorker.ready;
+            const sub = await reg.pushManager.getSubscription()
+                || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: this._vapidToBytes(meta.publicKey) });
+            const res = await fetch(`${CONFIG.DARWIN_API_URL}/api/push/subscribe`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    subscription: sub, rid: p.rid, crs: p.crs, dest: p.dest,
+                    scheduledTime: p.scheduledTime, platform: (p.live && p.live.platform) || '-'
+                })
+            });
+            if (!res.ok) { this._toast('Couldn’t enable alerts.'); return; }
+            p.alertOn = true; p.pushEndpoint = sub.endpoint;
+            this.savePinnedTrain(); this.renderPinnedStrip();
+            this._toast('🔔 You’ll be alerted about the platform for this train.');
+        } catch (e) { this._toast('Couldn’t enable alerts.'); }
+    }
+
+    async unsubscribeTrainAlerts() {
+        const p = this.pinnedTrain;
+        try {
+            const reg = await navigator.serviceWorker.ready;
+            const sub = await reg.pushManager.getSubscription();
+            // Only tell the server to stop tracking; keep the browser subscription so
+            // re-enabling (or pinning another train) reuses it.
+            if (sub) await fetch(`${CONFIG.DARWIN_API_URL}/api/push/unsubscribe`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ endpoint: sub.endpoint })
+            });
+        } catch (e) { /* ignore */ }
+        if (p) { p.alertOn = false; this.savePinnedTrain(); this.renderPinnedStrip(); }
+    }
+
     renderPinnedStrip() {
         const el = document.getElementById('pinned-strip');
         if (!el) return;
@@ -1454,6 +1514,9 @@ class PengeDash {
         } else { status = 'Checking…'; }
         const plat = (live.platform && live.platform !== '-')
             ? `<span class="ps-plat">Plat ${this.escapeHtml(String(live.platform))}</span>` : '';
+        const pushOk = ('serviceWorker' in navigator) && ('PushManager' in window);
+        const bell = pushOk
+            ? `<button class="ps-bell ${p.alertOn ? 'on' : ''}" id="ps-bell" aria-label="${p.alertOn ? 'Alerts on' : 'Alert me about the platform'}">${p.alertOn ? '🔔' : '🔕'}</button>` : '';
         el.style.display = 'flex';
         el.className = `pinned-strip ${cls}`;
         el.innerHTML = `
@@ -1465,9 +1528,12 @@ class PengeDash {
                 </span>
             </button>
             <span class="ps-right">${plat}<span class="ps-status ${cls}">${status}</span></span>
+            ${bell}
             <button class="ps-close" id="ps-unpin" aria-label="Unpin train">✕</button>`;
         const open = document.getElementById('ps-open');
         if (open && p.stopId) open.addEventListener('click', () => this.openStopModal(p.stopId, p.name, false));
+        const bellBtn = document.getElementById('ps-bell');
+        if (bellBtn) bellBtn.addEventListener('click', () => this.toggleTrainAlerts());
         const close = document.getElementById('ps-unpin');
         if (close) close.addEventListener('click', () => this.unpinTrain());
     }
