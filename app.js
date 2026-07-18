@@ -286,7 +286,9 @@ class PengeDash {
             return {
                 lat: match.lat,
                 lon: match.lon,
-                postcode: clean.toUpperCase(),
+                // Not a real postcode (place-name lookup) — leave null so journey
+                // planning uses the coordinates instead of a bogus "LIVERPOOL STREET".
+                postcode: null,
                 label: `Home (${match.name})`
             };
         }
@@ -412,6 +414,8 @@ class PengeDash {
         this.stationData = {};        // clear previous location's departures
         this.busStopData = {};
         this.liveDepartures = [];
+        this.crowdingData = {};       // stale for the old area; re-fetch for the new one
+        this._crowdingAt = 0;
         if (opts.persist !== false) this.saveHome();
         this.cacheData('nearby-cache', { home: home.postcode, sig: this._coordSig(home.lat, home.lon), stations: nearby.stations, busStops: nearby.busStops });
 
@@ -656,9 +660,11 @@ class PengeDash {
     _renderCallingPoints(pts, currentName) {
         if (!pts.length) return '<span class="cp-loading">Calling pattern not available yet.</span>';
         // Show only the onward stops from the current station.
-        const cur = this.normaliseName ? this.normaliseName(currentName || '') : (currentName || '').toLowerCase();
         const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-        const idx = pts.findIndex(p => { const n = norm(p.name); return n && (n.includes(norm(currentName)) || norm(currentName).includes(n)); });
+        const cur = norm(currentName);
+        // Only try to locate the current station when we actually have its name —
+        // an empty cur would substring-match the first stop and drop it.
+        const idx = cur ? pts.findIndex(p => { const n = norm(p.name); return n && (n.includes(cur) || cur.includes(n)); }) : -1;
         const onward = idx >= 0 ? pts.slice(idx + 1) : pts;
         if (!onward.length) return '<span class="cp-loading">Terminates here.</span>';
         return '<div class="cp-list">' + onward.map(p =>
@@ -673,8 +679,15 @@ class PengeDash {
         if (sub) sub.textContent = 'Next live departures';
         // Remember which stop this modal is showing (for the favourite toggle)
         const station = isBus ? null : (this.nearbyStations || []).concat(this.favStations || []).find(s => s.id === id);
-        this._currentModalStop = { id, name, isBus, modes: (station && station.modes) || [],
-            lat: station ? station.lat : undefined, lon: station ? station.lon : undefined };
+        // Preserve caller-provided meta (e.g. from the search path) when the station
+        // isn't in the nearby/favourite lists, so modes/coords aren't lost.
+        const prev = (this._currentModalStop && this._currentModalStop.id === id) ? this._currentModalStop : null;
+        this._currentModalStop = {
+            id, name, isBus,
+            modes: (station && station.modes) || (prev && prev.modes) || [],
+            lat: station ? station.lat : (prev ? prev.lat : undefined),
+            lon: station ? station.lon : (prev ? prev.lon : undefined)
+        };
         this._updateModalFav();
         const el = document.getElementById('modal-departures');
         const data = isBus ? ((this.busStopData || {})[id] || []) : (this.stationData[id] || []);
@@ -723,7 +736,7 @@ class PengeDash {
                 const canPin = !isBus && d.scheduledTime && darwinServed
                     && Number.isFinite(+this._currentModalStop.lat);
                 const pinBtn = canPin
-                    ? `<button class="dep-pin" data-time="${this.escapeAttr(d.scheduledTime)}" data-dest="${this.escapeAttr(d.dest)}" aria-label="Track this train">📌</button>` : '';
+                    ? `<button class="dep-pin" data-time="${this.escapeAttr(d.scheduledTime)}" data-dest="${this.escapeAttr(d.dest)}" data-rid="${this.escapeAttr(d.rid || '')}" aria-label="Track this train">📌</button>` : '';
                 // "Calling at ›" toggle for Darwin services (needs a rid to look up the pattern).
                 const callBtn = (d.rid && darwinServed)
                     ? `<button class="call-toggle" data-rid="${this.escapeAttr(d.rid)}">Calling at ›</button>` : '';
@@ -748,7 +761,7 @@ class PengeDash {
                 ev.stopPropagation();
                 const s = this._currentModalStop || {};
                 this.pinTrain({ lat: s.lat, lon: s.lon, name: s.name, stopId: s.id,
-                    dest: btn.dataset.dest, scheduledTime: btn.dataset.time });
+                    dest: btn.dataset.dest, scheduledTime: btn.dataset.time, rid: btn.dataset.rid || null });
                 btn.textContent = '📍';
             }));
             // Wire the calling-points toggles (lazy-fetch the pattern on first open).
@@ -782,7 +795,7 @@ class PengeDash {
         if (this.isFavStation(stop.id)) {
             this.favStations = this.favStations.filter(s => s.id !== stop.id);
         } else {
-            this.favStations.unshift({ id: stop.id, name: stop.name, modes: stop.modes || [], isBus: !!stop.isBus });
+            this.favStations.unshift({ id: stop.id, name: stop.name, modes: stop.modes || [], isBus: !!stop.isBus, lat: stop.lat, lon: stop.lon });
             this.favStations = this.favStations.slice(0, 8);
         }
         this.saveFavStations();
@@ -1101,7 +1114,8 @@ class PengeDash {
                 if (deps.length) {
                     // Overlay TfL: the Darwin board carries real platform numbers
                     st.platformDirections = this.getPlatformDirections(deps);
-                    st.nextDepartures = deps.slice(0, 3);
+                    // Inline preview shows running trains only (the modal handles cancelled).
+                    st.nextDepartures = deps.filter(d => !d.cancelled).slice(0, 3);
                     this.stationData[st.id] = deps;
                 }
             } catch (e) { /* skip */ }
@@ -1210,7 +1224,7 @@ class PengeDash {
             const key = localStorage.key(i);
             const preserve = ['pengedash-destinations', 'pengedash-favorite-journeys',
                 'pengedash-home', 'pengedash-saved-places', 'pengedash-fav-stations',
-                'pengedash-work', 'pengedash-pinned-train'];
+                'pengedash-work', 'pengedash-pinned-train', 'pengedash-stepfree'];
             if (key && key.startsWith('pengedash-') && !preserve.includes(key)) {
                 keysToRemove.push(key);
             }
@@ -1358,7 +1372,7 @@ class PengeDash {
         if (!input || !input.trim()) return;
         try {
             const geo = await this.geocodePostcode(input.trim());
-            const short = (geo.label || '').replace(/^Home\s*\(?/, '').replace(/\)\s*$/, '') || input.trim();
+            const short = this._placeShort(geo.label) || input.trim();
             this.saveWork({ label: `Work (${short})`, postcode: geo.postcode, lat: geo.lat, lon: geo.lon });
         } catch (e) {
             alert('Could not find that location. Try a postcode or a station name.');
@@ -1406,13 +1420,15 @@ class PengeDash {
             const data = await fetch(`${CONFIG.DARWIN_API_URL}/api/board?lat=${p.lat}&lon=${p.lon}`)
                 .then(r => r.ok ? r.json() : null);
             const deps = (data && Array.isArray(data.departures)) ? data.departures : [];
-            // Match by scheduled time, preferring the same destination.
-            let match = deps.find(d => d.scheduledTime === p.scheduledTime && (!p.dest || d.destination === p.dest))
+            // Match by stable service id (rid) first; fall back to scheduled time +
+            // destination for older pins saved before rid was stored.
+            let match = (p.rid && deps.find(d => d.rid === p.rid))
+                || deps.find(d => d.scheduledTime === p.scheduledTime && (!p.dest || d.destination === p.dest))
                 || deps.find(d => d.scheduledTime === p.scheduledTime);
             if (match) {
                 p.live = {
                     mins: match.mins, platform: match.platform, cancelled: match.cancelled,
-                    delayed: match.delayed, reason: match.reason, dest: match.destination || p.dest
+                    delayed: match.delayed, reason: match.reason, dest: match.destination || p.dest, stale: false
                 };
             } else if (p.live) {
                 p.live.stale = true; // train left the board — keep last known, mark stale
@@ -1430,6 +1446,7 @@ class PengeDash {
         const dest = live.dest || p.dest || 'Train';
         let status, cls = '';
         if (live.cancelled) { status = 'Cancelled'; cls = 'cancelled'; }
+        else if (live.stale) { status = 'Departed'; cls = 'gone'; }   // dropped off the board
         else if (live.mins != null && live.mins <= -2) { status = 'Departed'; cls = 'gone'; }
         else if (live.mins != null) {
             status = (live.mins <= 0 ? 'Due' : `${live.mins} min`) + (live.delayed ? ' · delayed' : '');
