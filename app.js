@@ -643,6 +643,16 @@ class PengeDash {
         }
     }
 
+    // Per-coach loading strip: a coloured dot per coach + the quietest coach to aim for.
+    _renderCoachLoading(loading) {
+        if (!loading || !loading.length) return '';
+        const cls = p => p < 40 ? 'quiet' : (p <= 70 ? 'moderate' : 'busy');
+        const quietest = loading.reduce((a, b) => (b.pct < a.pct ? b : a));
+        const dots = loading.map(c =>
+            `<span class="coach-dot ${cls(c.pct)}" title="Coach ${this.escapeAttr(String(c.n))}: ${c.pct}%"></span>`).join('');
+        return `<span class="coach-loading">🚋 <span class="coach-dots">${dots}</span> quietest: coach ${this.escapeHtml(String(quietest.n))}</span>`;
+    }
+
     _renderCallingPoints(pts, currentName) {
         if (!pts.length) return '<span class="cp-loading">Calling pattern not available yet.</span>';
         // Show only the onward stops from the current station.
@@ -701,6 +711,11 @@ class PengeDash {
                     ? `<span class="plat-badge">Platform ${this.escapeHtml(d.platform)}</span>` : '';
                 const reasonHtml = (d.delayed && d.reason)
                     ? `<span class="delay-reason">Due to ${this.escapeHtml(d.reason)}</span>` : '';
+                // "Which carriage" boarding tip (curated exit positioning).
+                const ex = d.exitAdvice;
+                const exitHtml = (ex && ex.carriage)
+                    ? `<span class="exit-advice">🚃 Board ${this.escapeHtml(ex.carriage === 'any' ? 'any carriage' : ex.carriage)}${ex.note ? ' — ' + this.escapeHtml(ex.note) : ''}</span>` : '';
+                const loadingHtml = this._renderCoachLoading(d.loading);
                 // Pin affordance — only for Darwin-served stations (NR/Overground/Elizabeth),
                 // since the strip resolves live status from the Darwin board.
                 const darwinServed = (this._currentModalStop?.modes || [])
@@ -717,7 +732,7 @@ class PengeDash {
                     <div class="modal-departure">
                         <div class="modal-departure-info">
                             <span class="modal-departure-dest">${isBus && d.line ? this.escapeHtml(d.line) + ' · ' : ''}${this.escapeHtml(d.dest)}</span>
-                            ${platHtml}${reasonHtml}${callBtn}
+                            ${platHtml}${exitHtml}${loadingHtml}${reasonHtml}${callBtn}
                         </div>
                         <div class="modal-departure-time-col">
                             <span class="modal-departure-time">${d.mins} min</span>
@@ -1076,7 +1091,9 @@ class PengeDash {
                         cancelled: d.cancelled || false,
                         delayed: d.delayed || false,
                         reason: d.reason || null,
-                        rid: d.rid || null
+                        rid: d.rid || null,
+                        exitAdvice: d.exitAdvice || null,
+                        loading: d.loading || null
                     }))
                     // Drop rows with no resolved destination and self-referential rows
                     .filter(d => d.dest && d.dest.toLowerCase() !== selfName)
