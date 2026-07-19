@@ -573,6 +573,11 @@ input { font-family: inherit; }
 .modal-departure .plat-badge {
     font-size: 12px; padding: 3px 9px; margin-top: 4px;
 }
+/* Pending platform (not yet assigned by Darwin) — muted, so it reads as pending not missing */
+.plat-tbc {
+    display: inline-block; margin-top: 4px;
+    font-size: 11.5px; color: var(--muted); font-style: italic;
+}
 /* Cancelled badge */
 .cancelled-badge {
     display: inline-flex; align-items: center;

@@ -394,6 +394,11 @@ class PengeDash {
         const defPc = CONFIG.DEFAULT_HOME.postcode.replace(/\s/g, '').toUpperCase();
         home.isDefault = (home.postcode || '').replace(/\s/g, '').toUpperCase() === defPc;
         home.isCurrentLocation = !!opts.isCurrentLocation;
+        // An explicit, persisted choice (not a transient GPS fix) is a "locked" home:
+        // it should survive across sessions and NOT be overridden by the GPS-on-open
+        // follow. Carry the flag forward once set.
+        home.userSet = opts.isCurrentLocation ? !!(this.home && this.home.userSet)
+            : (opts.persist !== false ? true : !!(this.home && this.home.userSet));
 
         // Detect nearby (widen radius once if empty)
         let nearby = await this.detectNearby(home.lat, home.lon);
@@ -455,6 +460,9 @@ class PengeDash {
     // called after the first paint so the UI upgrades in place when GPS resolves.
     initGeolocation() {
         if (!navigator.geolocation) return;
+        // Respect a home the user has explicitly set: don't auto-follow GPS over it.
+        // (They can still recentre on GPS anytime via the blue locate button.)
+        if (this.home && this.home.userSet) return;
         navigator.geolocation.getCurrentPosition(
             (pos) => {
                 if (this._userPickedLocation) return;   // user already chose a location this session
@@ -720,8 +728,22 @@ class PengeDash {
                         </div>
                     </div>`;
                 }
-                const platHtml = (d.platform && d.platform !== '-')
-                    ? `<span class="plat-badge">Platform ${this.escapeHtml(d.platform)}</span>` : '';
+                // Darwin-served stations (NR/Overground/Elizabeth) get platform, pin,
+                // and calling-point affordances resolved from the Darwin board.
+                const darwinServed = (this._currentModalStop?.modes || [])
+                    .some(m => ['national-rail', 'overground', 'elizabeth-line'].includes(m));
+                // Platform: show the number, or — for a National Rail service without one
+                // yet — a muted note explaining it's pending (big stations assign platforms
+                // ~10 min before departure) rather than showing nothing.
+                let platHtml;
+                if (d.platform && d.platform !== '-') {
+                    platHtml = `<span class="plat-badge">Platform ${this.escapeHtml(d.platform)}</span>`;
+                } else if (darwinServed && !isBus) {
+                    const soon = typeof d.mins === 'number' && d.mins <= 20;
+                    platHtml = `<span class="plat-tbc">Platform ${soon ? 'to be confirmed' : 'shown nearer departure'}</span>`;
+                } else {
+                    platHtml = '';
+                }
                 const reasonHtml = (d.delayed && d.reason)
                     ? `<span class="delay-reason">Due to ${this.escapeHtml(d.reason)}</span>` : '';
                 // "Which carriage" boarding tip (curated exit positioning).
@@ -729,10 +751,6 @@ class PengeDash {
                 const exitHtml = (ex && ex.carriage)
                     ? `<span class="exit-advice">🚃 Board ${this.escapeHtml(ex.carriage === 'any' ? 'any carriage' : ex.carriage)}${ex.note ? ' — ' + this.escapeHtml(ex.note) : ''}</span>` : '';
                 const loadingHtml = this._renderCoachLoading(d.loading);
-                // Pin affordance — only for Darwin-served stations (NR/Overground/Elizabeth),
-                // since the strip resolves live status from the Darwin board.
-                const darwinServed = (this._currentModalStop?.modes || [])
-                    .some(m => ['national-rail', 'overground', 'elizabeth-line'].includes(m));
                 const canPin = !isBus && d.scheduledTime && darwinServed
                     && Number.isFinite(+this._currentModalStop.lat);
                 const pinBtn = canPin
