@@ -581,12 +581,27 @@ class PengeDash {
         this.nearbyBusStops.forEach(stop => {
             const walk = Math.max(1, Math.round(stop.distance / 80));
             const towards = stop.towards ? `towards ${stop.towards}` : (stop.indicator ? `Stop ${stop.indicator}` : '');
+            const arrivals = (this.busStopData && this.busStopData[stop.id]) || [];
+            // Inline live countdowns (same markup as stations) — see the next buses at a glance.
+            let nextHtml = '';
+            if (arrivals.length) {
+                nextHtml = '<span class="ni-next">' + arrivals.slice(0, 2).map(d =>
+                    `<span class="ni-next-row"><span class="ni-next-dest">${this.escapeHtml(d.line)} → ${this.escapeHtml(d.dest)}</span><span class="ni-next-mins ${d.mins <= 3 ? 'urgent' : ''}">${d.mins <= 0 ? 'due' : d.mins + ' min'}</span></span>`
+                ).join('') + '</span>';
+            } else {
+                nextHtml = '<span class="ni-next-empty">No live times right now</span>';
+            }
+            // "Did you know" frequency of the soonest line.
+            const freq = this._soonestLineFreq(arrivals);
+            const freqHtml = freq ? `<span class="ni-tags"><span class="freq-chip">${freq.icon} ${this.escapeHtml(arrivals[0].line)} every ~${freq.everyMin} min</span></span>` : '';
             items.push(`
                 <button class="nearby-item" data-busstop-id="${this.escapeAttr(stop.id)}" data-busstop-name="${this.escapeAttr(stop.name)}">
                     <span class="ni-icon bus">🚌</span>
                     <span class="ni-body">
                         <span class="ni-name">${this.escapeHtml(stop.name)}</span>
                         <span class="ni-sub">${walk} min walk · ${stop.distance} m${towards ? ' · ' + this.escapeHtml(towards) : ''}</span>
+                        ${freqHtml}
+                        ${nextHtml}
                     </span>
                     <span class="ni-chev">›</span>
                 </button>`);
@@ -655,6 +670,86 @@ class PengeDash {
         }
     }
 
+    // Bus "Next stops ›": onward stops for this bus from the current stop, via the TfL
+    // line route sequence (cached per line+direction). Mirrors _toggleCallingPoints.
+    async _toggleBusCallingPoints(btn) {
+        const wrap = btn.closest('.md-wrap');
+        if (!wrap) return;
+        const box = wrap.querySelector('.calling-points');
+        if (box.style.display !== 'none' && box.dataset.loaded) {
+            box.style.display = 'none'; btn.textContent = 'Next stops ›'; return;
+        }
+        btn.textContent = 'Next stops ⌄';
+        box.style.display = 'block';
+        if (box.dataset.loaded) return;
+        box.innerHTML = '<span class="cp-loading">Loading stops…</span>';
+        try {
+            const lineId = btn.dataset.busline;
+            const dir = btn.dataset.busdir || 'all';
+            const stopId = this._currentModalStop && this._currentModalStop.id;
+            this._busRouteCache = this._busRouteCache || {};
+            const key = `${lineId}:${dir}`;
+            if (!this._busRouteCache[key]) {
+                const auth = CONFIG.TFL_APP_KEY ? `&app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+                this._busRouteCache[key] = fetch(`https://api.tfl.gov.uk/Line/${encodeURIComponent(lineId)}/Route/Sequence/${encodeURIComponent(dir)}?serviceTypes=Regular${auth}`)
+                    .then(r => r.ok ? r.json() : null).catch(() => null);
+            }
+            const data = await this._busRouteCache[key];
+            const onward = this._busOnwardStops(data, stopId, btn.dataset.busdest);
+            box.dataset.loaded = '1';
+            box.innerHTML = onward.length
+                ? '<div class="cp-list">' + onward.map(n => `<span class="cp-stop">${this.escapeHtml(this.cleanStationName(n))}</span>`).join('<span class="cp-arrow">›</span>') + '</div>'
+                : '<span class="cp-loading">Onward stops not available.</span>';
+        } catch (e) {
+            box.dataset.loaded = '1';
+            box.innerHTML = '<span class="cp-loading">Couldn\'t load the route.</span>';
+        }
+    }
+
+    // From a TfL Route/Sequence response, the ordered stop NAMES after the current stop.
+    // Picks the branch containing the current stop (preferring one that also reaches dest).
+    _busOnwardStops(routeData, stopId, destName) {
+        const seqs = (routeData && routeData.stopPointSequences) || [];
+        const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        let best = null;
+        for (const sq of seqs) {
+            const pts = sq.stopPoint || [];
+            const idx = pts.findIndex(p => p.id === stopId);
+            if (idx < 0) continue;
+            const onward = pts.slice(idx + 1).map(p => p.name);
+            const reachesDest = destName && onward.some(n => norm(n).includes(norm(destName)) || norm(destName).includes(norm(n)));
+            if (reachesDest) return onward;           // exact branch to the destination
+            if (!best) best = onward;                 // fallback: first branch containing the stop
+        }
+        return best || [];
+    }
+
+    // "Did you know" service frequency, estimated from the median gap between
+    // consecutive services already on the board. null when < 2 services.
+    _frequencyLabel(minsArr) {
+        const m = [...new Set((minsArr || []).filter(x => typeof x === 'number' && x >= -1))].sort((a, b) => a - b);
+        if (m.length < 2) return null;
+        const gaps = [];
+        for (let i = 1; i < m.length; i++) gaps.push(m[i] - m[i - 1]);
+        gaps.sort((a, b) => a - b);
+        const mid = Math.floor(gaps.length / 2);
+        const every = gaps.length % 2 ? gaps[mid] : Math.round((gaps[mid - 1] + gaps[mid]) / 2);
+        if (every <= 0) return null;
+        let label, icon = '🔄';
+        if (every <= 6) label = `Turn up & go — about every ${every} min`;
+        else if (every <= 12) label = `Frequent · about every ${every} min`;
+        else if (every <= 30) label = `About every ${every} min`;
+        else { label = `About every ${every} min · check times`; icon = '🕐'; }
+        return { everyMin: every, label, icon };
+    }
+
+    // Frequency of the soonest line at a bus stop (for the compact Nearby chip).
+    _soonestLineFreq(arrivals) {
+        if (!arrivals || !arrivals.length) return null;
+        const line = arrivals[0].line;
+        return this._frequencyLabel(arrivals.filter(a => a.line === line).map(a => a.mins));
+    }
+
     // Per-coach loading strip: a coloured dot per coach + the quietest coach to aim for.
     _renderCoachLoading(loading) {
         if (!loading || !loading.length) return '';
@@ -709,6 +804,12 @@ class PengeDash {
             el.innerHTML = '<div class="no-data">No live departures right now</div>';
         } else {
             const rows = data.slice(0, 8);
+            // Frequency per group — line for buses, destination for trains — shown once
+            // per group (on its first non-cancelled row).
+            const groupKey = d => isBus ? d.line : d.dest;
+            const freqByGroup = {};
+            data.forEach(d => { const k = groupKey(d); (freqByGroup[k] = freqByGroup[k] || []).push(d.mins); });
+            const shownFreq = new Set();
             el.innerHTML = rows.map((d, i) => {
                 if (d.cancelled) {
                     // Find the next non-cancelled service to the same destination
@@ -755,15 +856,24 @@ class PengeDash {
                     && Number.isFinite(+this._currentModalStop.lat);
                 const pinBtn = canPin
                     ? `<button class="dep-pin" data-time="${this.escapeAttr(d.scheduledTime)}" data-dest="${this.escapeAttr(d.dest)}" data-rid="${this.escapeAttr(d.rid || '')}" aria-label="Track this train">📌</button>` : '';
-                // "Calling at ›" toggle for Darwin services (needs a rid to look up the pattern).
+                // "Calling at ›" (trains, via Darwin rid) / "Next stops ›" (buses, via TfL route).
                 const callBtn = (d.rid && darwinServed)
                     ? `<button class="call-toggle" data-rid="${this.escapeAttr(d.rid)}">Calling at ›</button>` : '';
+                const busCallBtn = (isBus && d.lineId)
+                    ? `<button class="call-toggle" data-busline="${this.escapeAttr(d.lineId)}" data-busdir="${this.escapeAttr(d.direction || '')}" data-busdest="${this.escapeAttr(d.destName || d.dest || '')}">Next stops ›</button>` : '';
+                // "Did you know" frequency — once per group.
+                const gkey = groupKey(d);
+                let freqHtml = '';
+                if (!shownFreq.has(gkey)) {
+                    const f = this._frequencyLabel(freqByGroup[gkey]);
+                    if (f) { freqHtml = `<span class="freq-chip">${f.icon} ${this.escapeHtml(f.label)}</span>`; shownFreq.add(gkey); }
+                }
                 return `
                 <div class="md-wrap">
                     <div class="modal-departure">
                         <div class="modal-departure-info">
                             <span class="modal-departure-dest">${isBus && d.line ? this.escapeHtml(d.line) + ' · ' : ''}${this.escapeHtml(d.dest)}</span>
-                            ${platHtml}${exitHtml}${loadingHtml}${reasonHtml}${callBtn}
+                            ${platHtml}${exitHtml}${loadingHtml}${reasonHtml}${freqHtml}${callBtn}${busCallBtn}
                         </div>
                         <div class="modal-departure-time-col">
                             <span class="modal-departure-time">${d.mins} min</span>
@@ -782,10 +892,11 @@ class PengeDash {
                     dest: btn.dataset.dest, scheduledTime: btn.dataset.time, rid: btn.dataset.rid || null });
                 btn.textContent = '📍';
             }));
-            // Wire the calling-points toggles (lazy-fetch the pattern on first open).
+            // Wire the calling-points / next-stops toggles (lazy-fetch on first open).
             el.querySelectorAll('.call-toggle').forEach(btn => btn.addEventListener('click', (ev) => {
                 ev.stopPropagation();
-                this._toggleCallingPoints(btn);
+                if (btn.dataset.busline) this._toggleBusCallingPoints(btn);
+                else this._toggleCallingPoints(btn);
             }));
         }
         modal.classList.add('active');
@@ -1039,6 +1150,9 @@ class PengeDash {
                 const arr = (Array.isArray(data) ? data : []).map(b => ({
                     dest: b.destinationName || b.towards || 'Check board',
                     line: b.lineName || '',
+                    lineId: b.lineId || '',
+                    direction: b.direction || '',   // inbound / outbound — picks the route branch
+                    destName: b.destinationName || '',
                     mins: Math.floor((b.timeToStation || 0) / 60),
                     platform: '-',
                     scheduledTime: (b.expectedArrival ? new Date(b.expectedArrival) : new Date(Date.now() + (b.timeToStation || 0) * 1000))
@@ -2010,6 +2124,7 @@ class PengeDash {
         goBtn.addEventListener('click', () => {
             const dest = input.value.trim();
             if (dest) this.planJourney(dest);
+            else { input.focus(); this._toast && this._toast('Type where you’re going'); }
         });
         input.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') { this.hideAutocomplete(); goBtn.click(); }
@@ -2414,6 +2529,10 @@ class PengeDash {
 
         container.style.display = 'block';
         container.innerHTML = cards;
+
+        // Jump straight to the best routes (they render below the fold on a phone).
+        const head = document.querySelector('#screen-plan .section-head') || container;
+        head.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
         // Fill live platform numbers on the cards (async, non-blocking).
         this._enrichJourneyPlatforms();

@@ -676,6 +676,14 @@ input { font-family: inherit; }
 .cp-time { color: var(--muted); font-weight: 500; font-size: 11px; }
 .cp-arrow { color: var(--muted); font-size: 11px; }
 
+/* "Did you know" service-frequency chip (bus/train) */
+.freq-chip {
+    display: inline-block; margin-top: 4px;
+    font-size: 11px; font-weight: 700; color: var(--blue);
+    background: var(--blue-soft); padding: 2px 8px; border-radius: 20px;
+}
+.ni-tags .freq-chip { margin-top: 2px; }
+
 /* Which-carriage boarding tip on a modal departure row */
 .exit-advice {
     display: block; font-size: 11.5px; color: var(--blue); font-weight: 600;
