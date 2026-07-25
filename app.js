@@ -1034,7 +1034,10 @@ class PengeDash {
                 // yet — a muted note explaining it's pending (big stations assign platforms
                 // ~10 min before departure) rather than showing nothing.
                 let platHtml;
-                if (d.platform && d.platform !== '-') {
+                if (!isBus && !darwinServed && d.platformDir) {
+                    // Tube / DLR / Overground: show direction + platform ("Northbound · Platform 2").
+                    platHtml = `<span class="plat-badge tube">${this.escapeHtml(this._tidyPlatformName(d.platformDir))}</span>`;
+                } else if (d.platform && d.platform !== '-') {
                     platHtml = `<span class="plat-badge">Platform ${this.escapeHtml(d.platform)}</span>`;
                 } else if (darwinServed && !isBus) {
                     const soon = typeof d.mins === 'number' && d.mins <= 20;
@@ -1106,6 +1109,40 @@ class PengeDash {
             }));
         }
         modal.classList.add('active');
+        if (!isBus) this._fillStationAccess(id);
+    }
+
+    // Accessibility line in the station modal: lifts / toilets + step-free/lift
+    // disruption warnings from TfL (cached per station).
+    async _fillStationAccess(id) {
+        const el = document.getElementById('modal-departures');
+        if (!el) return;
+        this._accessCache = this._accessCache || {};
+        let info = this._accessCache[id];
+        if (!info) {
+            const auth = CONFIG.TFL_APP_KEY ? `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+            try {
+                const [sp, dis] = await Promise.all([
+                    fetch(`https://api.tfl.gov.uk/StopPoint/${id}${auth}`).then(r => r.ok ? r.json() : null).catch(() => null),
+                    fetch(`https://api.tfl.gov.uk/StopPoint/${id}/Disruption${auth}`).then(r => r.ok ? r.json() : []).catch(() => [])
+                ]);
+                const props = {}; ((sp && sp.additionalProperties) || []).forEach(p => props[p.key] = p.value);
+                const warnings = (Array.isArray(dis) ? dis : []).map(d => d.description || '')
+                    .filter(t => /step[- ]?free|lift|escalator/i.test(t));
+                info = { lifts: props.Lifts, toilets: props.Toilets, warnings: [...new Set(warnings)] };
+                this._accessCache[id] = info;
+            } catch (e) { return; }
+        }
+        if (!this._currentModalStop || this._currentModalStop.id !== id) return; // modal moved on
+        const bits = [];
+        if (info.lifts && info.lifts !== '0') bits.push(`🛗 ${this.escapeHtml(info.lifts)} lift${info.lifts === '1' ? '' : 's'}`);
+        if (info.toilets && /yes/i.test(info.toilets)) bits.push('🚻 Toilets');
+        const warn = info.warnings.length
+            ? `<div class="access-warn">⚠️ ${this.escapeHtml(info.warnings[0].replace(/^[^:]+:\s*/, ''))}</div>` : '';
+        const infoLine = bits.length ? `<div class="access-info">${bits.join(' · ')}</div>` : '';
+        if ((warn || infoLine) && !el.querySelector('.modal-access')) {
+            el.insertAdjacentHTML('afterbegin', `<div class="modal-access">${warn}${infoLine}</div>`);
+        }
     }
 
     // ==================== FAVOURITE STATIONS ====================
@@ -1240,6 +1277,7 @@ class PengeDash {
         return (Array.isArray(data) ? data : []).map(a => ({
             dest: this.cleanStationName(a.destinationName || a.towards || 'Check board'),
             platform: this.cleanPlatform(a.platformName),
+            platformDir: a.platformName || '',   // full "Northbound - Platform 2" (tube/DLR/OG)
             line: a.lineName || '',
             mins: Math.floor((a.timeToStation || 0) / 60),
             scheduledTime: a.expectedArrival
@@ -1329,6 +1367,7 @@ class PengeDash {
                 const deps = (Array.isArray(data) ? data : []).map(a => ({
                     dest: this.cleanStationName(a.destinationName || a.towards || 'Check board'),
                     platform: this.cleanPlatform(a.platformName),
+                    platformDir: a.platformName || '',   // full "Northbound - Platform 2" (tube/DLR/OG)
                     line: a.lineName || '',
                     mins: Math.floor((a.timeToStation || 0) / 60),
                     scheduledTime: a.expectedArrival
@@ -1473,6 +1512,11 @@ class PengeDash {
         if (!platformName) return '-';
         const num = String(platformName).match(/Platform\s*(\d+)/i) || String(platformName).match(/\b(\d+)\b/);
         return num ? num[1] : '-';
+    }
+
+    // "Northbound - Platform 2" → "Northbound · Platform 2" (keep the direction).
+    _tidyPlatformName(pn) {
+        return String(pn || '').replace(/\s*-\s*/g, ' · ').trim();
     }
 
     // Derive platform -> direction labels from live arrivals (replaces hardcoded PLATFORM_DIRECTIONS)
@@ -2561,6 +2605,8 @@ class PengeDash {
             url += `${sep()}date=${date}&time=${time}&timeIs=Departing`;
         }
         if (this.journeyModes) url += `${sep()}mode=${this.journeyModes}`;
+        // Bike routes: prefer quieter/safer roads (Easy proficiency avoids busy roads).
+        if (this.journeyModes === 'cycle') url += `${sep()}bikeProficiency=Easy`;
         if (this.journeyPref) url += `${sep()}journeyPreference=${this.journeyPref}`;
         if (this.journeyStepFree) url += `${sep()}accessibilityPreference=stepFreeToVehicle`;
         return url;
@@ -2778,6 +2824,8 @@ class PengeDash {
             const dur = leg.duration || 0;
             if (mode === 'walking') {
                 if (dur >= 2) parts.push(`<span class="route-mode-seg">🚶 ${dur} min</span>`);
+            } else if (mode === 'cycle') {
+                parts.push(`<span class="route-mode-seg">🚲 ${dur} min</span>`);
             } else if (mode === 'bus') {
                 const line = leg.routeOptions?.[0]?.name || '';
                 parts.push(`<span class="route-mode-seg"><span class="bus-badge">${this.escapeHtml(line)}</span> Bus</span>`);
@@ -2905,13 +2953,17 @@ class PengeDash {
             const mode = leg.mode?.id || 'walking';
             const dur = leg.duration || 0;
             const nodeCls = mode === 'walking' ? 'walk' : mode === 'bus' ? 'bus' : '';
-            const icon = mode === 'walking' ? '🚶' : mode === 'bus' ? '🚌' : this._modeEmoji(this._legMode(mode));
+            const icon = mode === 'walking' ? '🚶' : mode === 'bus' ? '🚌' : mode === 'cycle' ? '🚲' : this._modeEmoji(this._legMode(mode));
             const lineName = leg.routeOptions?.[0]?.name || '';
             const toName = this.cleanStationName(leg.arrivalPoint?.commonName || (i === legs.length - 1 ? destination : 'next stop'));
+            const distTxt = leg.distance ? ' · ' + (leg.distance >= 1000 ? (leg.distance / 1000).toFixed(1) + ' km' : Math.round(leg.distance) + ' m') : '';
             let title, sub, platHolder = '';
             if (mode === 'walking') {
                 title = `Walk to ${this.escapeHtml(toName)}`;
-                sub = `${dur} min${leg.distance ? ' · ' + (leg.distance >= 1000 ? (leg.distance / 1000).toFixed(1) + ' km' : Math.round(leg.distance) + ' m') : ''}`;
+                sub = `${dur} min${distTxt}`;
+            } else if (mode === 'cycle') {
+                title = `Cycle to ${this.escapeHtml(toName)}`;
+                sub = `${dur} min${distTxt} · quieter roads`;
             } else {
                 const verb = mode === 'bus' ? `Bus ${this.escapeHtml(lineName)}` : this.escapeHtml(lineName || mode);
                 title = `${verb} to ${this.escapeHtml(toName)}`;
@@ -3272,7 +3324,7 @@ class PengeDash {
         this.routeLayer.clearLayers();
         const allPoints = [];
         const modeColour = { tube: '#dc241f', bus: '#e3221b', overground: '#ee7c0e',
-            'dlr': '#00afad', 'national-rail': '#1d1d1b', walking: '#888', 'elizabeth-line': '#6950a1' };
+            'dlr': '#00afad', 'national-rail': '#1d1d1b', walking: '#888', 'elizabeth-line': '#6950a1', cycle: '#12a150' };
 
         (journey.legs || []).forEach(leg => {
             const mode = leg.mode?.id || 'walking';
