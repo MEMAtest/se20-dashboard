@@ -1052,6 +1052,8 @@ class PengeDash {
                 const exitHtml = (ex && ex.carriage)
                     ? `<span class="exit-advice">🚃 Board ${this.escapeHtml(ex.carriage === 'any' ? 'any carriage' : ex.carriage)}${ex.note ? ' — ' + this.escapeHtml(ex.note) : ''}</span>` : '';
                 const loadingHtml = this._renderCoachLoading(d.loading);
+                const assocHtml = (d.association && d.association.label)
+                    ? `<span class="assoc-chip ${this.escapeAttr(d.association.kind || '')}">${this.escapeHtml(d.association.label)}</span>` : '';
                 const canPin = !isBus && d.scheduledTime && darwinServed
                     && Number.isFinite(+this._currentModalStop.lat);
                 const pinBtn = canPin
@@ -1075,7 +1077,7 @@ class PengeDash {
                     <div class="modal-departure">
                         <div class="modal-departure-info">
                             <span class="modal-departure-dest">${isBus && d.line ? this.escapeHtml(d.line) + ' · ' : ''}${this.escapeHtml(d.dest)}</span>
-                            ${platHtml}${exitHtml}${loadingHtml}${reasonHtml}${freqHtml}${callBtn}${busCallBtn}${busTrackBtn}
+                            ${platHtml}${exitHtml}${loadingHtml}${assocHtml}${reasonHtml}${freqHtml}${callBtn}${busCallBtn}${busTrackBtn}
                         </div>
                         <div class="modal-departure-time-col">
                             <span class="modal-departure-time">${d.mins} min</span>
@@ -1487,7 +1489,8 @@ class PengeDash {
                         reason: d.reason || null,
                         rid: d.rid || null,
                         exitAdvice: d.exitAdvice || null,
-                        loading: d.loading || null
+                        loading: d.loading || null,
+                        association: d.association || null
                     }))
                     // Drop rows with no resolved destination and self-referential rows
                     .filter(d => d.dest && d.dest.toLowerCase() !== selfName)

@@ -575,6 +575,11 @@ input { font-family: inherit; }
 }
 /* Tube/DLR/Overground platform + direction badge */
 .plat-badge.tube { background: var(--card-alt); color: var(--text); }
+/* Split / join / continues-as chip on a train departure */
+.assoc-chip {
+    display: block; margin-top: 3px; font-size: 11.5px; font-weight: 700; color: var(--amber);
+}
+.assoc-chip.continues { color: var(--blue); }
 /* Accessibility line in the station modal */
 .modal-access { margin-bottom: 8px; display: flex; flex-direction: column; gap: 6px; }
 .access-warn { background: #fdecec; color: #e53e3e; font-size: 12px; font-weight: 600; padding: 7px 10px; border-radius: 10px; }
