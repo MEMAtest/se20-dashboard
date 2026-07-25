@@ -73,6 +73,10 @@ class PengeDash {
 
         // Modals (next-trains + generic detail)
         this.createModal();
+        this.setupBusTracker();
+
+        // Live-ticking countdowns (bus surfaces + tracker)
+        this._startCountdownTicker();
 
         // Journey planner controls (where-to, chips, filters)
         this.setupJourneyPlanner();
@@ -150,6 +154,7 @@ class PengeDash {
         if (name === 'nearby' && this.map) {
             requestAnimationFrame(() => this.map.invalidateSize());
         }
+        if (name === 'buses') this.renderBusesScreen();
     }
 
     setupShellLinks() {
@@ -586,7 +591,7 @@ class PengeDash {
             let nextHtml = '';
             if (arrivals.length) {
                 nextHtml = '<span class="ni-next">' + arrivals.slice(0, 2).map(d =>
-                    `<span class="ni-next-row"><span class="ni-next-dest">${this.escapeHtml(d.line)} → ${this.escapeHtml(d.dest)}</span><span class="ni-next-mins ${d.mins <= 3 ? 'urgent' : ''}">${d.mins <= 0 ? 'due' : d.mins + ' min'}</span></span>`
+                    `<span class="ni-next-row"><span class="ni-next-dest">${this.escapeHtml(d.line)} → ${this.escapeHtml(d.dest)}</span><span class="ni-next-mins ${d.mins <= 3 ? 'urgent' : ''}" data-due="${d.due || ''}">${d.mins <= 0 ? 'due' : d.mins + ' min'}</span></span>`
                 ).join('') + '</span>';
             } else {
                 nextHtml = '<span class="ni-next-empty">No live times right now</span>';
@@ -750,6 +755,198 @@ class PengeDash {
         return this._frequencyLabel(arrivals.filter(a => a.line === line).map(a => a.mins));
     }
 
+    // ==================== BUSES TAB + LIVE TRACKER ====================
+    // Walk-aware "can I catch it": compares the bus's arrival to the walk to the stop.
+    _catchability(arrivalMins, walkMins, nextMins) {
+        const margin = arrivalMins - walkMins;
+        if (margin >= 2) return { tier: 'go', label: `Leave in ${margin} min` };
+        if (margin >= 0) return { tier: 'run', label: 'Leave now' };
+        return { tier: 'miss', label: (nextMins != null ? `Too late — next in ${nextMins} min` : 'Just missed') };
+    }
+
+    // Flatten every nearby bus arrival into one list, annotated with its stop + walk +
+    // catchability, deduped by vehicle, sorted by the soonest bus you can actually board.
+    _flattenNearbyBuses() {
+        const rows = [];
+        (this.nearbyBusStops || []).forEach(stop => {
+            const walk = Math.max(1, Math.round((stop.distance || 0) / 80));
+            const arrivals = (this.busStopData && this.busStopData[stop.id]) || [];
+            arrivals.forEach(a => {
+                const nextSame = arrivals.find(x => x.line === a.line && x.mins > a.mins);
+                rows.push({
+                    line: a.line, lineId: a.lineId, dest: a.dest, direction: a.direction,
+                    mins: a.mins, due: a.due, vehicleId: a.vehicleId,
+                    stopId: stop.id, stopName: stop.name, walk,
+                    boardIn: a.mins - walk,
+                    nextMins: nextSame ? nextSame.mins : null
+                });
+            });
+        });
+        // Dedupe a bus seen at multiple nearby stops — keep the best boardIn.
+        const byVeh = new Map();
+        const noVeh = [];
+        rows.forEach(r => {
+            if (!r.vehicleId) { noVeh.push(r); return; }
+            const cur = byVeh.get(r.vehicleId);
+            if (!cur || r.boardIn < cur.boardIn) byVeh.set(r.vehicleId, r);
+        });
+        return [...byVeh.values(), ...noVeh]
+            .sort((a, b) => a.boardIn - b.boardIn)
+            .slice(0, 20);
+    }
+
+    renderBusesScreen() {
+        const el = document.getElementById('buses-list');
+        if (!el) return;
+        const upd = document.getElementById('buses-updated');
+        if (upd) upd.textContent = this.getTimeAgo(new Date());
+        const rows = this._flattenNearbyBuses();
+        if (!rows.length) {
+            el.innerHTML = (this.nearbyBusStops || []).length
+                ? '<div class="no-data">No live buses right now — check back in a moment.</div>'
+                : '<div class="no-data">No bus stops nearby.</div>';
+            return;
+        }
+        el.innerHTML = rows.map(r => {
+            const catch_ = this._catchability(r.mins, r.walk, r.nextMins);
+            const disrupt = (this.busDisruptions && this.busDisruptions[r.lineId]) ? '<span class="disrupt-chip">⚠️ Diversion</span>' : '';
+            return `
+            <button class="bus-row catch-${catch_.tier}" data-vehicle="${this.escapeAttr(r.vehicleId)}" data-line="${this.escapeAttr(r.line)}" data-lineid="${this.escapeAttr(r.lineId)}" data-dest="${this.escapeAttr(r.dest)}" data-stopid="${this.escapeAttr(r.stopId)}" data-stopname="${this.escapeAttr(r.stopName)}" data-dir="${this.escapeAttr(r.direction || '')}">
+                <span class="bus-line">${this.escapeHtml(r.line)}</span>
+                <span class="bus-mid">
+                    <span class="bus-dest">→ ${this.escapeHtml(r.dest)}</span>
+                    <span class="bus-from">from ${this.escapeHtml(r.stopName)} · ${r.walk} min walk ${disrupt}</span>
+                    <span class="catch-chip ${catch_.tier}">${catch_.label}</span>
+                </span>
+                <span class="bus-right">
+                    <span class="mins ${r.mins <= 3 ? 'urgent' : ''}" data-due="${r.due}">${r.mins <= 0 ? 'due' : r.mins + ' min'}</span>
+                    <span class="ni-chev">›</span>
+                </span>
+            </button>`;
+        }).join('');
+        el.querySelectorAll('.bus-row').forEach(btn => btn.addEventListener('click', () => {
+            const d = btn.dataset;
+            this.openBusTracker({ vehicleId: d.vehicle, line: d.line, lineId: d.lineid, dest: d.dest,
+                stopId: d.stopid, stopName: d.stopname, direction: d.dir });
+        }));
+    }
+
+    async _vehicleArrivals(vehicleId) {
+        if (!vehicleId) return [];
+        const auth = CONFIG.TFL_APP_KEY ? `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+        try {
+            const data = await fetch(`https://api.tfl.gov.uk/Vehicle/${encodeURIComponent(vehicleId)}/Arrivals${auth}`)
+                .then(r => r.ok ? r.json() : null);
+            return Array.isArray(data) ? data.sort((a, b) => (a.timeToStation || 0) - (b.timeToStation || 0)) : [];
+        } catch (e) { return []; }
+    }
+
+    setupBusTracker() {
+        const modal = document.getElementById('bus-track-modal');
+        const close = document.getElementById('bus-track-close');
+        if (close) close.addEventListener('click', () => this.closeBusTracker());
+        if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) this.closeBusTracker(); });
+    }
+
+    openBusTracker(ctx) {
+        this._trackCtx = ctx;
+        const modal = document.getElementById('bus-track-modal');
+        document.getElementById('bus-track-title').textContent = `🚌 ${ctx.line} → ${ctx.dest}`;
+        document.getElementById('bus-track-sub').textContent = ctx.stopName ? `From ${ctx.stopName}` : 'Live position';
+        document.getElementById('bus-track-body').innerHTML = '<div class="cp-loading">Locating the bus…</div>';
+        modal.classList.add('active');
+        this._refreshBusTracker();
+        clearInterval(this._busTrackTimer);
+        this._busTrackTimer = setInterval(() => this._refreshBusTracker(), 20000);
+    }
+
+    closeBusTracker() {
+        clearInterval(this._busTrackTimer);
+        this._busTrackTimer = null;
+        this._trackCtx = null;
+        const modal = document.getElementById('bus-track-modal');
+        if (modal) modal.classList.remove('active');
+    }
+
+    async _refreshBusTracker() {
+        const ctx = this._trackCtx;
+        if (!ctx) return;
+        const body = document.getElementById('bus-track-body');
+        const stops = await this._vehicleArrivals(ctx.vehicleId);
+        if (!this._trackCtx) return; // closed while fetching
+        body.innerHTML = this.renderBusTracker(stops, ctx);
+    }
+
+    renderBusTracker(stops, ctx) {
+        const disrupt = (this.busDisruptions && this.busDisruptions[ctx.lineId])
+            ? `<div class="track-disrupt">⚠️ ${this.escapeHtml(this.busDisruptions[ctx.lineId][0] || 'Service disruption on this line')}</div>` : '';
+        if (!stops.length) {
+            return `${disrupt}<div class="no-data">Live position isn’t available for this bus right now.</div>`;
+        }
+        const yourIdx = stops.findIndex(s => s.naptanId === ctx.stopId);
+        const nowNear = this.cleanStationName(stops[0].stationName || stops[0].destinationName || 'the route');
+        const n = stops.length;
+        let head;
+        if (yourIdx < 0) {
+            head = `<div class="track-head"><span class="track-now">🚌 Now near ${this.escapeHtml(nowNear)}</span>
+                <span class="track-sub">Has already left your stop</span></div>`;
+        } else {
+            const yourMins = Math.round((stops[yourIdx].timeToStation || 0) / 60);
+            const pct = Math.max(4, Math.round(((yourIdx) / n) * 100));
+            head = `<div class="track-head">
+                <span class="track-count ${yourMins <= 3 ? 'urgent' : ''}" data-due="${Date.now() + (stops[yourIdx].timeToStation || 0) * 1000}">${yourMins <= 0 ? 'Due now' : yourMins + ' min'}</span>
+                <span class="track-now">🚌 Now near ${this.escapeHtml(nowNear)} · ${yourIdx} stop${yourIdx === 1 ? '' : 's'} away</span>
+                <span class="track-progress"><span class="track-progress-fill" style="width:${100 - pct}%"></span></span>
+            </div>`;
+        }
+        const list = stops.map((s, i) => {
+            const mins = Math.round((s.timeToStation || 0) / 60);
+            const mine = i === yourIdx ? ' your-stop' : '';
+            return `<div class="track-stop${mine}">
+                <span class="track-stop-name">${i === yourIdx ? '📍 ' : ''}${this.escapeHtml(this.cleanStationName(s.stationName || ''))}</span>
+                <span class="track-stop-mins" data-due="${Date.now() + (s.timeToStation || 0) * 1000}" data-zero="now">${mins <= 0 ? 'now' : mins + ' min'}</span>
+            </div>`;
+        }).join('');
+        return `${disrupt}${head}<div class="track-stops">${list}</div>`;
+    }
+
+    // Batch line-level disruption for the bus lines currently nearby (5-min cache).
+    async _fetchBusDisruptions() {
+        if (Date.now() - (this._busDisruptAt || 0) < 5 * 60 * 1000) return;
+        const lineIds = [...new Set(Object.values(this.busStopData || {}).flat().map(a => a.lineId).filter(Boolean))];
+        if (!lineIds.length) return;
+        this._busDisruptAt = Date.now();
+        const auth = CONFIG.TFL_APP_KEY ? `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+        try {
+            const data = await fetch(`https://api.tfl.gov.uk/Line/${lineIds.map(encodeURIComponent).join(',')}/Disruption${auth}`)
+                .then(r => r.ok ? r.json() : []);
+            const map = {};
+            (Array.isArray(data) ? data : []).forEach(d => {
+                const ids = (d.affectedRoutes || []).map(r => r.lineId).concat(d.lineId ? [d.lineId] : []);
+                const desc = d.description || d.closureText || 'Service disruption';
+                (ids.length ? ids : lineIds).forEach(id => { (map[id] = map[id] || []).push(desc); });
+            });
+            this.busDisruptions = map;
+            if (this.currentScreen === 'buses') this.renderBusesScreen();
+        } catch (e) { /* leave previous */ }
+    }
+
+    // Single 1s ticker: decrement every countdown carrying a data-due epoch so times
+    // never look frozen between the 60s data fetches.
+    _startCountdownTicker() {
+        if (this._tickTimer) return;
+        this._tickTimer = setInterval(() => {
+            const now = Date.now();
+            document.querySelectorAll('[data-due]').forEach(el => {
+                const due = +el.dataset.due;
+                if (!due) return;
+                const m = Math.max(0, Math.round((due - now) / 60000));
+                el.textContent = m <= 0 ? (el.dataset.zero || 'due') : m + ' min';
+                el.classList.toggle('urgent', m <= 3);
+            });
+        }, 1000);
+    }
+
     // Per-coach loading strip: a coloured dot per coach + the quietest coach to aim for.
     _renderCoachLoading(loading) {
         if (!loading || !loading.length) return '';
@@ -861,6 +1058,8 @@ class PengeDash {
                     ? `<button class="call-toggle" data-rid="${this.escapeAttr(d.rid)}">Calling at ›</button>` : '';
                 const busCallBtn = (isBus && d.lineId)
                     ? `<button class="call-toggle" data-busline="${this.escapeAttr(d.lineId)}" data-busdir="${this.escapeAttr(d.direction || '')}" data-busdest="${this.escapeAttr(d.destName || d.dest || '')}">Next stops ›</button>` : '';
+                const busTrackBtn = (isBus && d.vehicleId)
+                    ? `<button class="bus-track-btn" data-vehicle="${this.escapeAttr(d.vehicleId)}" data-line="${this.escapeAttr(d.line)}" data-lineid="${this.escapeAttr(d.lineId)}" data-dest="${this.escapeAttr(d.dest)}" data-dir="${this.escapeAttr(d.direction || '')}">📍 Track ›</button>` : '';
                 // "Did you know" frequency — once per group.
                 const gkey = groupKey(d);
                 let freqHtml = '';
@@ -873,7 +1072,7 @@ class PengeDash {
                     <div class="modal-departure">
                         <div class="modal-departure-info">
                             <span class="modal-departure-dest">${isBus && d.line ? this.escapeHtml(d.line) + ' · ' : ''}${this.escapeHtml(d.dest)}</span>
-                            ${platHtml}${exitHtml}${loadingHtml}${reasonHtml}${freqHtml}${callBtn}${busCallBtn}
+                            ${platHtml}${exitHtml}${loadingHtml}${reasonHtml}${freqHtml}${callBtn}${busCallBtn}${busTrackBtn}
                         </div>
                         <div class="modal-departure-time-col">
                             <span class="modal-departure-time">${d.mins} min</span>
@@ -897,6 +1096,13 @@ class PengeDash {
                 ev.stopPropagation();
                 if (btn.dataset.busline) this._toggleBusCallingPoints(btn);
                 else this._toggleCallingPoints(btn);
+            }));
+            // Wire "Track ›" — open the live bus tracker for this vehicle.
+            el.querySelectorAll('.bus-track-btn').forEach(btn => btn.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                const s = this._currentModalStop || {};
+                this.openBusTracker({ vehicleId: btn.dataset.vehicle, line: btn.dataset.line, lineId: btn.dataset.lineid,
+                    dest: btn.dataset.dest, direction: btn.dataset.dir, stopId: s.id, stopName: s.name });
             }));
         }
         modal.classList.add('active');
@@ -1153,7 +1359,9 @@ class PengeDash {
                     lineId: b.lineId || '',
                     direction: b.direction || '',   // inbound / outbound — picks the route branch
                     destName: b.destinationName || '',
+                    vehicleId: b.vehicleId || '',    // lets us track this exact bus's position
                     mins: Math.floor((b.timeToStation || 0) / 60),
+                    due: Date.now() + (b.timeToStation || 0) * 1000,   // for live-ticking countdowns
                     platform: '-',
                     scheduledTime: (b.expectedArrival ? new Date(b.expectedArrival) : new Date(Date.now() + (b.timeToStation || 0) * 1000))
                         .toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
@@ -1185,6 +1393,8 @@ class PengeDash {
         this.renderLiveDepartures();
         this.renderNearbyNow();   // refresh station rows with inline live times
         this.fetchFavArrivals();  // keep favourite stations' boards current too
+        this._fetchBusDisruptions();                              // line-level bus disruptions (cached)
+        if (this.currentScreen === 'buses') this.renderBusesScreen();
         const now = this.getTimeAgo(new Date());
         ['departures-updated', 'nearby-updated'].forEach(id => {
             const el = document.getElementById(id); if (el) el.textContent = now;
@@ -2625,6 +2835,40 @@ class PengeDash {
         }));
     }
 
+    // Replace a journey's scheduled bus-leg time with the live next arrivals of that
+    // line at the boarding stop, plus a "Track ›" link to the live tracker.
+    async _enrichBusLegs() {
+        const slots = [...document.querySelectorAll('.jp-bus[data-stop]')];
+        const auth = CONFIG.TFL_APP_KEY ? `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+        const cache = new Map();
+        await Promise.all(slots.map(async slot => {
+            const { stop, line } = slot.dataset;
+            if (!stop || !line) return;
+            try {
+                if (!cache.has(stop)) {
+                    cache.set(stop, fetch(`https://api.tfl.gov.uk/StopPoint/${encodeURIComponent(stop)}/Arrivals${auth}`)
+                        .then(r => r.ok ? r.json() : []).catch(() => []));
+                }
+                const all = await cache.get(stop);
+                const mine = (Array.isArray(all) ? all : [])
+                    .filter(a => (a.lineName || '') === line)
+                    .sort((a, b) => (a.timeToStation || 0) - (b.timeToStation || 0));
+                if (!mine.length) return;
+                const soon = mine.slice(0, 2).map(a => Math.round((a.timeToStation || 0) / 60));
+                const v = mine[0].vehicleId;
+                const trackAttr = v ? ` data-vehicle="${this.escapeAttr(v)}" data-line="${this.escapeAttr(line)}" data-lineid="${this.escapeAttr(mine[0].lineId || '')}" data-dest="${this.escapeAttr(mine[0].destinationName || '')}" data-stopid="${this.escapeAttr(stop)}"` : '';
+                slot.innerHTML = ` · <b class="jp-bus-live">next ${soon[0] <= 0 ? 'due' : soon[0] + ' min'}${soon[1] != null ? ' · then ' + soon[1] + ' min' : ''}</b>`
+                    + (v ? ` <button class="jp-bus-track"${trackAttr}>Track ›</button>` : '');
+                const tb = slot.querySelector('.jp-bus-track');
+                if (tb) tb.addEventListener('click', (ev) => {
+                    ev.stopPropagation();
+                    const d = tb.dataset;
+                    this.openBusTracker({ vehicleId: d.vehicle, line: d.line, lineId: d.lineid, dest: d.dest, stopId: d.stopid, stopName: '' });
+                });
+            } catch (e) { /* leave scheduled time */ }
+        }));
+    }
+
     // First Darwin-served rail leg of a journey: where the passenger boards a train
     // (the station + scheduled time we can resolve a live platform for). null if the
     // journey has no such leg (e.g. bus/tube only).
@@ -2681,6 +2925,12 @@ class PengeDash {
                 if (DARWIN_MODES.includes(mode) && dp && Number.isFinite(dp.lat) && Number.isFinite(dp.lon) && depAt) {
                     platHolder = `<span class="jp-plat" data-fmt="long" data-lat="${dp.lat}" data-lon="${dp.lon}" data-time="${this.escapeAttr(depAt)}" data-from="${this.escapeAttr(fromName)}"></span>`;
                 }
+                // Live bus-leg slot: filled by _enrichBusLegs() with the real next arrivals.
+                // Prefer the specific child stop — the parent 490G… returns no bus arrivals.
+                const busStopId = dp && (dp.individualStopId || dp.naptanId || dp.id);
+                if (mode === 'bus' && busStopId && lineName) {
+                    platHolder = `<span class="jp-bus" data-stop="${this.escapeAttr(busStopId)}" data-line="${this.escapeAttr(lineName)}"></span>`;
+                }
             }
             const lineCls = mode === 'walking' ? 'green' : mode === 'bus' ? 'red' : '';
             return `
@@ -2733,6 +2983,8 @@ class PengeDash {
 
         // Fill in live platform numbers for rail legs (async, non-blocking).
         this._enrichJourneyPlatforms();
+        // Replace scheduled bus-leg times with live "next in N min" + a Track link.
+        this._enrichBusLegs();
 
         this.showScreen('journey');
     }

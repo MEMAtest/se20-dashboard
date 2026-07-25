@@ -43,12 +43,12 @@
             </button>
         </header>
 
-        <!-- Segmented top tabs -->
+        <!-- Segmented top tabs (Alerts now lives on the header 🔔) -->
         <nav class="top-tabs" id="top-tabs">
             <button class="top-tab active" data-screen="plan"><span class="tt-icon">⤳</span> Plan</button>
             <button class="top-tab" data-screen="nearby"><span class="tt-icon">📍</span> Nearby</button>
+            <button class="top-tab" data-screen="buses"><span class="tt-icon">🚌</span> Buses</button>
             <button class="top-tab" data-screen="lines"><span class="tt-icon">🚆</span> Lines</button>
-            <button class="top-tab" data-screen="alerts"><span class="tt-icon">⚠️</span> Alerts</button>
         </nav>
 
         <main class="screens" id="screens">
@@ -172,6 +172,16 @@
                 </button>
             </section>
 
+            <!-- ============ BUSES ============ -->
+            <section class="screen" id="screen-buses">
+                <div class="section-head">
+                    <h3>🚌 Buses near you</h3>
+                    <span class="updated" id="buses-updated">--</span>
+                </div>
+                <p class="buses-hint">Sorted by the soonest bus you can actually catch. Tap one to see where it is.</p>
+                <div class="buses-list" id="buses-list"><div class="loading">Finding nearby buses…</div></div>
+            </section>
+
             <!-- ============ LINES ============ -->
             <section class="screen" id="screen-lines">
                 <div class="section-head">
@@ -238,6 +248,22 @@
 
         </main>
 
+        <!-- Live bus tracker modal (reuses .next-trains-modal styling) -->
+        <div class="next-trains-modal bus-track-modal" id="bus-track-modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div>
+                        <div class="modal-title" id="bus-track-title">Tracking bus</div>
+                        <div class="modal-subtitle" id="bus-track-sub">Live position</div>
+                    </div>
+                    <div class="modal-actions">
+                        <button class="modal-close" id="bus-track-close" aria-label="Close">&times;</button>
+                    </div>
+                </div>
+                <div class="bus-track-body" id="bus-track-body"></div>
+            </div>
+        </div>
+
         <!-- Pinned train status strip (shown only when a train is pinned) -->
         <div class="pinned-strip" id="pinned-strip" style="display:none;"></div>
 
@@ -251,13 +277,13 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
                 <span>Nearby</span>
             </button>
+            <button class="bn-btn" data-screen="buses">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 16V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10M4 16h16M4 16v2a1 1 0 0 0 1 1h1a1 1 0 0 0 1-1v-2M20 16v2a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1v-2M6 8h12M7.5 12h.01M16.5 12h.01"/></svg>
+                <span>Buses</span>
+            </button>
             <button class="bn-btn" data-screen="lines">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="16" rx="3"/><path d="M4 11h16M8 19l-2 2M16 19l2 2"/><circle cx="8.5" cy="15" r="0.6" fill="currentColor"/><circle cx="15.5" cy="15" r="0.6" fill="currentColor"/></svg>
                 <span>Lines</span>
-            </button>
-            <button class="bn-btn" data-screen="alerts">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg>
-                <span>Alerts</span>
             </button>
             <button class="bn-btn" data-screen="saved">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
