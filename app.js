@@ -138,6 +138,7 @@ class PengeDash {
 
     showScreen(name) {
         if (!name) return;
+        if (this._busTrackTimer) this.closeBusTracker();   // don't leave the tracker polling over a new screen
         this.currentScreen = name;
         document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
         const screen = document.getElementById(`screen-${name}`);
@@ -426,6 +427,8 @@ class PengeDash {
         this.liveDepartures = [];
         this.crowdingData = {};       // stale for the old area; re-fetch for the new one
         this._crowdingAt = 0;
+        this.busDisruptions = {}; this._busDisruptAt = 0;   // old area's diversions
+        this._accessCache = {}; this._busRouteCache = {};   // old area's station/route caches
         if (opts.persist !== false) this.saveHome();
         this.cacheData('nearby-cache', { home: home.postcode, sig: this._coordSig(home.lat, home.lon), stations: nearby.stations, busStops: nearby.busStops });
 
@@ -761,7 +764,7 @@ class PengeDash {
         const margin = arrivalMins - walkMins;
         if (margin >= 2) return { tier: 'go', label: `Leave in ${margin} min` };
         if (margin >= 0) return { tier: 'run', label: 'Leave now' };
-        return { tier: 'miss', label: (nextMins != null ? `Too late — next in ${nextMins} min` : 'Just missed') };
+        return { tier: 'miss', label: (nextMins > 0 ? `Too late — next in ${nextMins} min` : 'Just missed') };
     }
 
     // Flatten every nearby bus arrival into one list, annotated with its stop + walk +
@@ -772,7 +775,8 @@ class PengeDash {
             const walk = Math.max(1, Math.round((stop.distance || 0) / 80));
             const arrivals = (this.busStopData && this.busStopData[stop.id]) || [];
             arrivals.forEach(a => {
-                const nextSame = arrivals.find(x => x.line === a.line && x.mins > a.mins);
+                // Same line AND same direction, so the fallback isn't the opposite-way bus.
+                const nextSame = arrivals.find(x => x.line === a.line && x.direction === a.direction && x.mins > a.mins);
                 rows.push({
                     line: a.line, lineId: a.lineId, dest: a.dest, direction: a.direction,
                     mins: a.mins, due: a.due, vehicleId: a.vehicleId,
@@ -883,24 +887,27 @@ class PengeDash {
         if (!stops.length) {
             return `${disrupt}<div class="no-data">Live position isn’t available for this bus right now.</div>`;
         }
-        const yourIdx = stops.findIndex(s => s.naptanId === ctx.stopId);
+        // Match the current stop by naptan, falling back to name (ids vary by source).
+        const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        let yourIdx = stops.findIndex(s => s.naptanId === ctx.stopId);
+        if (yourIdx < 0 && ctx.stopName) yourIdx = stops.findIndex(s => norm(s.stationName).includes(norm(ctx.stopName)) || norm(ctx.stopName).includes(norm(s.stationName)));
         const nowNear = this.cleanStationName(stops[0].stationName || stops[0].destinationName || 'the route');
-        const n = stops.length;
         let head;
         if (yourIdx < 0) {
             head = `<div class="track-head"><span class="track-now">🚌 Now near ${this.escapeHtml(nowNear)}</span>
-                <span class="track-sub">Has already left your stop</span></div>`;
+                <span class="track-sub">This bus isn’t heading to your stop right now.</span></div>`;
         } else {
-            const yourMins = Math.round((stops[yourIdx].timeToStation || 0) / 60);
-            const pct = Math.max(4, Math.round(((yourIdx) / n) * 100));
+            const yourMins = Math.floor((stops[yourIdx].timeToStation || 0) / 60);
+            // Fill by how few stops remain to you (≥10 away = empty, at your stop = full).
+            const fill = Math.max(6, Math.round((1 - Math.min(yourIdx, 10) / 10) * 100));
             head = `<div class="track-head">
-                <span class="track-count ${yourMins <= 3 ? 'urgent' : ''}" data-due="${Date.now() + (stops[yourIdx].timeToStation || 0) * 1000}">${yourMins <= 0 ? 'Due now' : yourMins + ' min'}</span>
+                <span class="track-count ${yourMins <= 3 ? 'urgent' : ''}" data-due="${Date.now() + (stops[yourIdx].timeToStation || 0) * 1000}" data-zero="Due now">${yourMins <= 0 ? 'Due now' : yourMins + ' min'}</span>
                 <span class="track-now">🚌 Now near ${this.escapeHtml(nowNear)} · ${yourIdx} stop${yourIdx === 1 ? '' : 's'} away</span>
-                <span class="track-progress"><span class="track-progress-fill" style="width:${100 - pct}%"></span></span>
+                <span class="track-progress"><span class="track-progress-fill" style="width:${fill}%"></span></span>
             </div>`;
         }
         const list = stops.map((s, i) => {
-            const mins = Math.round((s.timeToStation || 0) / 60);
+            const mins = Math.floor((s.timeToStation || 0) / 60);
             const mine = i === yourIdx ? ' your-stop' : '';
             return `<div class="track-stop${mine}">
                 <span class="track-stop-name">${i === yourIdx ? '📍 ' : ''}${this.escapeHtml(this.cleanStationName(s.stationName || ''))}</span>
@@ -936,11 +943,13 @@ class PengeDash {
     _startCountdownTicker() {
         if (this._tickTimer) return;
         this._tickTimer = setInterval(() => {
+            if (document.hidden) return;   // don't sweep the DOM while backgrounded (battery)
             const now = Date.now();
             document.querySelectorAll('[data-due]').forEach(el => {
                 const due = +el.dataset.due;
                 if (!due) return;
-                const m = Math.max(0, Math.round((due - now) / 60000));
+                // floor to match the initial render (a bus 1:59 away is "1 min", not "2").
+                const m = Math.max(0, Math.floor((due - now) / 60000));
                 el.textContent = m <= 0 ? (el.dataset.zero || 'due') : m + ' min';
                 el.classList.toggle('urgent', m <= 3);
             });
@@ -1005,7 +1014,7 @@ class PengeDash {
             // per group (on its first non-cancelled row).
             const groupKey = d => isBus ? d.line : d.dest;
             const freqByGroup = {};
-            data.forEach(d => { const k = groupKey(d); (freqByGroup[k] = freqByGroup[k] || []).push(d.mins); });
+            data.forEach(d => { if (d.cancelled) return; const k = groupKey(d); (freqByGroup[k] = freqByGroup[k] || []).push(d.mins); });
             const shownFreq = new Set();
             el.innerHTML = rows.map((d, i) => {
                 if (d.cancelled) {
@@ -1281,7 +1290,12 @@ class PengeDash {
             platform: this.cleanPlatform(a.platformName),
             platformDir: a.platformName || '',   // full "Northbound - Platform 2" (tube/DLR/OG)
             line: a.lineName || '',
+            lineId: a.lineId || '',              // so fav/searched bus stops get Track/Next-stops too
+            direction: a.direction || '',
+            destName: a.destinationName || '',
+            vehicleId: a.vehicleId || '',
             mins: Math.floor((a.timeToStation || 0) / 60),
+            due: Date.now() + (a.timeToStation || 0) * 1000,
             scheduledTime: a.expectedArrival
                 ? new Date(a.expectedArrival).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : ''
         })).filter(d => d.mins >= 0).sort((a, b) => a.mins - b.mins);
@@ -1798,6 +1812,8 @@ class PengeDash {
         this.updatePinnedTrain();
     }
     unpinTrain() {
+        // Stop server-side push tracking for this train before dropping it.
+        if (this.pinnedTrain && this.pinnedTrain.alertOn) this.unsubscribeTrainAlerts();
         this.pinnedTrain = null;
         this.savePinnedTrain();
         this.renderPinnedStrip();
