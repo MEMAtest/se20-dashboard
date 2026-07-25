@@ -303,7 +303,7 @@ class PengeDash {
 
     async detectNearby(lat, lon, radius) {
         const stationRadius = radius || CONFIG.NEARBY.stationRadius;
-        const tflAuth = CONFIG.TFL_APP_KEY ? `&app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+        const tflAuth = this._tflAuth('&');
 
         const stationsUrl = `https://api.tfl.gov.uk/StopPoint?lat=${lat}&lon=${lon}` +
             `&stopTypes=NaptanMetroStation,NaptanRailStation&radius=${stationRadius}${tflAuth}`;
@@ -698,7 +698,7 @@ class PengeDash {
             this._busRouteCache = this._busRouteCache || {};
             const key = `${lineId}:${dir}`;
             if (!this._busRouteCache[key]) {
-                const auth = CONFIG.TFL_APP_KEY ? `&app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+                const auth = this._tflAuth('&');
                 this._busRouteCache[key] = fetch(`https://api.tfl.gov.uk/Line/${encodeURIComponent(lineId)}/Route/Sequence/${encodeURIComponent(dir)}?serviceTypes=Regular${auth}`)
                     .then(r => r.ok ? r.json() : null).catch(() => null);
             }
@@ -837,7 +837,7 @@ class PengeDash {
 
     async _vehicleArrivals(vehicleId) {
         if (!vehicleId) return [];
-        const auth = CONFIG.TFL_APP_KEY ? `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+        const auth = this._tflAuth();
         try {
             const data = await fetch(`https://api.tfl.gov.uk/Vehicle/${encodeURIComponent(vehicleId)}/Arrivals${auth}`)
                 .then(r => r.ok ? r.json() : null);
@@ -923,7 +923,7 @@ class PengeDash {
         const lineIds = [...new Set(Object.values(this.busStopData || {}).flat().map(a => a.lineId).filter(Boolean))];
         if (!lineIds.length) return;
         this._busDisruptAt = Date.now();
-        const auth = CONFIG.TFL_APP_KEY ? `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+        const auth = this._tflAuth();
         try {
             const data = await fetch(`https://api.tfl.gov.uk/Line/${lineIds.map(encodeURIComponent).join(',')}/Disruption${auth}`)
                 .then(r => r.ok ? r.json() : []);
@@ -1131,7 +1131,7 @@ class PengeDash {
         this._accessCache = this._accessCache || {};
         let info = this._accessCache[id];
         if (!info) {
-            const auth = CONFIG.TFL_APP_KEY ? `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+            const auth = this._tflAuth();
             try {
                 const [sp, dis] = await Promise.all([
                     fetch(`https://api.tfl.gov.uk/StopPoint/${id}${auth}`).then(r => r.ok ? r.json() : null).catch(() => null),
@@ -1260,7 +1260,7 @@ class PengeDash {
 
     // Hub ids (HUB...) have no arrivals of their own — resolve to child station ids
     async _resolveHubChildren(hubId) {
-        const tflAuth = CONFIG.TFL_APP_KEY ? `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+        const tflAuth = this._tflAuth();
         try {
             const sp = await fetch(`https://api.tfl.gov.uk/StopPoint/${hubId}${tflAuth}`).then(r => r.json());
             const ids = [];
@@ -1275,8 +1275,38 @@ class PengeDash {
     }
 
     // Shared: fetch + map TfL arrivals for any stop id (hubs resolved to children)
+    // Single source of truth for turning a TfL arrival prediction into our row shape.
+    // Buses keep the raw destination + no platform; stations get the cleaned name +
+    // platform/direction. Both carry lineId/vehicleId/due so tracking + ticking work.
+    _mapArrival(a, isBus) {
+        const tts = a.timeToStation || 0;
+        const due = Date.now() + tts * 1000;
+        const fmt = ms => new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        let scheduledTime = '';
+        if (a.expectedArrival) scheduledTime = fmt(new Date(a.expectedArrival).getTime());
+        else if (isBus) scheduledTime = fmt(due);
+        return {
+            dest: isBus ? (a.destinationName || a.towards || 'Check board')
+                : this.cleanStationName(a.destinationName || a.towards || 'Check board'),
+            platform: isBus ? '-' : this.cleanPlatform(a.platformName),
+            platformDir: isBus ? '' : (a.platformName || ''),
+            line: a.lineName || '', lineId: a.lineId || '', direction: a.direction || '',
+            destName: a.destinationName || '', vehicleId: a.vehicleId || '',
+            mins: Math.floor(tts / 60), due, scheduledTime
+        };
+    }
+    _mapArrivals(data, isBus) {
+        return (Array.isArray(data) ? data : []).map(x => this._mapArrival(x, isBus))
+            .filter(d => d.mins >= 0).sort((a, b) => a.mins - b.mins);
+    }
+
+    // TfL auth query params. Pass '&' when the URL already has a query string.
+    _tflAuth(sep = '?') {
+        return CONFIG.TFL_APP_KEY ? `${sep}app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+    }
+
     async _fetchStopArrivals(id) {
-        const tflAuth = CONFIG.TFL_APP_KEY ? `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+        const tflAuth = this._tflAuth();
         let ids = [id];
         if (/^HUB/i.test(id)) {
             const children = await this._resolveHubChildren(id);
@@ -1285,20 +1315,9 @@ class PengeDash {
         const results = await Promise.all(ids.map(i =>
             fetch(`https://api.tfl.gov.uk/StopPoint/${i}/Arrivals${tflAuth}`).then(r => r.json()).catch(() => [])));
         const data = results.flat();
-        return (Array.isArray(data) ? data : []).map(a => ({
-            dest: this.cleanStationName(a.destinationName || a.towards || 'Check board'),
-            platform: this.cleanPlatform(a.platformName),
-            platformDir: a.platformName || '',   // full "Northbound - Platform 2" (tube/DLR/OG)
-            line: a.lineName || '',
-            lineId: a.lineId || '',              // so fav/searched bus stops get Track/Next-stops too
-            direction: a.direction || '',
-            destName: a.destinationName || '',
-            vehicleId: a.vehicleId || '',
-            mins: Math.floor((a.timeToStation || 0) / 60),
-            due: Date.now() + (a.timeToStation || 0) * 1000,
-            scheduledTime: a.expectedArrival
-                ? new Date(a.expectedArrival).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : ''
-        })).filter(d => d.mins >= 0).sort((a, b) => a.mins - b.mins);
+        // Search/favourite stops can be bus OR rail; detect from the arrival modes.
+        const isBus = data.some(a => (a.modeName || '') === 'bus') && !data.some(a => /tube|rail|overground|dlr|elizabeth/i.test(a.modeName || ''));
+        return this._mapArrivals(data, isBus);
     }
 
     // ==================== STATION SEARCH (Nearby screen) ====================
@@ -1369,7 +1388,7 @@ class PengeDash {
     }
 
     async fetchNearbyArrivals() {
-        const tflAuth = CONFIG.TFL_APP_KEY ? `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+        const tflAuth = this._tflAuth();
         this.busStopData = this.busStopData || {};
         this.stationData = this.stationData || {};
 
@@ -1380,15 +1399,7 @@ class PengeDash {
         await Promise.all(tflStations.map(async (st) => {
             try {
                 const data = await fetch(`https://api.tfl.gov.uk/StopPoint/${st.id}/Arrivals${tflAuth}`).then(r => r.json());
-                const deps = (Array.isArray(data) ? data : []).map(a => ({
-                    dest: this.cleanStationName(a.destinationName || a.towards || 'Check board'),
-                    platform: this.cleanPlatform(a.platformName),
-                    platformDir: a.platformName || '',   // full "Northbound - Platform 2" (tube/DLR/OG)
-                    line: a.lineName || '',
-                    mins: Math.floor((a.timeToStation || 0) / 60),
-                    scheduledTime: a.expectedArrival
-                        ? new Date(a.expectedArrival).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : ''
-                })).filter(d => d.mins >= 0).sort((a, b) => a.mins - b.mins);
+                const deps = this._mapArrivals(data, false);
 
                 st.platformDirections = this.getPlatformDirections(deps);
                 st.nextDepartures = deps.slice(0, 3);
@@ -1408,20 +1419,7 @@ class PengeDash {
         await Promise.all((this.nearbyBusStops || []).map(async (stop) => {
             try {
                 const data = await fetch(`https://api.tfl.gov.uk/StopPoint/${stop.id}/Arrivals${tflAuth}`).then(r => r.json());
-                const arr = (Array.isArray(data) ? data : []).map(b => ({
-                    dest: b.destinationName || b.towards || 'Check board',
-                    line: b.lineName || '',
-                    lineId: b.lineId || '',
-                    direction: b.direction || '',   // inbound / outbound — picks the route branch
-                    destName: b.destinationName || '',
-                    vehicleId: b.vehicleId || '',    // lets us track this exact bus's position
-                    mins: Math.floor((b.timeToStation || 0) / 60),
-                    due: Date.now() + (b.timeToStation || 0) * 1000,   // for live-ticking countdowns
-                    platform: '-',
-                    scheduledTime: (b.expectedArrival ? new Date(b.expectedArrival) : new Date(Date.now() + (b.timeToStation || 0) * 1000))
-                        .toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
-                })).filter(d => d.mins >= 0).sort((a, b) => a.mins - b.mins);
-                this.busStopData[stop.id] = arr;
+                this.busStopData[stop.id] = this._mapArrivals(data, true);
             } catch (e) { /* skip */ }
         }));
 
@@ -1463,7 +1461,7 @@ class PengeDash {
         const tube = (this.nearbyStations || []).filter(st => (st.modes || []).includes('tube') && st.id);
         if (!tube.length) return;
         this._crowdingAt = Date.now();
-        const auth = CONFIG.TFL_APP_KEY ? `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+        const auth = this._tflAuth();
         await Promise.all(tube.map(async st => {
             try {
                 const d = await fetch(`https://api.tfl.gov.uk/crowding/${encodeURIComponent(st.id)}/Live${auth}`)
@@ -1825,6 +1823,9 @@ class PengeDash {
             const data = await fetch(`${CONFIG.DARWIN_API_URL}/api/board?lat=${p.lat}&lon=${p.lon}`)
                 .then(r => r.ok ? r.json() : null);
             if (data && data.station && data.station.crs) p.crs = data.station.crs;  // needed for push alerts
+            // Re-arm alerts once per session: the server keeps subs in memory, so a restart
+            // drops them while the client still shows the bell "on" — re-POST to re-register.
+            if (p.alertOn && !p._reArmed && p.crs && p.rid) { p._reArmed = true; this.subscribeTrainAlerts(); }
             const deps = (data && Array.isArray(data.departures)) ? data.departures : [];
             // Match by stable service id (rid) first; fall back to scheduled time +
             // destination for older pins saved before rid was stored.
@@ -2906,7 +2907,7 @@ class PengeDash {
     // line at the boarding stop, plus a "Track ›" link to the live tracker.
     async _enrichBusLegs() {
         const slots = [...document.querySelectorAll('.jp-bus[data-stop]')];
-        const auth = CONFIG.TFL_APP_KEY ? `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}` : '';
+        const auth = this._tflAuth();
         const cache = new Map();
         await Promise.all(slots.map(async slot => {
             const { stop, line } = slot.dataset;
