@@ -1,5 +1,5 @@
 // Penge Dash SE20 - Service Worker
-const CACHE_VERSION = 'v26';
+const CACHE_VERSION = 'v27';
 const TILE_CACHE = 'penge-dash-tiles-v1';
 const MAX_TILES = 300;
 const CACHE_NAME = `penge-dash-${CACHE_VERSION}`;
@@ -8,6 +8,7 @@ const STATIC_ASSETS = [
     '/index.html',
     '/styles.css',
     '/app.js',
+    '/journey-guidance.js',
     '/config.js',
     '/manifest.json',
     '/icon-192.png',

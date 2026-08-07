@@ -139,6 +139,9 @@ class PengeDash {
     showScreen(name) {
         if (!name) return;
         if (this._busTrackTimer) this.closeBusTracker();   // don't leave the tracker polling over a new screen
+        // Journey-detail arrivals are deliberately short lived. Do not keep polling
+        // once the person has gone back to results (or another part of the app).
+        if (this.currentScreen === 'journey' && name !== 'journey') this._clearJourneyDetailRefresh();
         this.currentScreen = name;
         document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
         const screen = document.getElementById(`screen-${name}`);
@@ -2955,6 +2958,7 @@ class PengeDash {
     showJourneyDetail(journey, destination) {
         const content = document.getElementById('journey-detail-content');
         if (!content) return;
+        this._clearJourneyDetailRefresh();
         this.drawJourneyRoute(journey, false);
 
         const fromLabel = this._activeOriginLabel || (this.journeyOrigin === 'here' ? 'Here' : (this.home.label || 'Home'));
@@ -2965,58 +2969,10 @@ class PengeDash {
         const fare = (journey.fare && journey.fare.totalCost != null) ? `£${(journey.fare.totalCost / 100).toFixed(2)}` : '—';
         const legs = journey.legs || [];
         const walkTotal = legs.filter(l => l.mode?.id === 'walking').reduce((s, l) => s + (l.duration || 0), 0);
+        const serviceCount = legs.filter(l => !['walking', 'cycle'].includes(l.mode?.id)).length;
 
-        // Timeline steps
-        // Darwin serves live platform numbers for these National-Rail-family modes.
-        const DARWIN_MODES = ['national-rail', 'overground', 'elizabeth-line', 'tflrail'];
-        const steps = legs.map((leg, i) => {
-            const mode = leg.mode?.id || 'walking';
-            const dur = leg.duration || 0;
-            const nodeCls = mode === 'walking' ? 'walk' : mode === 'bus' ? 'bus' : '';
-            const icon = mode === 'walking' ? '🚶' : mode === 'bus' ? '🚌' : mode === 'cycle' ? '🚲' : this._modeEmoji(this._legMode(mode));
-            const lineName = leg.routeOptions?.[0]?.name || '';
-            const toName = this.cleanStationName(leg.arrivalPoint?.commonName || (i === legs.length - 1 ? destination : 'next stop'));
-            const distTxt = leg.distance ? ' · ' + (leg.distance >= 1000 ? (leg.distance / 1000).toFixed(1) + ' km' : Math.round(leg.distance) + ' m') : '';
-            let title, sub, platHolder = '';
-            if (mode === 'walking') {
-                title = `Walk to ${this.escapeHtml(toName)}`;
-                sub = `${dur} min${distTxt}`;
-            } else if (mode === 'cycle') {
-                title = `Cycle to ${this.escapeHtml(toName)}`;
-                sub = `${dur} min${distTxt} · quieter roads`;
-            } else {
-                const verb = mode === 'bus' ? `Bus ${this.escapeHtml(lineName)}` : this.escapeHtml(lineName || mode);
-                title = `${verb} to ${this.escapeHtml(toName)}`;
-                const depAt = leg.departureTime ? new Date(leg.departureTime).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '';
-                sub = `${dur} min${depAt ? ' · departs ' + depAt : ''}`;
-                // Async platform slot: filled by _enrichJourneyPlatforms() after render,
-                // by warming the leg's origin station on the Darwin backend and matching
-                // the departure by scheduled time.
-                const dp = leg.departurePoint;
-                const fromName = this.cleanStationName(dp?.commonName || '');
-                if (DARWIN_MODES.includes(mode) && dp && Number.isFinite(dp.lat) && Number.isFinite(dp.lon) && depAt) {
-                    platHolder = `<span class="jp-plat" data-fmt="long" data-lat="${dp.lat}" data-lon="${dp.lon}" data-time="${this.escapeAttr(depAt)}" data-from="${this.escapeAttr(fromName)}"></span>`;
-                }
-                // Live bus-leg slot: filled by _enrichBusLegs() with the real next arrivals.
-                // Prefer the specific child stop — the parent 490G… returns no bus arrivals.
-                const busStopId = dp && (dp.individualStopId || dp.naptanId || dp.id);
-                if (mode === 'bus' && busStopId && lineName) {
-                    platHolder = `<span class="jp-bus" data-stop="${this.escapeAttr(busStopId)}" data-line="${this.escapeAttr(lineName)}"></span>`;
-                }
-            }
-            const lineCls = mode === 'walking' ? 'green' : mode === 'bus' ? 'red' : '';
-            return `
-                <div class="tl-step">
-                    <div class="tl-rail">
-                        <div class="tl-node ${nodeCls}">${icon}</div>
-                        ${i < legs.length - 1 ? `<div class="tl-line ${lineCls}"></div>` : ''}
-                    </div>
-                    <div class="tl-card">
-                        <div class="tl-card-title">${title}</div>
-                        <div class="tl-card-sub">${sub}${platHolder}</div>
-                    </div>
-                </div>`;
-        }).join('');
+        const guidance = this._buildJourneyGuidance(legs, destination);
+        const steps = this._renderGuidedJourney(guidance, destination);
 
         const insights = [];
         const haveLineData = Object.keys(this.lineStatusData || {}).length > 0;
@@ -3037,11 +2993,13 @@ class PengeDash {
                     <span class="jd-arrive">Arrive<b>${arrStr}</b></span>
                 </div>
                 <div class="jd-foot">
-                    <span>💷 ${fare}</span><span>🚶 ${walkTotal} min walk</span><span>🚉 ${legs.filter(l=>l.mode?.id!=='walking').length} legs</span>
+                    <span>💷 ${fare}</span><span>🚶 ${walkTotal} min walk</span><span>🚉 ${serviceCount} service${serviceCount === 1 ? '' : 's'}</span>
                 </div>
             </div>
             <div class="section-head"><h3>Your journey</h3></div>
-            <div class="timeline">${steps}</div>
+            <p class="jd-flow-hint">Follow each instruction in order. Live departures only appear when they are useful for this journey.</p>
+            <div class="journey-live-announcement" id="journey-live-announcement" role="status" aria-live="polite" aria-atomic="true"></div>
+            <div class="timeline journey-guidance">${steps}</div>
             ${insights.join('')}
             <div class="jd-actions">
                 <button class="jd-act primary" id="jd-save">★ Save route</button>
@@ -3053,12 +3011,345 @@ class PengeDash {
             saveBtn.textContent = '✓ Saved';
         });
 
-        // Fill in live platform numbers for rail legs (async, non-blocking).
-        this._enrichJourneyPlatforms();
-        // Replace scheduled bus-leg times with live "next in N min" + a Track link.
-        this._enrichBusLegs();
-
         this.showScreen('journey');
+        this._activateJourneyDetail(guidance);
+    }
+
+    // The helper deliberately owns the interpretation of TfL legs. Keep a small
+    // conservative fallback so an old cached shell still shows a usable itinerary.
+    _buildJourneyGuidance(legs, destination) {
+        const helper = globalThis.JourneyGuidance;
+        if (helper && typeof helper.buildJourneyGuidance === 'function') {
+            const built = helper.buildJourneyGuidance(legs, destination);
+            if (built && Array.isArray(built.segments)) return { ...built, helper };
+        }
+        return {
+            helper: null,
+            segments: (legs || []).map((leg, index) => {
+                const mode = leg.mode?.id || 'walking';
+                const route = leg.routeOptions?.[0] || {};
+                const point = leg.departurePoint || {};
+                return {
+                    index, original: leg, kind: mode === 'walking' ? 'walk' : 'ride', mode,
+                    fromName: this.cleanStationName(point.commonName || 'your stop'),
+                    toName: this.cleanStationName(leg.arrivalPoint?.commonName || destination),
+                    departureTime: leg.departureTime, arrivalTime: leg.arrivalTime,
+                    durationMinutes: leg.duration || 0, stopCount: leg.path?.stopPoints?.length || 0,
+                    lines: route.name ? [{ id: route.id || route.name, name: route.name }] : [],
+                    acceptedLineIds: route.id ? [route.id] : [], direction: route.direction || route.destination || '',
+                    departureStopId: point.individualStopId || point.naptanId || point.id || '',
+                    targetStopId: leg.arrivalPoint?.individualStopId || leg.arrivalPoint?.naptanId || leg.arrivalPoint?.id || '',
+                    departureCoordinates: Number.isFinite(point.lat) && Number.isFinite(point.lon) ? { lat: point.lat, lon: point.lon } : null
+                };
+            })
+        };
+    }
+
+    _isTransitSegment(segment) {
+        return !!segment && !['walking', 'cycle', 'walk', 'transfer'].includes(segment.mode || segment.kind);
+    }
+
+    _lineClass(line) {
+        const id = String(line?.id || line?.name || 'service').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        return `journey-line--${id || 'service'}`;
+    }
+
+    _departureClock(value) {
+        if (/^\d{1,2}:\d{2}$/.test(String(value || ''))) return String(value).padStart(5, '0');
+        const date = value ? new Date(value) : null;
+        return date && !Number.isNaN(date.getTime())
+            ? date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : 'Scheduled time unavailable';
+    }
+
+    _renderGuidedJourney(guidance, destination) {
+        const segments = guidance.segments || [];
+        const helper = guidance.helper;
+        const isThrough = (current, next) => !!(current && next && this._isTransitSegment(current) && this._isTransitSegment(next) &&
+            ((helper && typeof helper.isThroughService === 'function' && helper.isThroughService(current, next)) ||
+                next.kind === 'through-service' || next.kind === 'stay-on'));
+        const previousTransit = index => {
+            for (let i = index - 1; i >= 0; i--) if (this._isTransitSegment(segments[i])) return segments[i];
+            return null;
+        };
+        const changeBefore = (segment, index) => {
+            const previous = previousTransit(index);
+            if (!previous) return '';
+            if (index > 0 && isThrough(segments[index - 1], segment)) {
+                return `<div class="journey-connector stay-on"><span aria-hidden="true">↳</span><div><b>Stay on this service</b><span>It continues towards ${this.escapeHtml(segment.toName || 'your destination')}.</span></div></div>`;
+            }
+            const allowance = helper && typeof helper.transferMinutes === 'function'
+                ? helper.transferMinutes(previous, segment) : null;
+            const allowanceText = Number.isFinite(+allowance) && +allowance > 0
+                ? `${Math.round(+allowance)} min to change` : 'Allow time to change';
+            const route = (segment.lines || []).map(line => line.name || line.id).filter(Boolean).join(' / ') || this._modeLabel(segment.mode);
+            const direction = segment.direction ? `Towards ${segment.direction}` : 'Check station displays for the direction';
+            return `<div class="journey-connector change"><span class="connector-label">Change to</span><div><b>Change to ${this.escapeHtml(route)}</b><span>${this.escapeHtml(direction)} · ${this.escapeHtml(allowanceText)} · planned ${this.escapeHtml(this._departureClock(segment.departureTime))}</span></div></div>`;
+        };
+        const alightAfter = (segment, index) => {
+            const next = segments[index + 1];
+            if (isThrough(segment, next)) return '';
+            const isFinal = index === segments.length - 1;
+            const time = segment.arrivalTime ? `Arrive about ${this._departureClock(segment.arrivalTime)}` : 'Check the on-board displays';
+            return `<div class="journey-connector alight${isFinal ? ' journey-final-alight' : ''}"><span class="connector-label">Get off</span><div><b>Get off at ${this.escapeHtml(segment.toName || destination || 'your stop')}</b><span>${isFinal ? 'You have arrived' : this.escapeHtml(time)}.</span></div></div>`;
+        };
+        return segments.map((segment, index) => {
+            const transit = this._isTransitSegment(segment);
+            if (!transit) {
+                const action = segment.mode === 'cycle' ? 'Cycle' : 'Walk';
+                const metres = Number(segment.original?.distance);
+                const distance = Number.isFinite(metres) && metres > 0
+                    ? ` · ${metres >= 1000 ? `${(metres / 1000).toFixed(1)} km` : `${Math.round(metres)} m`}` : '';
+                return `<div class="guided-step guided-step--walk"><div class="guided-kicker">${action}</div><b>${action} to ${this.escapeHtml(segment.toName || destination)}</b><span>${Math.round(segment.durationMinutes || 0)} min${this.escapeHtml(distance)}</span></div>`;
+            }
+            const before = changeBefore(segment, index);
+            const lines = (segment.lines || []).length ? segment.lines : [{ id: segment.mode, name: this._modeLabel(segment.mode) }];
+            const lineBadges = lines.map(line => `<span class="journey-line ${this._lineClass(line)}"><span class="journey-line-dot" aria-hidden="true"></span>${this.escapeHtml(line.name || line.id || this._modeLabel(segment.mode))}</span>`).join('');
+            const stops = Number.isFinite(+segment.stopCount) && +segment.stopCount > 0
+                ? `${Math.round(+segment.stopCount)} stop${+segment.stopCount === 1 ? '' : 's'}` : 'Stops shown by the service';
+            const route = lines.map(line => line.name || line.id).filter(Boolean).join(' / ') || this._modeLabel(segment.mode);
+            const target = segment.direction || 'Check station displays';
+            const departureLabel = this._departureClock(segment.departureTime);
+            const arrivalLabel = this._departureClock(segment.arrivalTime);
+            const duration = Number.isFinite(+segment.durationMinutes) && +segment.durationMinutes > 0 ? ` · ${Math.round(+segment.durationMinutes)} min` : '';
+            return `${before}
+                <article class="guided-step guided-step--ride" data-guidance-index="${index}">
+                    <div class="guided-kicker">Take</div>
+                    <h4>Take ${this.escapeHtml(route)}</h4>
+                    <div class="guided-lines">${lineBadges}</div>
+                    <p><b>Towards ${this.escapeHtml(target)}</b></p>
+                    <p class="guided-route-points"><b>${this.escapeHtml(segment.fromName || 'your stop')} → ${this.escapeHtml(segment.toName || destination)}</b></p>
+                    <p class="guided-route-meta">${this.escapeHtml(stops + duration)} · ${this.escapeHtml(departureLabel)}–${this.escapeHtml(arrivalLabel)}</p>
+                    <div class="journey-platform-slot" data-guidance-platform="${index}"><span>Checking platform…</span></div>
+                    <section class="guided-departures" data-guidance-departures="${index}" aria-label="Departures for ${this.escapeAttr(route)}">
+                        <div class="guided-departures-loading">Checking live departures…</div>
+                    </section>
+                </article>${alightAfter(segment, index)}`;
+        }).join('');
+    }
+
+    _modeLabel(mode) {
+        return ({ bus: 'bus', tube: 'Tube', overground: 'London Overground', dlr: 'DLR', 'elizabeth-line': 'Elizabeth line', 'national-rail': 'train', tram: 'tram' })[mode] || String(mode || 'service');
+    }
+
+    _clearJourneyDetailRefresh() {
+        clearInterval(this._journeyDetailTimer);
+        this._journeyDetailTimer = null;
+        this._journeyDetailGuidance = null;
+        this._journeyRefreshInFlight = false;
+        this._journeyLiveSignature = '';
+    }
+
+    _activateJourneyDetail(guidance) {
+        this._journeyDetailGuidance = guidance;
+        this._refreshJourneyDetail();
+        // Live arrivals change quickly; 30 seconds is enough while this screen is open.
+        this._journeyDetailTimer = setInterval(() => {
+            if (this.currentScreen === 'journey' && !document.hidden) this._refreshJourneyDetail();
+        }, 30000);
+    }
+
+    async _refreshJourneyDetail() {
+        const guidance = this._journeyDetailGuidance;
+        if (!guidance || this.currentScreen !== 'journey' || this._journeyRefreshInFlight) return;
+        this._journeyRefreshInFlight = true;
+        const now = Date.now();
+        const segments = guidance.segments || [];
+        try {
+            await Promise.all(segments.map((segment, index) => this._refreshGuidedSegment(segment, index, guidance.helper, now)));
+            if (this.currentScreen !== 'journey' || this._journeyDetailGuidance !== guidance) return;
+            const signature = [...document.querySelectorAll('[data-guidance-departures]')]
+                .map(panel => (panel.querySelector('.guided-departures-list') || panel).textContent.replace(/\s+/g, ' ').trim()).join('|');
+            const live = document.getElementById('journey-live-announcement');
+            if (live && signature && signature !== this._journeyLiveSignature) {
+                const hasLiveRows = !!document.querySelector('.guided-departures-head');
+                live.textContent = this._journeyLiveSignature
+                    ? (hasLiveRows ? 'Live departure information changed.' : 'Scheduled journey information changed.')
+                    : (hasLiveRows ? 'Live departures loaded.' : 'Scheduled journey information loaded.');
+                this._journeyLiveSignature = signature;
+            }
+        } finally {
+            this._journeyRefreshInFlight = false;
+        }
+    }
+
+    _liveEligible(segment, helper, now) {
+        const dep = new Date(segment.departureTime).getTime();
+        const recentlyScheduled = Number.isFinite(dep) && dep >= now - 2 * 60000 && dep <= now + 30 * 60000;
+        return recentlyScheduled || !!(helper && typeof helper.isLiveEligible === 'function' && helper.isLiveEligible(segment.departureTime, now, 30));
+    }
+
+    async _refreshGuidedSegment(segment, index, helper, now) {
+        const panel = document.querySelector(`[data-guidance-departures="${index}"]`);
+        if (!panel || !this._isTransitSegment(segment)) return;
+        if (!this._liveEligible(segment, helper, now)) {
+            panel.innerHTML = `<p class="scheduled-fallback"><b>Scheduled service</b><span>Live departures will appear 30 minutes before this leg.</span></p>`;
+            this._renderGuidedPlatform(index, [], segment, true);
+            return;
+        }
+        const tfL = await this._guidedTflDepartures(segment, helper, now);
+        const rail = this._isRailMode(segment.mode) ? await this._guidedDarwinDepartures(segment, now) : { compatible: [], all: [] };
+        if (this.currentScreen !== 'journey' || this._journeyDetailGuidance?.segments?.[index] !== segment) return;
+        const feed = tfL.compatible.length ? tfL : (rail.compatible.length ? rail : (tfL.all.length ? tfL : rail));
+        const source = tfL.compatible.length || tfL.all.length ? 'TfL live' : (rail.all.length ? 'National Rail live' : 'Scheduled');
+        this._renderGuidedDepartures(panel, segment, index, feed.compatible, source, feed.all);
+        this._renderGuidedPlatform(index, feed.compatible, segment);
+    }
+
+    _isRailMode(mode) { return ['national-rail', 'overground', 'elizabeth-line', 'tflrail'].includes(mode); }
+
+    async _guidedTflDepartures(segment, helper, now) {
+        if (!segment.departureStopId) return { compatible: [], all: [] };
+        try {
+            const raw = await fetch(`https://api.tfl.gov.uk/StopPoint/${encodeURIComponent(segment.departureStopId)}/Arrivals${this._tflAuth()}`)
+                .then(r => r.ok ? r.json() : []);
+            const all = this._allCurrentTflDepartures(raw, now);
+            if (helper && typeof helper.normalizeTflDepartures === 'function') {
+                const normalized = helper.normalizeTflDepartures(raw, segment, now);
+                return { compatible: Array.isArray(normalized) ? normalized : [], all };
+            }
+            const accepted = new Set((segment.acceptedLineIds || []).map(id => String(id).toLowerCase()));
+            return { compatible: all.filter(a => !accepted.size || accepted.has(String(a.lineId || '').toLowerCase())), all };
+        } catch (e) { return { compatible: [], all: [] }; }
+    }
+
+    _allCurrentTflDepartures(raw, now) {
+        const seen = new Set();
+        return (Array.isArray(raw) ? raw : []).filter(row => {
+            if (!row || row.cancelled || row.isCancelled || /cancelled|canceled/i.test(String(row.status || ''))) return false;
+            const at = row.expectedArrival ? new Date(row.expectedArrival).getTime()
+                : (Number.isFinite(+row.timeToStation) ? now + (+row.timeToStation * 1000) : NaN);
+            if (!Number.isFinite(at) || at <= now) return false;
+            const key = row.vehicleId || row.serviceId || `${row.lineId || row.lineName}|${row.destinationName || row.towards}|${at}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        }).sort((a, b) => this._departureView(a, now).mins - this._departureView(b, now).mins);
+    }
+
+    async _guidedDarwinDepartures(segment, now) {
+        const c = segment.departureCoordinates;
+        if (!c || !Number.isFinite(+c.lat) || !Number.isFinite(+c.lon)) return { compatible: [], all: [] };
+        try {
+            const data = await fetch(`${CONFIG.DARWIN_API_URL}/api/board?lat=${encodeURIComponent(c.lat)}&lon=${encodeURIComponent(c.lon)}`)
+                .then(r => r.ok ? r.json() : null);
+            const all = (Array.isArray(data?.departures) ? data.departures : [])
+                .filter(d => d && !d.cancelled).slice(0, 8)
+                .map(d => ({ ...d, minutes: this._minutesUntilClock(d.expectedTime || d.scheduledTime, now) }))
+                .filter(d => d.minutes == null || d.minutes >= -1);
+            const compatible = (await Promise.all(all.map(async departure => {
+                const plannedClock = this._clockMinutes(this._departureClock(segment.departureTime));
+                const serviceClock = this._clockMinutes(departure.expectedTime || departure.scheduledTime);
+                let relativeToPlan = serviceClock - plannedClock;
+                if (relativeToPlan < -720) relativeToPlan += 1440;
+                if (Number.isFinite(relativeToPlan) && relativeToPlan < -2) return null;
+                const destinationMatches = this._journeyNamesMatch(departure.destination || departure.dest, segment.toName) ||
+                    this._journeyNamesMatch(departure.destination || departure.dest, segment.direction);
+                if (destinationMatches) return departure;
+                if (!departure.rid) return null;
+                try {
+                    const service = await fetch(`${CONFIG.DARWIN_API_URL}/api/service?rid=${encodeURIComponent(departure.rid)}`)
+                        .then(r => r.ok ? r.json() : null);
+                    const points = service?.callingPoints || [];
+                    const helper = globalThis.JourneyGuidance;
+                    const callsAtTarget = helper && typeof helper.isCallingPatternCompatible === 'function'
+                        ? helper.isCallingPatternCompatible(points, segment.fromName, segment.toName)
+                        : (() => {
+                            const boardingIndex = points.findIndex(point => this._journeyNamesMatch(point?.name || point?.locationName || point, segment.fromName));
+                            const targetIndex = points.findIndex(point => this._journeyNamesMatch(point?.name || point?.locationName || point, segment.toName));
+                            return boardingIndex >= 0 && targetIndex > boardingIndex;
+                        })();
+                    return callsAtTarget ? (departure.destination || departure.dest
+                        ? departure : { ...departure, destination: segment.direction || segment.toName }) : null;
+                } catch (e) { return null; }
+            }))).filter(Boolean);
+            return { compatible, all };
+        } catch (e) { return { compatible: [], all: [] }; }
+    }
+
+    _journeyNamesMatch(left, right) {
+        const normal = value => String(value || '').toLowerCase()
+            .replace(/\b(underground|railway|rail|bus|station|stop)\b/g, ' ')
+            .replace(/[^a-z0-9]+/g, ' ').trim();
+        const a = normal(left), b = normal(right);
+        return !!(a && b && (a === b || a.includes(b) || b.includes(a)));
+    }
+
+    _clockMinutes(value) {
+        const match = String(value || '').match(/(\d{1,2}):(\d{2})/);
+        return match ? (+match[1] * 60) + +match[2] : NaN;
+    }
+
+    _minutesUntilClock(value, now = Date.now()) {
+        const clock = this._clockMinutes(value);
+        if (!Number.isFinite(clock)) return null;
+        const date = new Date(now);
+        let delta = clock - (date.getHours() * 60 + date.getMinutes());
+        if (delta < -720) delta += 1440;
+        return delta;
+    }
+
+    _departureView(row, now = Date.now()) {
+        const seconds = row.timeToStation;
+        const mins = row.minutes != null && Number.isFinite(+row.minutes) ? +row.minutes
+            : (row.mins != null && Number.isFinite(+row.mins) ? +row.mins
+                : (seconds != null && Number.isFinite(+seconds) ? Math.floor(+seconds / 60) : this._minutesUntilClock(row.expectedTime || row.scheduledTime, now)));
+        const scheduled = row.expectedTime || row.scheduledTime || row.expectedArrival || row.aimedDepartureTime || '';
+        const destination = row.destinationName || row.destination || row.towards || row.dest || 'Destination not shown';
+        return { mins, scheduled: this._departureClock(scheduled), destination, platform: row.platformName || row.platform || '', vehicleId: row.vehicleId || row.serviceId || row.rid || '', line: row.lineName || row.line || '', lineId: row.lineId || '', works: !!row.works };
+    }
+
+    _departureKey(row) {
+        const view = this._departureView(row);
+        return view.vehicleId || `${String(view.lineId || view.line).toLowerCase()}|${String(view.destination).toLowerCase()}|${view.scheduled}`;
+    }
+
+    _renderGuidedDepartures(panel, segment, index, departures, source, allDepartures = []) {
+        const compatibleKeys = new Set((departures || []).map(row => this._departureKey(row)));
+        const compatibleRows = (departures || []).map(row => ({ ...this._departureView(row), works: true }));
+        const seen = new Set();
+        const allRows = [...compatibleRows, ...(allDepartures || []).map(row => ({
+            ...this._departureView(row), works: compatibleKeys.has(this._departureKey(row))
+        }))].filter(row => {
+            const key = row.vehicleId || `${String(row.lineId || row.line).toLowerCase()}|${String(row.destination).toLowerCase()}|${row.scheduled}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        }).slice(0, 8);
+        const visible = compatibleRows.slice(0, 3);
+        const visibleKeys = new Set(visible.map(row => row.vehicleId || `${row.lineId}|${row.destination}|${row.scheduled}`));
+        const extra = allRows.filter(row => !visibleKeys.has(row.vehicleId || `${row.lineId}|${row.destination}|${row.scheduled}`));
+        const wasExpanded = panel.dataset.expanded === '1';
+        const restoreExpandFocus = document.activeElement === panel.querySelector('.guided-expand');
+        const rowHtml = (row, i) => `<div class="guided-departure${row.works ? ' suitable' : ''}">
+            <span class="guided-departure-main"><b>${row.works ? (i === 0 ? 'Next suitable' : 'Works for this journey') : this.escapeHtml(row.line || 'Other service')}</b><span>${this.escapeHtml(row.destination)}</span>${segment.mode !== 'bus' && row.platform && row.platform !== '-' ? `<small>Platform ${this.escapeHtml(String(row.platform))}</small>` : ''}</span>
+            <span class="guided-departure-time">${row.mins == null ? this.escapeHtml(row.scheduled) : (row.mins <= 0 ? 'Due' : `${row.mins} min`)}<small>${this.escapeHtml(row.scheduled)}</small></span>
+            ${row.vehicleId && segment.mode === 'bus' ? `<button class="journey-track-bus" data-vehicle="${this.escapeAttr(row.vehicleId)}" data-line="${this.escapeAttr(row.line || segment.lines?.[0]?.name || '')}" data-lineid="${this.escapeAttr(row.lineId || '')}" data-dest="${this.escapeAttr(row.destination || '')}" data-stop="${this.escapeAttr(segment.departureStopId || '')}" aria-label="Track this bus">Track</button>` : ''}
+        </div>`;
+        const fallback = `<p class="scheduled-fallback"><b>Scheduled ${this.escapeHtml(this._departureClock(segment.departureTime))}</b><span>No suitable live departure is available yet.</span></p>`;
+        panel.innerHTML = `<div class="guided-departures-head"><b>${this.escapeHtml(source)}</b><span>${compatibleRows.length} suitable departure${compatibleRows.length === 1 ? '' : 's'}</span></div><div class="guided-departures-list">${visible.length ? visible.map(rowHtml).join('') : fallback}</div>${extra.length ? `<button class="guided-expand" aria-expanded="${wasExpanded ? 'true' : 'false'}" aria-controls="guided-more-${index}" data-guidance-expand="${index}">${wasExpanded ? 'Show fewer departures' : `All departures from ${this.escapeHtml(segment.fromName || 'this stop')}`}</button><div class="guided-departures-more" id="guided-more-${index}"${wasExpanded ? '' : ' hidden'}>${extra.map((row, n) => rowHtml(row, n + visible.length)).join('')}</div>` : ''}`;
+        panel.querySelectorAll('.guided-expand').forEach(button => button.addEventListener('click', () => {
+            const more = panel.querySelector(`#guided-more-${index}`);
+            const expanded = button.getAttribute('aria-expanded') === 'true';
+            button.setAttribute('aria-expanded', String(!expanded));
+            more.hidden = expanded;
+            panel.dataset.expanded = expanded ? '0' : '1';
+            button.textContent = expanded ? `All departures from ${segment.fromName || 'this stop'}` : 'Show fewer departures';
+        }));
+        if (restoreExpandFocus) panel.querySelector('.guided-expand')?.focus();
+        panel.querySelectorAll('.journey-track-bus').forEach(button => button.addEventListener('click', event => {
+            event.stopPropagation();
+            const d = button.dataset;
+            this.openBusTracker({ vehicleId: d.vehicle, line: d.line, lineId: d.lineid || d.line, dest: d.dest || '', stopId: d.stop, stopName: segment.fromName || '' });
+        }));
+    }
+
+    _renderGuidedPlatform(index, departures, segment, isFuture = false) {
+        const slot = document.querySelector(`[data-guidance-platform="${index}"]`);
+        if (!slot) return;
+        if (segment?.mode === 'bus') { slot.innerHTML = ''; return; }
+        const platform = (departures || []).find(d => d.platform && d.platform !== '-')?.platform;
+        slot.innerHTML = platform ? `<b class="tl-plat-badge">Current platform ${this.escapeHtml(String(platform))}</b>`
+            : (isFuture ? '<span>Platform available closer to departure</span>' : '<span>Current platform not yet shown</span>');
     }
 
     _legMode(mode) {

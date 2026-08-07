@@ -510,6 +510,77 @@ input { font-family: inherit; }
 .jd-act { flex: 1; border: 1px solid var(--line); background: var(--card); border-radius: 12px; padding: 12px; font-weight: 700; font-size: 13px; display: flex; align-items: center; justify-content: center; gap: 6px; }
 .jd-act.primary { background: var(--blue); color: #fff; border-color: var(--blue); }
 
+/* ---------- Journey detail: instruction-led travel flow ---------- */
+.jd-flow-hint { margin: -4px 2px 12px; color: var(--muted); font-size: 12.5px; }
+.journey-live-announcement { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+.journey-guidance { padding-left: 0; }
+.guided-step, .journey-connector {
+    position: relative; margin: 0 0 12px; border-radius: 14px; box-shadow: var(--shadow);
+}
+.guided-step--ride { background: var(--card); border: 1px solid var(--line); padding: 14px; }
+.guided-step--walk { background: var(--card-alt); border: 1px solid var(--line); padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
+.guided-step--walk span { color: var(--muted); font-size: 12.5px; }
+.guided-kicker { color: var(--blue); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 3px; }
+.guided-step h4 { font-size: 18px; letter-spacing: -.02em; }
+.guided-lines { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.journey-line { display: inline-flex; align-items: center; gap: 5px; min-height: 25px; border: 1px solid var(--line-strong); border-left: 4px solid var(--blue); border-radius: 8px; padding: 3px 8px 3px 6px; background: var(--card-alt); color: var(--text); font-size: 12px; font-weight: 800; }
+.journey-line-dot { width: 6px; height: 6px; border: 1px solid currentColor; border-radius: 50%; }
+.journey-line--bakerloo { border-left-color: #b36305; } .journey-line--central { border-left-color: #dc241f; }
+.journey-line--circle { border-left-color: #ffd329; } .journey-line--hammersmith-city { border-left-color: #f3a9bb; }
+.journey-line--metropolitan { border-left-color: #9b0056; }
+.journey-line--district { border-left-color: #007229; } .journey-line--jubilee { border-left-color: #6a7278; }
+.journey-line--northern { border-left-color: var(--text); } .journey-line--piccadilly { border-left-color: #0019a8; }
+.journey-line--victoria { border-left-color: #00a0e2; } .journey-line--elizabeth, .journey-line--elizabeth-line { border-left-color: #6950a1; }
+.journey-line--liberty, .journey-line--lioness, .journey-line--mildmay, .journey-line--suffragette, .journey-line--weaver, .journey-line--windrush, .journey-line--overground { border-left-color: #ef7b00; }
+.journey-line--dlr { border-left-color: #00a4a7; } .journey-line--bus { border-left-color: #e32219; }
+.guided-step p { margin-top: 3px; font-size: 13.5px; color: var(--text-2); }
+.guided-route-points { overflow-wrap: anywhere; }
+.guided-route-meta { color: var(--muted) !important; font-size: 12px !important; }
+.journey-platform-slot { min-height: 20px; margin-top: 7px; color: var(--muted); font-size: 12px; }
+.journey-connector { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-left: 4px solid var(--line-strong); background: var(--card-alt); font-size: 13px; }
+.journey-connector > div { display: flex; flex-direction: column; gap: 1px; }
+.journey-connector span:not(.connector-label) { color: var(--text-2); font-size: 12px; }
+.connector-label { min-width: 67px; color: var(--text); font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.journey-connector.alight { border-left-color: var(--amber); background: var(--amber-soft); }
+.journey-connector.alight .connector-label { color: var(--amber); }
+.journey-connector.change { border-left-color: var(--blue); background: var(--blue-soft); }
+.journey-connector.change .connector-label { color: var(--blue); }
+.journey-connector.stay-on { border-left-color: var(--green); background: var(--green-soft); }
+.journey-connector.stay-on > span { color: var(--green); font-weight: 800; }
+.journey-final-alight { margin-top: 2px; }
+.guided-departures { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 10px; }
+.guided-departures-loading, .scheduled-fallback { color: var(--muted); font-size: 12.5px; }
+.scheduled-fallback { display: flex; flex-direction: column; gap: 2px; }
+.scheduled-fallback b { color: var(--text-2); }
+.guided-departures-head { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11.5px; margin-bottom: 4px; }
+.guided-departures-head b { color: var(--text-2); }
+.guided-departure { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 7px; padding: 8px 0; border-top: 1px solid var(--line); }
+.guided-departure.suitable { border-left: 3px solid var(--green); padding-left: 8px; margin-left: -8px; }
+.guided-departure-main, .guided-departure-time { display: flex; flex-direction: column; min-width: 0; }
+.guided-departure-main b { color: var(--text-2); font-size: 11px; }
+.guided-departure.suitable .guided-departure-main b { color: var(--green); }
+.guided-departure-main span { overflow-wrap: anywhere; font-size: 13px; font-weight: 700; }
+.guided-departure small { color: var(--muted); font-size: 10.5px; }
+.guided-departure-time { align-items: flex-end; color: var(--green); font-size: 14px; font-weight: 800; white-space: nowrap; }
+.journey-track-bus, .guided-expand { border: 0; border-radius: 8px; background: var(--blue-soft); color: var(--blue); font: inherit; font-size: 11.5px; font-weight: 800; padding: 5px 7px; }
+.guided-expand { width: 100%; margin-top: 7px; padding: 8px; }
+.guided-expand:focus-visible, .journey-track-bus:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
+.guided-departures-more { margin-top: 4px; }
+
+@media (max-width: 360px) {
+    .guided-step--ride { padding: 12px; }
+    .guided-step h4 { font-size: 16px; }
+    .journey-connector { gap: 7px; padding: 9px; }
+    .connector-label { min-width: 60px; }
+    .guided-departure { grid-template-columns: minmax(0, 1fr) auto; }
+    .journey-track-bus { grid-column: 2; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .screen, .top-tab, .go-btn, .route-card, .next-trains-modal, .modal-content { animation: none !important; transition: none !important; }
+    html { scroll-behavior: auto; }
+}
+
 /* ---------- Bottom nav ---------- */
 .bottom-nav {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 80;
