@@ -145,19 +145,20 @@ class PengeDash {
             // search or replan replaces _lastJourneys wholesale, so a positional
             // index from an older entry (reachable via native Forward, or Back past
             // a since-replaced search) can silently point at the wrong journey.
-            const resolvable = state.screen === 'journey' &&
-                Number.isInteger(state.journeyIndex) &&
-                state.resultSetId === this._resultSetId &&
-                this._lastJourneys && this._lastJourneys[state.journeyIndex];
-            if (resolvable) {
+            // 'journey-live' entries share this exact check — never a second,
+            // separately-maintained validation path.
+            const isJourneyFlow = state.screen === 'journey' || state.screen === 'journey-live';
+            const journey = isJourneyFlow ? this._resolveJourneyFromHistory(state) : null;
+            if (journey) {
                 // Restore the detail view from the journeys already in memory — no re-fetch.
-                this.showJourneyDetail(this._lastJourneys[state.journeyIndex], state.destination);
+                this.showJourneyDetail(journey, state.destination);
+                if (state.screen === 'journey-live') this.startLiveJourney();
             } else {
                 // Can't safely resolve this entry (stale/out-of-range/no cache) — never
                 // show a blank journey screen. Fall back to results/plan, and repair
                 // this history slot in place so landing on it again (native Forward,
                 // or another Back) replays the same safe fallback instead of a blank one.
-                const fallback = state.screen === 'journey' ? 'plan' : (state.screen || 'plan');
+                const fallback = isJourneyFlow ? 'plan' : (state.screen || 'plan');
                 this.showScreen(fallback);
                 try { history.replaceState({ screen: fallback }, ''); } catch (err) { /* ignore */ }
             }
@@ -170,12 +171,26 @@ class PengeDash {
             b.addEventListener('click', () => handler(b)));
     }
 
+    // The single source of truth for "is this history state's journeyIndex
+    // still safe to resolve", shared by the popstate handler for BOTH the
+    // 'journey' and 'journey-live' screens (see there) — never duplicated.
+    _resolveJourneyFromHistory(state) {
+        const resolvable = Number.isInteger(state.journeyIndex) &&
+            state.resultSetId === this._resultSetId &&
+            this._lastJourneys && this._lastJourneys[state.journeyIndex];
+        return resolvable ? this._lastJourneys[state.journeyIndex] : null;
+    }
+
     showScreen(name, extra = {}) {
         if (!name) return;
         if (this._busTrackTimer) this.closeBusTracker();   // don't leave the tracker polling over a new screen
         // Journey-detail arrivals are deliberately short lived. Do not keep polling
         // once the person has gone back to results (or another part of the app).
-        if (this.currentScreen === 'journey' && name !== 'journey') this._clearJourneyDetailRefresh();
+        // 'journey' and 'journey-live' share one guidance object/timer (see
+        // _activateJourneyDetail) — only clear when leaving BOTH, not when
+        // switching between them (Start journey / End journey).
+        const JOURNEY_FLOW = new Set(['journey', 'journey-live']);
+        if (JOURNEY_FLOW.has(this.currentScreen) && !JOURNEY_FLOW.has(name)) this._clearJourneyDetailRefresh();
         // Remember where we scrolled to on the screen we're leaving, so returning
         // to it (tab, back button) can restore it instead of always landing at top.
         if (this.currentScreen) this._scrollPositions[this.currentScreen] = window.scrollY;
@@ -211,6 +226,10 @@ class PengeDash {
             requestAnimationFrame(() => this.map.invalidateSize());
         }
         if (name === 'buses') this.renderBusesScreen();
+        // Re-render from whatever guidance is already in memory (set by
+        // showJourneyDetail/_activateJourneyDetail) — covers both the normal
+        // Start-journey entry and a native-Forward replay landing back here.
+        if (name === 'journey-live') this._renderLiveJourneyScreen();
     }
 
     setupShellLinks() {
@@ -224,6 +243,10 @@ class PengeDash {
         go('nearby-alerts-link', 'alerts');
         const back = document.getElementById('journey-back');
         if (back) back.addEventListener('click', () => this.showScreen('plan'));
+        const liveBack = document.getElementById('journey-live-back');
+        if (liveBack) liveBack.addEventListener('click', () => this.showScreen('journey', {
+            state: { journeyIndex: this._journeyLiveIndex, resultSetId: this._resultSetId, destination: this._lastDestination }
+        }));
     }
 
     // ==================== HOME / SAVED PLACES PERSISTENCE ====================
@@ -3124,7 +3147,8 @@ class PengeDash {
             <div class="timeline journey-guidance">${steps}</div>
             ${insights.join('')}
             <div class="jd-actions">
-                <button class="jd-act primary" id="jd-save">★ Save route</button>
+                <button class="jd-act primary" id="jd-start-live">▶ Start journey</button>
+                <button class="jd-act" id="jd-save">★ Save route</button>
             </div>`;
 
         const saveBtn = document.getElementById('jd-save');
@@ -3132,6 +3156,8 @@ class PengeDash {
             this.saveFavouriteJourney(destination);
             saveBtn.textContent = '✓ Saved';
         });
+        const startBtn = document.getElementById('jd-start-live');
+        if (startBtn) startBtn.addEventListener('click', () => this.startLiveJourney());
 
         // Record which journey this is, AND which result set it came from, so Back
         // (popstate) can restore this exact detail view from _lastJourneys without
@@ -3139,6 +3165,7 @@ class PengeDash {
         // new search/replan (a bare positional index would silently open the wrong
         // journey in that case).
         const journeyIndex = this._lastJourneys ? this._lastJourneys.indexOf(journey) : -1;
+        this._journeyLiveIndex = journeyIndex;   // remembered so "End journey" can rebuild the same Back state
         this.showScreen('journey', { state: { journeyIndex, resultSetId: this._resultSetId, destination } });
         this._activateJourneyDetail(guidance);
     }
@@ -3315,7 +3342,18 @@ class PengeDash {
             if (isThrough(segment, next)) return '';
             const isFinal = index === segments.length - 1;
             const time = segment.arrivalTime ? `Arrive about ${this._departureClock(segment.arrivalTime)}` : 'Check the on-board displays';
-            return `<div class="journey-connector alight${isFinal ? ' journey-final-alight' : ''}"><span class="connector-label">Get off</span><div><b>Get off at ${this.escapeHtml(segment.toName || destination || 'your stop')}</b><span>${isFinal ? 'You have arrived' : this.escapeHtml(time)}.</span></div></div>`;
+            const stopName = segment.toName || destination || 'your stop';
+            // Bus legs get "Ride N stops · get off at X (Stop C)"; the stop letter
+            // fills in asynchronously via _enrichBusStopLetters (never left as a
+            // dangling "()" — the span stays empty until we have a clean value).
+            const stopsPhrase = segment.mode === 'bus' && helper && typeof helper.formatBusStopCount === 'function'
+                ? helper.formatBusStopCount(segment.stopCount) : null;
+            const headline = stopsPhrase
+                ? `${this.escapeHtml(stopsPhrase)} · get off at ${this.escapeHtml(stopName)}`
+                : `Get off at ${this.escapeHtml(stopName)}`;
+            const offLetterSpan = segment.mode === 'bus'
+                ? ` <span class="guided-stop-letter" data-guidance-offletter="${index}"></span>` : '';
+            return `<div class="journey-connector alight${isFinal ? ' journey-final-alight' : ''}"><span class="connector-label">Get off</span><div><b>${headline}${offLetterSpan}</b><span>${isFinal ? 'You have arrived' : this.escapeHtml(time)}.</span></div></div>`;
         };
         return segments.map((segment, index) => {
             const transit = this._isTransitSegment(segment);
@@ -3332,7 +3370,16 @@ class PengeDash {
             const stops = Number.isFinite(+segment.stopCount) && +segment.stopCount > 0
                 ? `${Math.round(+segment.stopCount)} stop${+segment.stopCount === 1 ? '' : 's'}` : 'Stops shown by the service';
             const route = lines.map(line => line.name || line.id).filter(Boolean).join(' / ') || this._modeLabel(segment.mode);
-            const target = segment.direction || 'Check station displays';
+            // Suppress "Towards X" when X just restates the leg's own destination —
+            // otherwise show it on every mode (rail, tube, bus alike) so the rider
+            // knows which platform/side to board from.
+            const dirLabel = helper && typeof helper.directionLabel === 'function'
+                ? helper.directionLabel(segment.direction, segment.toName) : (segment.direction ? `towards ${segment.direction}` : null);
+            const directionLine = dirLabel
+                ? `<p><b>${this.escapeHtml(dirLabel.charAt(0).toUpperCase() + dirLabel.slice(1))}</b></p>`
+                : (segment.direction ? '' : '<p><b>Check station displays for the direction</b></p>');
+            const boardLetterSpan = segment.mode === 'bus'
+                ? ` <span class="guided-stop-letter" data-guidance-boardletter="${index}"></span>` : '';
             const departureLabel = this._departureClock(segment.departureTime);
             const arrivalLabel = this._departureClock(segment.arrivalTime);
             const duration = Number.isFinite(+segment.durationMinutes) && +segment.durationMinutes > 0 ? ` · ${Math.round(+segment.durationMinutes)} min` : '';
@@ -3341,8 +3388,8 @@ class PengeDash {
                     <div class="guided-kicker">Take</div>
                     <h4>Take ${this.escapeHtml(route)}</h4>
                     <div class="guided-lines">${lineBadges}</div>
-                    <p><b>Towards ${this.escapeHtml(target)}</b></p>
-                    <p class="guided-route-points"><b>${this.escapeHtml(segment.fromName || 'your stop')} → ${this.escapeHtml(segment.toName || destination)}</b></p>
+                    ${directionLine}
+                    <p class="guided-route-points"><b>${this.escapeHtml(segment.fromName || 'your stop')}${boardLetterSpan} → ${this.escapeHtml(segment.toName || destination)}</b></p>
                     <p class="guided-route-meta">${this.escapeHtml(stops + duration)} · ${this.escapeHtml(departureLabel)}–${this.escapeHtml(arrivalLabel)}</p>
                     <div class="journey-platform-slot" data-guidance-platform="${index}"><span>Checking platform…</span></div>
                     <section class="guided-departures" data-guidance-departures="${index}" aria-label="Departures for ${this.escapeAttr(route)}">
@@ -3362,15 +3409,70 @@ class PengeDash {
         this._journeyDetailGuidance = null;
         this._journeyRefreshInFlight = false;
         this._journeyLiveSignature = '';
+        // Follow-along ("Start journey") state — reset so re-entering starts clean.
+        this._journeyLiveManualIndex = null;
+        this._journeyLiveManualOverride = false;
+        this._journeyLiveAlertedIndex = null;
+        this._journeyLiveExpanded = null;
+        this._busStopLetters = null;
     }
 
     _activateJourneyDetail(guidance) {
         this._journeyDetailGuidance = guidance;
         this._refreshJourneyDetail();
-        // Live arrivals change quickly; 30 seconds is enough while this screen is open.
+        // Bus stop letters are static (not live) — fetch once, not on the 30s loop.
+        this._enrichBusStopLetters(guidance);
+        // Live arrivals change quickly; 30 seconds is enough while either the detail
+        // or the live follow-along screen is open. One shared timer/loop drives both
+        // — the live screen never gets a competing interval of its own — and it is
+        // cleared by showScreen exactly when the bus tracker's timer is (see there).
         this._journeyDetailTimer = setInterval(() => {
-            if (this.currentScreen === 'journey' && !document.hidden) this._refreshJourneyDetail();
+            if (document.hidden) return;
+            if (this.currentScreen === 'journey') this._refreshJourneyDetail();
+            else if (this.currentScreen === 'journey-live') this._renderLiveJourneyScreen();
         }, 30000);
+    }
+
+    // Fill in the bus-stop letter/indicator ("Stop C") for the boarding and
+    // alighting stop of every bus leg. Batched into a single TfL StopPoint
+    // lookup per journey (comma-separated ids) — never one fetch per stop per
+    // leg — reusing the same id resolution (individualStopId || naptanId || id,
+    // via journey-guidance.js's pointId()) already used for the live-departures
+    // call in _guidedTflDepartures.
+    async _enrichBusStopLetters(guidance) {
+        const helper = guidance && guidance.helper;
+        const segments = (guidance && guidance.segments) || [];
+        const busSegments = segments.filter(s => this._isTransitSegment(s) && s.mode === 'bus');
+        if (!busSegments.length) return;
+        const ids = [...new Set(busSegments.flatMap(s => [s.departureStopId, s.targetStopId]).filter(Boolean))];
+        if (!ids.length) return;
+        try {
+            const raw = await fetch(`https://api.tfl.gov.uk/StopPoint/${ids.map(encodeURIComponent).join(',')}${this._tflAuth()}`)
+                .then(r => r.ok ? r.json() : null);
+            if (this._journeyDetailGuidance !== guidance ||
+                (this.currentScreen !== 'journey' && this.currentScreen !== 'journey-live')) return;
+            const list = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+            const letters = new Map();
+            list.forEach(sp => {
+                const id = sp && (sp.id || sp.naptanId);
+                if (!id) return;
+                const rawLetter = (sp.stopLetter || sp.indicator || this._stopProp(sp, 'Indicator') || '');
+                const clean = helper && typeof helper.normalizeStopLetter === 'function' ? helper.normalizeStopLetter(rawLetter) : null;
+                if (clean) letters.set(String(id), clean);
+            });
+            // Cache so the live follow-along screen (a separate DOM tree) can read
+            // the same resolved letters without a second TfL fetch.
+            this._busStopLetters = letters;
+            if (this.currentScreen === 'journey-live') this._renderLiveJourneyScreen();
+            busSegments.forEach(segment => {
+                const boardSlot = document.querySelector(`[data-guidance-boardletter="${segment.index}"]`);
+                const boardLetter = letters.get(String(segment.departureStopId));
+                if (boardSlot && boardLetter) boardSlot.textContent = `(Stop ${boardLetter})`;
+                const offSlot = document.querySelector(`[data-guidance-offletter="${segment.index}"]`);
+                const offLetter = letters.get(String(segment.targetStopId));
+                if (offSlot && offLetter) offSlot.textContent = `(Stop ${offLetter})`;
+            });
+        } catch (e) { /* leave letter slots blank */ }
     }
 
     async _refreshJourneyDetail() {
@@ -3575,6 +3677,212 @@ class PengeDash {
         const platform = (departures || []).find(d => d.platform && d.platform !== '-')?.platform;
         slot.innerHTML = platform ? `<b class="tl-plat-badge">Current platform ${this.escapeHtml(String(platform))}</b>`
             : (isFuture ? '<span>Platform available closer to departure</span>' : '<span>Current platform not yet shown</span>');
+    }
+
+    // ==================== LIVE JOURNEY (follow-along) ====================
+    // Entry point for the "Start journey" button on the detail screen. Reuses
+    // whatever guidance _activateJourneyDetail already built and is refreshing —
+    // no re-fetch, no second timer.
+    startLiveJourney() {
+        if (!this._journeyDetailGuidance) return;
+        this._journeyLiveManualIndex = null;
+        this._journeyLiveManualOverride = false;
+        this._journeyLiveAlertedIndex = null;
+        this._journeyLiveExpanded = new Set();
+        // Stamp the same journeyIndex/resultSetId 'journey' uses, so a
+        // journey-live history entry can be validated by the SAME popstate
+        // check instead of falling through to .live-empty as a substitute
+        // for correctness (see the popstate handler in setupNav).
+        this.showScreen('journey-live', {
+            state: { journeyIndex: this._journeyLiveIndex, resultSetId: this._resultSetId, destination: this._lastDestination }
+        });
+    }
+
+    // Render (or re-render) the live follow-along view from whatever guidance is
+    // already in memory. MUST degrade gracefully: no guidance, no live-eligible
+    // legs, a dead network or a failed enrichment call must never produce a blank
+    // screen or a stuck spinner — the manual step-through below always works.
+    _renderLiveJourneyScreen() {
+        const content = document.getElementById('journey-live-content');
+        if (!content) return;
+        if (!this._journeyLiveExpanded) this._journeyLiveExpanded = new Set();
+        const guidance = this._journeyDetailGuidance;
+        const segments = (guidance && guidance.segments) || [];
+        if (!segments.length) {
+            content.innerHTML = `
+                <div class="live-empty">
+                    <p>No active journey to follow.</p>
+                    <button class="jd-act primary" id="live-empty-back">Back to planner</button>
+                </div>`;
+            const back = document.getElementById('live-empty-back');
+            if (back) back.addEventListener('click', () => this.showScreen('plan'));
+            return;
+        }
+        const helper = guidance.helper;
+        const now = Date.now();
+        // Auto-follow real progress; a manual Prev/Next pick "sticks" (wins over
+        // the time-derived leg) until the user explicitly taps "Back to live" —
+        // otherwise Previous leg would be a dead button for any already-completed
+        // leg, since auto would silently snap the display back every refresh.
+        const auto = helper && typeof helper.currentLegIndex === 'function' ? helper.currentLegIndex(segments, now) : 0;
+        if (!this._journeyLiveManualOverride) this._journeyLiveManualIndex = null;
+        const activeIndex = Math.min(segments.length - 1,
+            Math.max(0, this._journeyLiveManualIndex != null ? this._journeyLiveManualIndex : auto));
+        const segment = segments[activeIndex];
+        const destination = this._lastDestination || '';
+
+        const pinned = this._liveJourneyPinnedCard(segment, helper, now);
+        const legs = segments.map((s, i) => this._liveJourneyLegRow(s, i, activeIndex)).join('');
+        const backLiveBtn = this._journeyLiveManualOverride
+            ? '<button class="live-nav-btn live-back-live" id="live-back-to-live">⦿ Back to live</button>' : '';
+
+        content.innerHTML = `
+            <div class="live-progress">Leg ${activeIndex + 1} of ${segments.length}</div>
+            ${pinned}
+            <div class="live-manual-controls">
+                <button class="live-nav-btn" id="live-prev-leg" ${activeIndex <= 0 ? 'disabled' : ''}>‹ Previous leg</button>
+                <button class="live-nav-btn" id="live-next-leg" ${activeIndex >= segments.length - 1 ? 'disabled' : ''}>Next leg ›</button>
+            </div>
+            ${backLiveBtn ? `<div class="live-manual-controls">${backLiveBtn}</div>` : ''}
+            <div class="live-legs">${legs}</div>`;
+
+        const prev = document.getElementById('live-prev-leg');
+        const next = document.getElementById('live-next-leg');
+        const backLive = document.getElementById('live-back-to-live');
+        if (prev) prev.addEventListener('click', () => {
+            this._journeyLiveManualIndex = Math.max(0, activeIndex - 1);
+            this._journeyLiveManualOverride = true;
+            this._renderLiveJourneyScreen();
+        });
+        if (next) next.addEventListener('click', () => {
+            this._journeyLiveManualIndex = Math.min(segments.length - 1, activeIndex + 1);
+            this._journeyLiveManualOverride = true;
+            this._renderLiveJourneyScreen();
+        });
+        if (backLive) backLive.addEventListener('click', () => {
+            // Explicit return to live tracking — resume time-derived leg selection.
+            this._journeyLiveManualOverride = false;
+            this._journeyLiveManualIndex = null;
+            this._renderLiveJourneyScreen();
+        });
+        content.querySelectorAll('.live-leg-row').forEach(row => row.addEventListener('click', () => {
+            const i = parseInt(row.dataset.legIndex, 10);
+            if (Number.isNaN(i)) return;
+            if (this._journeyLiveExpanded.has(i)) this._journeyLiveExpanded.delete(i);
+            else this._journeyLiveExpanded.add(i);
+            this._renderLiveJourneyScreen();
+        }));
+
+        // Idempotent "get off soon" alert through the SAME aria-live region the
+        // detail screen uses — never a second live region. Always driven by the
+        // time-derived leg (resolveLiveAlert -> currentLegIndex), NEVER by
+        // activeIndex/segment above — those can be a manually previewed leg the
+        // rider hasn't boarded yet, and alerting off that would be a false alert.
+        const alertState = helper && typeof helper.resolveLiveAlert === 'function'
+            ? helper.resolveLiveAlert(segments, now, this._journeyLiveAlertedIndex, 2) : null;
+        if (alertState && alertState.shouldFire) {
+            this._journeyLiveAlertedIndex = alertState.index;
+            const text = `Get off soon at ${alertState.segment.toName || destination || 'your stop'}.`;
+            const live = document.getElementById('journey-live-announcement');
+            if (live) live.textContent = text;
+            this._liveJourneyPushNotify('Get off soon', text);
+        }
+
+        // isLiveEligible decides whether polling this leg is worth it at all —
+        // never polled just because the screen is open. Any failure here leaves
+        // the manual/scheduled view already rendered above untouched.
+        this._refreshLiveJourneyData(segment, activeIndex, helper, now);
+    }
+
+    _liveJourneyPinnedCard(segment, helper, now) {
+        const isWalk = segment.kind === 'walk' || segment.kind === 'cycle';
+        if (isWalk) {
+            const mins = Math.round(segment.durationMinutes || 0);
+            const verb = segment.kind === 'cycle' ? 'Cycle' : 'Walk';
+            return `<div class="live-pinned-card walk">
+                <div class="live-pinned-kicker">${verb}</div>
+                <div class="live-pinned-action">${this.escapeHtml(verb)} to ${this.escapeHtml(segment.toName || 'your stop')}</div>
+                <div class="live-pinned-meta">${mins} min</div>
+            </div>`;
+        }
+        const boardLetter = segment.mode === 'bus' && this._busStopLetters
+            ? this._busStopLetters.get(String(segment.departureStopId)) : null;
+        const offLetter = segment.mode === 'bus' && this._busStopLetters
+            ? this._busStopLetters.get(String(segment.targetStopId)) : null;
+        const route = (segment.lines || []).map(l => l.name || l.id).filter(Boolean).join(' / ') || this._modeLabel(segment.mode);
+        const departure = Date.parse(segment.departureTime);
+        const boarding = !Number.isFinite(departure) || now < departure;
+        if (boarding) {
+            const minsToDep = Number.isFinite(departure) ? Math.max(0, Math.round((departure - now) / 60000)) : null;
+            const dir = helper && typeof helper.directionLabel === 'function' ? helper.directionLabel(segment.direction, segment.toName) : null;
+            const stopBit = boardLetter ? `Stop ${boardLetter}` : (segment.fromName || 'your stop');
+            return `<div class="live-pinned-card ride" data-live-role="board">
+                <div class="live-pinned-kicker">Board</div>
+                <div class="live-pinned-action">Board the ${this.escapeHtml(route)}${dir ? ' ' + this.escapeHtml(dir) : ''}</div>
+                <div class="live-pinned-meta">${this.escapeHtml(stopBit)}${minsToDep != null ? ` · ${minsToDep} min` : ''}</div>
+            </div>`;
+        }
+        const stops = helper && typeof helper.stopsRemaining === 'function' ? helper.stopsRemaining(segment, now) : segment.stopCount;
+        const stopsText = Number.isFinite(stops) ? `${stops} stop${stops === 1 ? '' : 's'}` : 'Check the on-board displays';
+        const offBit = offLetter ? ` (Stop ${offLetter})` : '';
+        return `<div class="live-pinned-card ride" data-live-role="alight">
+            <div class="live-pinned-kicker">Get off</div>
+            <div class="live-pinned-action">Get off at ${this.escapeHtml(segment.toName || 'your stop')}${this.escapeHtml(offBit)}</div>
+            <div class="live-pinned-meta">${this.escapeHtml(stopsText)}</div>
+        </div>`;
+    }
+
+    _liveJourneyLegRow(segment, index, activeIndex) {
+        const state = index < activeIndex ? 'done' : (index === activeIndex ? 'current' : 'upcoming');
+        const expanded = !!(this._journeyLiveExpanded && this._journeyLiveExpanded.has(index));
+        const isWalk = segment.kind === 'walk' || segment.kind === 'cycle';
+        const route = isWalk ? (segment.kind === 'cycle' ? 'Cycle' : 'Walk')
+            : ((segment.lines || []).map(l => l.name || l.id).filter(Boolean).join(' / ') || this._modeLabel(segment.mode));
+        const detail = expanded
+            ? `<div class="live-leg-detail">${this.escapeHtml(this._departureClock(segment.departureTime))}–${this.escapeHtml(this._departureClock(segment.arrivalTime))}${Number.isFinite(+segment.stopCount) && +segment.stopCount > 0 ? ` · ${Math.round(+segment.stopCount)} stops` : ''}</div>`
+            : '';
+        return `<button type="button" class="live-leg-row live-leg-row--${state}" data-leg-index="${index}" aria-expanded="${expanded ? 'true' : 'false'}">
+            <span class="live-leg-main">${this.escapeHtml(route)} to ${this.escapeHtml(segment.toName || 'destination')}</span>${detail}
+        </button>`;
+    }
+
+    // Live data for the pinned leg only — never blocks the view already rendered.
+    // isLiveEligible (via _liveEligible) decides whether it's worth polling at all;
+    // any fetch failure here just leaves the scheduled/manual text on screen.
+    async _refreshLiveJourneyData(segment, index, helper, now) {
+        if (!this._isTransitSegment(segment)) return;
+        if (!this._liveEligible(segment, helper, now)) return;
+        try {
+            const tfL = await this._guidedTflDepartures(segment, helper, now);
+            const rail = this._isRailMode(segment.mode) ? await this._guidedDarwinDepartures(segment, now) : { compatible: [] };
+            if (this.currentScreen !== 'journey-live' || this._journeyDetailGuidance?.segments?.[index] !== segment) return;
+            const best = (tfL.compatible && tfL.compatible[0]) || (rail.compatible && rail.compatible[0]);
+            if (!best) return;
+            const departure = Date.parse(segment.departureTime);
+            const boarding = !Number.isFinite(departure) || now < departure;
+            if (!boarding) return; // "Get off" text is stop-count driven, not a departure countdown
+            const mins = best.minutes != null ? best.minutes : this._departureView(best, now).mins;
+            if (!Number.isFinite(mins)) return;
+            const meta = document.querySelector('.live-pinned-card[data-live-role="board"] .live-pinned-meta');
+            if (!meta) return;
+            const base = meta.textContent.replace(/\s*·\s*\d+\s*min$/, '').replace(/\s*·\s*due$/, '');
+            meta.textContent = `${base} · ${mins <= 0 ? 'due' : mins + ' min'}`;
+        } catch (e) { /* keep whatever scheduled/manual text is already on screen */ }
+    }
+
+    // Opportunistic local notification for the alight alert — ONLY when the user
+    // has already granted permission at runtime. Push subscription (VAPID) is a
+    // separate, backend-gated feature (see subscribeTrainAlerts) and is not
+    // required here; this must never throw when it's unavailable/disabled.
+    async _liveJourneyPushNotify(title, body) {
+        try {
+            if (!('Notification' in window) || Notification.permission !== 'granted') return;
+            if (!('serviceWorker' in navigator)) return;
+            const reg = await navigator.serviceWorker.getRegistration();
+            if (reg && typeof reg.showNotification === 'function') {
+                reg.showNotification(title, { body, tag: 'journey-live-alight' });
+            }
+        } catch (e) { /* notification unavailable — the aria-live announcement already covers this */ }
     }
 
     _legMode(mode) {

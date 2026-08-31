@@ -575,6 +575,30 @@ input { font-family: inherit; }
 .guided-expand:focus-visible, .journey-track-bus:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
 .guided-departures-more { margin-top: 4px; }
 
+/* ---------- Live journey (follow-along) ---------- */
+.live-progress { color: var(--muted); font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; margin: 0 2px 8px; }
+.live-pinned-card { border-radius: 18px; padding: 22px 18px; box-shadow: var(--shadow-lg); margin-bottom: 14px; }
+.live-pinned-card.ride { background: var(--blue); color: #fff; }
+.live-pinned-card.walk { background: var(--card); border: 1px solid var(--line); }
+.live-pinned-kicker { font-size: 12px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; opacity: .85; margin-bottom: 6px; }
+.live-pinned-card.walk .live-pinned-kicker { color: var(--blue); opacity: 1; }
+.live-pinned-action { font-size: 26px; font-weight: 800; letter-spacing: -.02em; line-height: 1.15; }
+.live-pinned-meta { margin-top: 8px; font-size: 16px; font-weight: 700; opacity: .92; }
+.live-pinned-card.walk .live-pinned-meta { color: var(--muted); opacity: 1; }
+.live-manual-controls { display: flex; gap: 8px; margin-bottom: 16px; }
+.live-nav-btn { flex: 1; border: 1px solid var(--line); background: var(--card); border-radius: 12px; padding: 14px 10px; font-weight: 700; font-size: 14px; }
+.live-nav-btn:disabled { opacity: .4; }
+.live-back-live { color: var(--blue); border-color: var(--blue); }
+.live-legs { display: flex; flex-direction: column; gap: 8px; }
+.live-leg-row { width: 100%; text-align: left; border: 1px solid var(--line); background: var(--card); border-radius: 12px; padding: 12px 14px; font: inherit; display: flex; flex-direction: column; gap: 3px; }
+.live-leg-row--current { border-color: var(--blue); border-width: 2px; }
+.live-leg-row--current .live-leg-main { color: var(--blue); font-weight: 800; }
+.live-leg-row--done { opacity: .55; }
+.live-leg-row--done .live-leg-main { text-decoration: line-through; }
+.live-leg-main { font-size: 14px; font-weight: 700; }
+.live-leg-detail { color: var(--muted); font-size: 12.5px; }
+.live-empty { text-align: center; padding: 40px 16px; display: flex; flex-direction: column; gap: 14px; align-items: center; }
+
 @media (max-width: 360px) {
     .guided-step--ride { padding: 12px; }
     .guided-step h4 { font-size: 16px; }
@@ -582,6 +606,7 @@ input { font-family: inherit; }
     .connector-label { min-width: 60px; }
     .guided-departure { grid-template-columns: minmax(0, 1fr) auto; }
     .journey-track-bus { grid-column: 2; }
+    .live-pinned-action { font-size: 21px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

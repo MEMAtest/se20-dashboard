@@ -328,6 +328,35 @@
             departure >= now && departure <= now + window * 60000;
     }
 
+    // TfL StopPoint/arrival data is inconsistent about how it labels a bus stop
+    // letter/indicator: "->E", "Stop C", "C", or nothing at all. Normalise to a
+    // short bare code (e.g. "C") or null when there isn't a usable one.
+    function normalizeStopLetter(raw) {
+        let value = text(raw).replace(/^->/, '').trim();
+        value = value.replace(/^stop\s+/i, '').trim();
+        if (!value || !/^[A-Za-z0-9]{1,3}$/.test(value)) return null;
+        return value.toUpperCase();
+    }
+
+    // "Ride N stops" with correct singular/plural, or null when TfL didn't give
+    // us a usable stop count (never render "Ride undefined stops").
+    function formatBusStopCount(stopCount) {
+        const n = Number(stopCount);
+        if (!Number.isFinite(n) || n <= 0) return null;
+        const rounded = Math.round(n);
+        return `Ride ${rounded} stop${rounded === 1 ? '' : 's'}`;
+    }
+
+    // "towards X" for boarding guidance, suppressed when the direction is just
+    // the leg's own destination restated (so we don't say "towards Brixton" right
+    // next to "get off at Brixton").
+    function directionLabel(direction, toName) {
+        const dir = text(direction);
+        if (!dir) return null;
+        if (namesMatch(dir, toName)) return null;
+        return `towards ${dir}`;
+    }
+
     function isCallingPatternCompatible(callingPoints, fromName, toName) {
         const points = asArray(callingPoints);
         const boardingIndex = points.findIndex(point => namesMatch(
@@ -337,12 +366,94 @@
         return boardingIndex >= 0 && targetIndex > boardingIndex;
     }
 
+    // ---- Live "on the journey" follow-along helpers (pure — nowMs is always
+    // passed in, never read from the clock here) ----
+
+    // Which leg the passenger should be following right now. Defaults to the
+    // first not-yet-arrived leg; before the journey starts that's leg 0, after
+    // the last arrival it's the final leg (so the view never runs off the end).
+    function currentLegIndex(segments, nowMs) {
+        const list = Array.isArray(segments) ? segments : [];
+        if (!list.length) return 0;
+        const now = Number.isFinite(Number(nowMs)) ? Number(nowMs) : NaN;
+        if (!Number.isFinite(now)) return 0;
+        for (let i = 0; i < list.length; i++) {
+            const arrival = parseTimeMs(list[i] && list[i].arrivalTime);
+            // TfL routinely omits arrivalTime on a leg. Treat an unparseable time
+            // as already passed (skip forward) rather than "still current forever"
+            // — otherwise one bad leg permanently stalls progression through the
+            // rest of the journey. minutesUntilAlight/stopsRemaining are untouched
+            // and keep returning null for this leg's own timing.
+            if (!Number.isFinite(arrival)) continue;
+            if (arrival > now) return i;
+        }
+        return list.length - 1;
+    }
+
+    // Minutes until the current leg's alighting point, or null when the leg has
+    // no usable arrival time (never guess/fabricate a countdown).
+    function minutesUntilAlight(segment, nowMs) {
+        const now = Number.isFinite(Number(nowMs)) ? Number(nowMs) : NaN;
+        const arrival = parseTimeMs(segment && segment.arrivalTime);
+        if (!Number.isFinite(arrival) || !Number.isFinite(now)) return null;
+        return Math.max(0, Math.round((arrival - now) / 60000));
+    }
+
+    // Stops remaining on the current leg, scaled from the leg's total stop count
+    // and duration by elapsed time. Conservative: null when we lack enough data
+    // to estimate rather than showing a fabricated number.
+    function stopsRemaining(segment, nowMs) {
+        const total = Number(segment && segment.stopCount);
+        if (!Number.isFinite(total) || total <= 0) return null;
+        const departure = parseTimeMs(segment && segment.departureTime);
+        const arrival = parseTimeMs(segment && segment.arrivalTime);
+        const now = Number.isFinite(Number(nowMs)) ? Number(nowMs) : NaN;
+        if (!Number.isFinite(departure) || !Number.isFinite(arrival) || !Number.isFinite(now) || arrival <= departure) {
+            return Math.round(total);
+        }
+        const elapsed = Math.min(1, Math.max(0, (now - departure) / (arrival - departure)));
+        return Math.max(0, Math.round(total * (1 - elapsed)));
+    }
+
+    // Fire an "get off soon" alert once minutes-to-alight drops to/below the
+    // threshold, and never again for the same leg. `lastAlertedIndex` is
+    // whatever this returned on the previous call (start with null/undefined) —
+    // the caller stores it on the instance and passes it back in, so alerting
+    // stays idempotent without this module touching any state itself.
+    function shouldFireAlightAlert(segment, index, nowMs, lastAlertedIndex, thresholdMinutes) {
+        const threshold = thresholdMinutes == null ? 2 : Number(thresholdMinutes);
+        if (lastAlertedIndex === index) return false;
+        const minutes = minutesUntilAlight(segment, nowMs);
+        if (minutes == null) return false;
+        return minutes <= threshold;
+    }
+
+    // Defect-2 fix: bundles currentLegIndex + shouldFireAlightAlert so a call
+    // site cannot accidentally alert off a previewed/manually-selected display
+    // leg. Always resolves the time-derived leg itself — a caller has no lever
+    // here to substitute a different (e.g. manually navigated) index.
+    function resolveLiveAlert(segments, nowMs, lastAlertedIndex, thresholdMinutes) {
+        const list = Array.isArray(segments) ? segments : [];
+        const index = currentLegIndex(list, nowMs);
+        const segment = list[index] || null;
+        const shouldFire = !!segment && shouldFireAlightAlert(segment, index, nowMs, lastAlertedIndex, thresholdMinutes);
+        return { index: index, segment: segment, shouldFire: shouldFire };
+    }
+
     return Object.freeze({
         buildJourneyGuidance: buildJourneyGuidance,
         isThroughService: isThroughService,
         transferMinutes: transferMinutes,
         normalizeTflDepartures: normalizeTflDepartures,
         isLiveEligible: isLiveEligible,
-        isCallingPatternCompatible: isCallingPatternCompatible
+        isCallingPatternCompatible: isCallingPatternCompatible,
+        normalizeStopLetter: normalizeStopLetter,
+        formatBusStopCount: formatBusStopCount,
+        directionLabel: directionLabel,
+        currentLegIndex: currentLegIndex,
+        minutesUntilAlight: minutesUntilAlight,
+        stopsRemaining: stopsRemaining,
+        shouldFireAlightAlert: shouldFireAlightAlert,
+        resolveLiveAlert: resolveLiveAlert
     });
 }));
