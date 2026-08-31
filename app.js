@@ -81,6 +81,10 @@ class PengeDash {
         // Journey planner controls (where-to, chips, filters)
         this.setupJourneyPlanner();
 
+        // Reload/app-switch shouldn't lose a search someone just made — re-render
+        // it from sessionStorage if still fresh (never re-fetches).
+        this._restoreJourneyState();
+
         // Settings + saved/recents (Saved screen)
         this.setupSettings();
         this.renderSavedPlaces();
@@ -128,7 +132,37 @@ class PengeDash {
     // ==================== NAVIGATION (screens) ====================
     setupNav() {
         this.currentScreen = 'plan';
-        this._screenHistory = ['plan'];
+        this._scrollPositions = {};        // per-screen remembered scrollY
+        this._navigatingFromPop = false;   // true while replaying a popstate — never re-push
+        // Boot entry uses replaceState so the very first Back exits the app
+        // instead of landing on a phantom "plan" entry it can never get past.
+        try { history.replaceState({ screen: 'plan' }, ''); } catch (e) { /* ignore */ }
+        window.addEventListener('popstate', (e) => {
+            this._navigatingFromPop = true;
+            const state = e.state || { screen: 'plan' };
+            // journeyIndex is only a valid pointer into _lastJourneys when it was
+            // stamped for the SAME result set that's currently in memory — a fresh
+            // search or replan replaces _lastJourneys wholesale, so a positional
+            // index from an older entry (reachable via native Forward, or Back past
+            // a since-replaced search) can silently point at the wrong journey.
+            const resolvable = state.screen === 'journey' &&
+                Number.isInteger(state.journeyIndex) &&
+                state.resultSetId === this._resultSetId &&
+                this._lastJourneys && this._lastJourneys[state.journeyIndex];
+            if (resolvable) {
+                // Restore the detail view from the journeys already in memory — no re-fetch.
+                this.showJourneyDetail(this._lastJourneys[state.journeyIndex], state.destination);
+            } else {
+                // Can't safely resolve this entry (stale/out-of-range/no cache) — never
+                // show a blank journey screen. Fall back to results/plan, and repair
+                // this history slot in place so landing on it again (native Forward,
+                // or another Back) replays the same safe fallback instead of a blank one.
+                const fallback = state.screen === 'journey' ? 'plan' : (state.screen || 'plan');
+                this.showScreen(fallback);
+                try { history.replaceState({ screen: fallback }, ''); } catch (err) { /* ignore */ }
+            }
+            this._navigatingFromPop = false;
+        });
         const handler = (btn) => this.showScreen(btn.dataset.screen);
         document.querySelectorAll('#top-tabs .top-tab').forEach(b =>
             b.addEventListener('click', () => handler(b)));
@@ -136,12 +170,15 @@ class PengeDash {
             b.addEventListener('click', () => handler(b)));
     }
 
-    showScreen(name) {
+    showScreen(name, extra = {}) {
         if (!name) return;
         if (this._busTrackTimer) this.closeBusTracker();   // don't leave the tracker polling over a new screen
         // Journey-detail arrivals are deliberately short lived. Do not keep polling
         // once the person has gone back to results (or another part of the app).
         if (this.currentScreen === 'journey' && name !== 'journey') this._clearJourneyDetailRefresh();
+        // Remember where we scrolled to on the screen we're leaving, so returning
+        // to it (tab, back button) can restore it instead of always landing at top.
+        if (this.currentScreen) this._scrollPositions[this.currentScreen] = window.scrollY;
         this.currentScreen = name;
         document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
         const screen = document.getElementById(`screen-${name}`);
@@ -151,7 +188,22 @@ class PengeDash {
             b.classList.toggle('active', b.dataset.screen === name));
         document.querySelectorAll('#bottom-nav .bn-btn').forEach(b =>
             b.classList.toggle('active', b.dataset.screen === name));
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+
+        // Only a popstate replay restores the remembered scroll position — a fresh
+        // navigation (tab tap, new search) always starts at the top.
+        if (this._navigatingFromPop) {
+            window.scrollTo({ top: this._scrollPositions[name] || 0, behavior: 'auto' });
+        } else {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        // Push a real history entry so device/browser Back steps through screens
+        // instead of exiting the PWA — skipped while replaying a popstate so we
+        // never create a duplicate (unescapable) entry.
+        if (!this._navigatingFromPop) {
+            const state = Object.assign({ screen: name }, extra.state || {});
+            try { history.pushState(state, ''); } catch (e) { /* ignore */ }
+        }
 
         // Leaflet measures 0×0 while its screen is hidden — recompute size on show
         // (markers are already drawn by updateMap during detection; no need to re-add)
@@ -471,17 +523,15 @@ class PengeDash {
     // called after the first paint so the UI upgrades in place when GPS resolves.
     initGeolocation() {
         if (!navigator.geolocation) return;
-        // Respect a home the user has explicitly set: don't auto-follow GPS over it.
-        // (They can still recentre on GPS anytime via the blue locate button.)
+        // Respect a home the user has explicitly set: don't auto-follow GPS over it
+        // for the NEARBY MAP (they can still recentre on GPS via the locate button).
+        // This is separate from the journey planner's origin, which follows GPS
+        // regardless of home.userSet — see getCurrentLocation().
         if (this.home && this.home.userSet) return;
-        navigator.geolocation.getCurrentPosition(
-            (pos) => {
-                if (this._userPickedLocation) return;   // user already chose a location this session
-                this.relocateToCoords(pos.coords.latitude, pos.coords.longitude);
-            },
-            () => { /* denied / unavailable / timeout — keep saved home, no nagging */ },
-            { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
-        );
+        this._acquirePosition().then((pos) => {
+            if (this._userPickedLocation) return;   // user already chose a location this session
+            this.relocateToCoords(pos.coords.latitude, pos.coords.longitude);
+        }).catch(() => { /* denied / unavailable / timeout — keep saved home, no nagging */ });
     }
 
     // Ensure SE20 is always available as a saved place so the user can tap back to
@@ -2373,14 +2423,20 @@ class PengeDash {
     // ==================== JOURNEY PLANNER (CityMapper-style) ====================
     setupJourneyPlanner() {
         this.defaultDestinations = ['Victoria', 'London Bridge', 'Croydon', 'Bromley South', 'Canary Wharf'];
-        this.journeyOrigin = 'home';
+        // Default origin is the user's current location; only an explicit toggle
+        // (setJourneyOrigin) persists a choice, so absence of a stored value means 'here'.
+        let storedOrigin = null;
+        try { storedOrigin = localStorage.getItem('pengedash-journey-origin'); } catch (e) { /* ignore */ }
+        this.journeyOrigin = storedOrigin === 'home' ? 'home' : 'here';
         this.journeyTimeOffset = 0;
         this.journeyModes = null;      // null = all modes
         this.journeyPref = '';         // '' | leastwalking | leastinterchange
         this.journeyStepFree = false;
         try { this.journeyStepFree = localStorage.getItem('pengedash-stepfree') === '1'; } catch (e) { /* ignore */ }
         this.currentLocation = null;
+        this._currentLocationAt = 0;
         this.fetchingLocation = false;
+        this._geoUnavailable = false;
         this._hasSearched = false;
 
         this.loadDestinations();
@@ -2388,11 +2444,26 @@ class PengeDash {
         this.loadFavouriteJourneys();
         this.renderFavouriteJourneys();
 
-        // Origin toggle (Home ↔ current location)
+        // Origin toggle (Home ↔ current location). Tapping the label while a GPS
+        // fix is missing/failed retries acquisition instead of swapping to Home —
+        // the swap button (or a successful fix) is what actually changes origin.
         const fromBtn = document.getElementById('from-text');
-        if (fromBtn) fromBtn.addEventListener('click', () => this.toggleOrigin());
+        if (fromBtn) fromBtn.addEventListener('click', () => {
+            if (this.journeyOrigin === 'here' && !this.currentLocation && !this.fetchingLocation) {
+                this.getCurrentLocation();
+            } else {
+                this.toggleOrigin();
+            }
+        });
         const swapBtn = document.getElementById('origin-swap-btn');
         if (swapBtn) swapBtn.addEventListener('click', () => this.toggleOrigin());
+
+        // Start acquiring GPS in parallel with the rest of boot — never blocks
+        // first paint. Falls back to Home (visibly) on denial/timeout.
+        if (this.journeyOrigin === 'here') {
+            if (fromBtn) fromBtn.textContent = 'Locating…';
+            this.getCurrentLocation();
+        }
 
         // Search + clear
         const input = document.getElementById('destination-input');
@@ -2643,10 +2714,26 @@ class PengeDash {
         this._activeOriginLabel = opts.originPlace ? opts.originPlace.label : null;
         this.showScreen('plan');
 
-        // Show loading state
-        resultsContainer.style.display = 'block';
-        resultsContainer.innerHTML = '<div class="empty-hint">Finding the best routes… 🔍</div>';
-        updateTime.textContent = 'Searching…';
+        // Show loading state — but if there are already results on screen (e.g. a
+        // pill change replanning an active search) don't wipe them, layer a small
+        // "updating" indicator on top so the old cards stay visible until the new
+        // ones are ready (or stay put entirely if the fetch fails).
+        const hadResults = !!resultsContainer.querySelector('.route-card');
+        if (hadResults) {
+            resultsContainer.classList.add('jp-loading-overlay');
+            if (!document.getElementById('journey-updating-indicator')) {
+                const indicator = document.createElement('div');
+                indicator.id = 'journey-updating-indicator';
+                indicator.className = 'empty-hint';
+                indicator.textContent = 'Updating routes… 🔄';
+                resultsContainer.prepend(indicator);
+            }
+            updateTime.textContent = 'Updating…';
+        } else {
+            resultsContainer.style.display = 'block';
+            resultsContainer.innerHTML = '<div class="empty-hint">Finding the best routes… 🔍</div>';
+            updateTime.textContent = 'Searching…';
+        }
 
         try {
             // Determine origin based on mode
@@ -2655,26 +2742,33 @@ class PengeDash {
                 // Explicit origin (commute boards): use its postcode or coordinates.
                 const o = opts.originPlace;
                 from = o.postcode ? o.postcode.replace(/\s/g, '') : `${o.lat},${o.lon}`;
-            } else if (this.journeyOrigin === 'here' && this.currentLocation) {
-                // Use current GPS coordinates
-                from = `${this.currentLocation.lat},${this.currentLocation.lon}`;
-            } else if (this.journeyOrigin === 'here' && !this.currentLocation) {
-                // Location not available
-                resultsContainer.innerHTML = `
-                    <div class="journey-error">
-                        📍 Location not available.<br>
-                        Please allow location access or switch to "From Home".
-                    </div>
-                `;
-                updateTime.textContent = 'No location';
-                return;
             } else {
-                // Default: from the active home. Use postcode if we have one,
-                // otherwise fall back to the home's coordinates.
-                const home = this.home || CONFIG.LOCATION;
-                from = home.postcode
-                    ? home.postcode.replace(/\s/g, '')
-                    : `${home.lat},${home.lon}`;
+                // A GPS fix older than ~2 minutes is stale for routing — re-acquire
+                // before building the URL. The "Finding the best routes…" loading
+                // state set above stays visible while we wait. The user can toggle
+                // origin (Home <-> Here) while this await is in flight, so we must
+                // NOT act on a snapshot taken before the await.
+                if (this.journeyOrigin === 'here') {
+                    const stale = !this.currentLocation || (Date.now() - (this._currentLocationAt || 0)) > 120000;
+                    if (stale) await this.getCurrentLocation();
+                }
+                // Re-read journeyOrigin/currentLocation AFTER the await — the only
+                // safe point to decide what was actually routed from. This is the
+                // single source of truth for both `from` and the result label below,
+                // so the two can never disagree.
+                const usingHere = this.journeyOrigin === 'here' && !!this.currentLocation;
+                if (usingHere) {
+                    from = `${this.currentLocation.lat},${this.currentLocation.lon}`;
+                } else {
+                    // Home (either the active origin, or a GPS fallback because the
+                    // fix is denied/unavailable — from-text already says so, never
+                    // a silent swap).
+                    const home = this.home || CONFIG.LOCATION;
+                    from = home.postcode ? home.postcode.replace(/\s/g, '') : `${home.lat},${home.lon}`;
+                }
+                // Keep the result card's origin label honest against what was
+                // actually routed from, not the (possibly since-changed) flag.
+                this._activeOriginLabel = usingHere ? 'Here' : this.homeLabel();
             }
             // Explicit destination place (commute boards) → use coords/postcode, which
             // TfL resolves without disambiguation. Otherwise resolve the typed string.
@@ -2735,6 +2829,13 @@ class PengeDash {
             if (data.journeys && data.journeys.length > 0) {
                 this.displayRouteOptions(data.journeys, destination);
                 updateTime.textContent = this.getTimeAgo(new Date());
+            } else if (hadResults) {
+                // Keep the previous cards on screen — surface the failure without
+                // discarding results the person can still use.
+                resultsContainer.classList.remove('jp-loading-overlay');
+                document.getElementById('journey-updating-indicator')?.remove();
+                updateTime.textContent = 'No new route found — showing previous results';
+                this._toast && this._toast(`No route found to "${destination}"`);
             } else {
                 resultsContainer.innerHTML = `
                     <div class="journey-error">
@@ -2746,19 +2847,37 @@ class PengeDash {
             }
         } catch (error) {
             console.error('Journey planner error:', error);
-            resultsContainer.innerHTML = `
-                <div class="journey-error">
-                    😵 Something went wrong. Try again?
-                </div>
-            `;
-            updateTime.textContent = 'Error';
+            if (hadResults) {
+                resultsContainer.classList.remove('jp-loading-overlay');
+                document.getElementById('journey-updating-indicator')?.remove();
+                updateTime.textContent = 'Update failed — showing previous results';
+                this._toast && this._toast('Could not refresh routes');
+            } else {
+                resultsContainer.innerHTML = `
+                    <div class="journey-error">
+                        😵 Something went wrong. Try again?
+                    </div>
+                `;
+                updateTime.textContent = 'Error';
+            }
         }
     }
 
-    displayRouteOptions(journeys, destination) {
+    displayRouteOptions(journeys, destination, opts = {}) {
         const container = document.getElementById('journey-results');
+        const updatingIndicator = document.getElementById('journey-updating-indicator');
+        if (updatingIndicator) updatingIndicator.remove();
+        container.classList.remove('jp-loading-overlay');
         this._lastJourneys = journeys;
-        this.saveFavouriteJourney(destination);
+        this._lastDestination = destination;
+        // Stamp this result set's identity so a history entry pointing at a journey
+        // index can be verified against the set it was pointing at (Defect 2) — a
+        // fresh fetch/replan always gets a new id; a cache restore keeps the id it
+        // was persisted with so history entries from before a reload still resolve.
+        this._resultSetId = opts.fromCache && Number.isInteger(opts.resultSetId)
+            ? opts.resultSetId : (this._resultSetId || 0) + 1;
+        if (!opts.fromCache) this.saveFavouriteJourney(destination);
+        this._persistJourneyState();
 
         // Tagging: fastest / cheapest / least-walking
         const durations = journeys.map(j => j.duration);
@@ -2809,9 +2928,12 @@ class PengeDash {
         container.style.display = 'block';
         container.innerHTML = cards;
 
-        // Jump straight to the best routes (they render below the fold on a phone).
-        const head = document.querySelector('#screen-plan .section-head') || container;
-        head.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        // Jump straight to the best routes (they render below the fold on a phone) —
+        // skipped when re-rendering a restored/cached result set on boot.
+        if (!opts.fromCache) {
+            const head = document.querySelector('#screen-plan .section-head') || container;
+            head.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
 
         // Fill live platform numbers on the cards (async, non-blocking).
         this._enrichJourneyPlatforms();
@@ -3011,8 +3133,111 @@ class PengeDash {
             saveBtn.textContent = '✓ Saved';
         });
 
-        this.showScreen('journey');
+        // Record which journey this is, AND which result set it came from, so Back
+        // (popstate) can restore this exact detail view from _lastJourneys without
+        // re-fetching — and refuse to if _lastJourneys has since been replaced by a
+        // new search/replan (a bare positional index would silently open the wrong
+        // journey in that case).
+        const journeyIndex = this._lastJourneys ? this._lastJourneys.indexOf(journey) : -1;
+        this.showScreen('journey', { state: { journeyIndex, resultSetId: this._resultSetId, destination } });
         this._activateJourneyDetail(guidance);
+    }
+
+    // Trim one journey to exactly what displayRouteOptions, showJourneyDetail,
+    // _buildJourneyGuidance (+ journey-guidance.js's buildJourneyGuidance /
+    // isThroughService), _enrichJourneyPlatforms, _enrichBusLegs, _boardingLeg and
+    // drawJourneyRoute dereference. departurePoint/arrivalPoint/routeOptions/path
+    // are kept whole (rather than picked apart field-by-field) because guidance.js
+    // reads deep into them (routeOptions[].directions, path.stopPoints, etc.) and
+    // a partial copy would silently re-break the same fidelity gap later.
+    _tripJourneyForStorage(j) {
+        return {
+            duration: j.duration,
+            startDateTime: j.startDateTime,
+            arrivalDateTime: j.arrivalDateTime,
+            fare: j.fare,
+            legs: (j.legs || []).map(l => ({
+                mode: l.mode,
+                duration: l.duration,
+                distance: l.distance,                 // walk-leg "N min · X m" detail
+                departureTime: l.departureTime,
+                arrivalTime: l.arrivalTime,
+                departurePoint: l.departurePoint,
+                arrivalPoint: l.arrivalPoint,
+                routeOptions: l.routeOptions,
+                path: l.path,
+                // Through-service detection (journey-guidance.js isThroughService/
+                // explicitThroughService/serviceIdentity) reads these off the leg
+                // itself, not just off routeOptions — dropping them silently turns
+                // "Stay on this service" into "Get off and change".
+                isThroughService: l.isThroughService,
+                throughService: l.throughService,
+                vehicleId: l.vehicleId,
+                serviceId: l.serviceId,
+                rid: l.rid,
+                trainId: l.trainId
+            }))
+        };
+    }
+
+    // Persist just enough of the last result set to survive a reload/app-switch.
+    // TfL journey objects are large, so skip persisting entirely (rather than
+    // throwing) if it's still too big or storage is unavailable — and if the full
+    // set doesn't fit, prefer fewer journeys at FULL fidelity over more journeys
+    // with fields silently dropped (a truncated set is obviously incomplete; a
+    // degraded one looks fine and quietly gives wrong guidance).
+    _persistJourneyState() {
+        try {
+            if (!this._lastJourneys || !this._lastJourneys.length) return;
+            const CAP = 250000;
+            let count = this._lastJourneys.length;
+            let payload = null;
+            while (count > 0) {
+                const trimmed = this._lastJourneys.slice(0, count).map(j => this._tripJourneyForStorage(j));
+                const candidate = JSON.stringify({
+                    journeys: trimmed,
+                    truncated: count < this._lastJourneys.length,
+                    resultSetId: this._resultSetId,
+                    destination: this._lastDestination,
+                    originLabel: this._activeOriginLabel,
+                    ts: Date.now()
+                });
+                if (candidate.length <= CAP) { payload = candidate; break; }
+                count -= 1;
+            }
+            if (!payload) return; // even a single journey doesn't fit — skip persisting
+            sessionStorage.setItem('pengedash-journey-cache', payload);
+        } catch (e) { /* quota, private mode, etc — just skip persisting */ }
+    }
+
+    // Re-render the last result set on boot if it's fresh enough. Never re-fetches.
+    _restoreJourneyState() {
+        try {
+            const raw = sessionStorage.getItem('pengedash-journey-cache');
+            if (!raw) return;
+            const data = JSON.parse(raw);
+            if (!data || !Array.isArray(data.journeys) || !data.journeys.length) return;
+            if (Date.now() - (data.ts || 0) > 10 * 60000) return; // stale — older than 10 min
+            this._lastDestination = data.destination;
+            this._activeOriginLabel = data.originLabel || null;
+            this._hasSearched = true;
+            const input = document.getElementById('destination-input');
+            if (input && data.destination) {
+                input.value = data.destination;
+                const clr = document.getElementById('destination-clear');
+                if (clr) clr.style.display = 'flex';
+            }
+            this.displayRouteOptions(data.journeys, data.destination, {
+                fromCache: true,
+                resultSetId: Number.isInteger(data.resultSetId) ? data.resultSetId : undefined
+            });
+            const updateTime = document.getElementById('journey-updated');
+            if (updateTime) {
+                updateTime.textContent = data.truncated
+                    ? `${this.getTimeAgo(new Date(data.ts))} · showing fewer routes (restored)`
+                    : this.getTimeAgo(new Date(data.ts));
+            }
+        } catch (e) { /* corrupt cache — ignore, plan screen just stays empty */ }
     }
 
     // The helper deliberately owns the interpretation of TfL legs. Keep a small
@@ -3363,44 +3588,76 @@ class PengeDash {
         return (this.home && this.home.label) || `Home (${((this.home && this.home.postcode) || 'SE20').split(' ')[0]})`;
     }
 
+    // Only an explicit toggle (this method) persists the chosen origin —
+    // a missing/failed GPS fix falls back to Home for THIS session without
+    // overwriting that persisted choice.
     setJourneyOrigin(origin) {
-        const fromText = document.getElementById('from-text');
-        if (!fromText) return;
         this.journeyOrigin = origin;
+        try { localStorage.setItem('pengedash-journey-origin', origin); } catch (e) { /* ignore */ }
+        const fromText = document.getElementById('from-text');
         if (origin === 'here') {
-            fromText.textContent = 'Locating…';
+            if (fromText) fromText.textContent = 'Locating…';
             this.getCurrentLocation();
         } else {
-            fromText.textContent = this.homeLabel();
+            // Invalidate the held fix so a stale-but-truthy currentLocation can't
+            // be picked up if the user switches back to 'here' without a fresh GPS wait.
             this.currentLocation = null;
+            this._currentLocationAt = 0;
+            if (fromText) fromText.textContent = this.homeLabel();
         }
     }
 
-    async getCurrentLocation() {
-        const fromText = document.getElementById('from-text');
-        const setFrom = (t) => { if (fromText) fromText.textContent = t; };
+    // Shares ONE in-flight getCurrentPosition() call between the planner
+    // (getCurrentLocation) and the Nearby-map follow (initGeolocation) so
+    // opening the app never fires two GPS requests at once.
+    _acquirePosition() {
+        if (this._geoPromise) return this._geoPromise;
+        this._geoPromise = new Promise((resolve, reject) => {
+            navigator.geolocation.getCurrentPosition(resolve, reject, {
+                enableHighAccuracy: true, timeout: 8000, maximumAge: 60000
+            });
+        }).finally(() => { this._geoPromise = null; });
+        return this._geoPromise;
+    }
 
-        if (!navigator.geolocation) { setFrom('Location N/A'); this.journeyOrigin = 'home'; return; }
-        if (this.fetchingLocation) return;
+    // Re-entrant: a second call while one is already in flight joins the same
+    // promise rather than firing a duplicate request.
+    getCurrentLocation() {
+        if (this.fetchingLocation) return this._locatingPromise || Promise.resolve();
         this.fetchingLocation = true;
+        this._locatingPromise = this._fetchCurrentLocation().finally(() => { this.fetchingLocation = false; });
+        return this._locatingPromise;
+    }
+
+    async _fetchCurrentLocation() {
+        const fromText = document.getElementById('from-text');
+        const setFrom = (t) => { if (fromText && this.journeyOrigin === 'here') fromText.textContent = t; };
+
+        if (!navigator.geolocation) {
+            this._geoUnavailable = true;
+            setFrom(`${this.homeLabel()} — location off, tap to retry`);
+            return;
+        }
         setFrom('Locating…');
 
         try {
-            const position = await new Promise((resolve, reject) => {
-                navigator.geolocation.getCurrentPosition(resolve, reject, {
-                    enableHighAccuracy: true, timeout: 8000, maximumAge: 15000
-                });
-            });
+            const position = await this._acquirePosition();
             this.currentLocation = { lat: position.coords.latitude, lon: position.coords.longitude };
-            const locationName = await this.reverseGeocode(this.currentLocation);
-            setFrom(`📍 ${locationName}`);
+            this._currentLocationAt = Date.now();
+            this._geoUnavailable = false;
+            // Routing depends ONLY on the coordinates set above. The label below is
+            // best-effort and resolved out of band so a hung TfL lookup can never
+            // wedge callers (e.g. planJourney) awaiting this fix.
+            this.reverseGeocode(this.currentLocation)
+                .then(locationName => setFrom(`📍 ${locationName}`))
+                .catch(() => { /* label stays as-is; coordinates already usable */ });
         } catch (error) {
             console.error('Geolocation error:', error);
-            setFrom('Location denied — tap for Home');
+            // Fall back to Home for this session — never silent: the label says why,
+            // and tapping it (see setupJourneyPlanner's from-text handler) retries.
             this.currentLocation = null;
-            this.journeyOrigin = 'home';
-        } finally {
-            this.fetchingLocation = false;
+            this._geoUnavailable = true;
+            setFrom(`${this.homeLabel()} — location off, tap to retry`);
         }
     }
 
@@ -3412,7 +3669,15 @@ class PengeDash {
                 url += `&app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}`;
             }
 
-            const response = await fetch(url);
+            // Never let a hung TfL lookup wedge the label indefinitely.
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 5000);
+            let response;
+            try {
+                response = await fetch(url, { signal: controller.signal });
+            } finally {
+                clearTimeout(timer);
+            }
             const data = await response.json();
 
             if (data.stopPoints && data.stopPoints.length > 0) {

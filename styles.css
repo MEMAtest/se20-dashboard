@@ -154,6 +154,14 @@ input { font-family: inherit; }
 }
 .empty-hint { line-height: 1.6; }
 
+/* Replan in flight (_replanIfActive/planJourney): old route-cards stay visible,
+   dimmed, under the "Updating routes…" indicator rather than being wiped. */
+.jp-loading-overlay .route-card { opacity: 0.55; pointer-events: none; transition: opacity .15s ease; }
+.jp-loading-overlay #journey-updating-indicator {
+    opacity: 1; margin-bottom: 10px;
+    background: var(--card-alt); border: 1px solid var(--line); border-radius: var(--radius);
+}
+
 /* ---------- Plan: Where to ---------- */
 .plan-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .mini-weather { font-size: 13px; font-weight: 600; color: var(--text-2); }
