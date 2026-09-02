@@ -280,6 +280,15 @@ input { font-family: inherit; }
 .route-status.bad { background: var(--red-soft); color: var(--red); }
 .route-meta { font-size: 12.5px; color: var(--text-2); margin-top: 8px; }
 .route-meta b { color: var(--text); }
+/* "sched"/"live" tag next to the Leaves-in countdown — makes clear whether the
+   number is TfL's planned time or a reconciled live estimate (Fix 2). */
+.route-leave-tag {
+    display: inline-block; font-size: 9.5px; font-weight: 800; letter-spacing: 0.02em;
+    text-transform: uppercase; padding: 1px 5px; border-radius: 8px; margin-left: 4px;
+    vertical-align: middle;
+}
+.route-leave-tag.sched { background: var(--card-alt); color: var(--muted); }
+.route-leave-tag.live { background: var(--green-soft); color: var(--green); }
 .route-foot {
     display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
     margin-top: 11px; padding-top: 11px; border-top: 1px solid var(--line);
@@ -382,6 +391,8 @@ input { font-family: inherit; }
 .ni-next-dest { font-size: 12.5px; color: var(--text-2); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ni-next-mins { font-size: 13px; font-weight: 800; color: var(--green); white-space: nowrap; }
 .ni-next-mins.urgent { color: var(--amber); }
+.ni-next-mins.muted { color: var(--muted); }
+.ni-next-missed { font-size: 10.5px; color: var(--muted); text-decoration: line-through; white-space: nowrap; }
 .ni-next-empty { font-size: 12px; color: var(--muted); margin-top: 6px; font-style: italic; }
 
 .di-body { flex: 1; min-width: 0; }
@@ -423,6 +434,9 @@ input { font-family: inherit; }
 .line-status.southeastern { border-left-color: #0072ce; }
 .line-status.thameslink { border-left-color: #e60080; }
 .line-name { font-size: 14.5px; font-weight: 700; }
+.line-status-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+/* Plain-English gloss for TfL's own opaque status wording (e.g. "Special Service") */
+.line-status-gloss { font-size: 10.5px; color: var(--muted); text-align: right; max-width: 160px; }
 .line-status-badge { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 12px; background: var(--green-soft); color: var(--green); white-space: nowrap; }
 .line-status-badge:not(.good-service) { background: var(--amber-soft); color: var(--amber); }
 .line-status-badge.good-service { background: var(--green-soft); color: var(--green); }
@@ -820,6 +834,10 @@ input { font-family: inherit; }
 .bus-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .bus-right .mins { font-size: 17px; font-weight: 800; color: var(--green); white-space: nowrap; }
 .bus-right .mins.urgent { color: var(--amber); }
+/* A bus you can no longer catch: the big number is muted, the missed time is
+   struck through and demoted to a small note beside it. */
+.bus-right .mins.muted { color: var(--muted); }
+.mins-missed { font-size: 11.5px; color: var(--muted); text-decoration: line-through; white-space: nowrap; }
 .disrupt-chip { color: #e53e3e; font-weight: 700; }
 
 /* ---- Live bus tracker modal ---- */

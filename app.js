@@ -669,9 +669,22 @@ class PengeDash {
             // Inline live countdowns (same markup as stations) — see the next buses at a glance.
             let nextHtml = '';
             if (arrivals.length) {
-                nextHtml = '<span class="ni-next">' + arrivals.slice(0, 2).map(d =>
-                    `<span class="ni-next-row"><span class="ni-next-dest">${this.escapeHtml(d.line)} → ${this.escapeHtml(d.dest)}</span><span class="ni-next-mins ${d.mins <= 3 ? 'urgent' : ''}" data-due="${d.due || ''}">${d.mins <= 0 ? 'due' : d.mins + ' min'}</span></span>`
-                ).join('') + '</span>';
+                // Same walk-aware prominence fix as the Buses board: don't show a big
+                // "due"/"N min" for a bus this stop's walk time rules out.
+                nextHtml = '<span class="ni-next">' + arrivals.slice(0, 2).map(d => {
+                    // ALL later same-line/same-direction arrivals, sorted ascending, so
+                    // the prominence fix can pick the first one that actually clears the
+                    // walk — not just whichever bus happens to be next in the list.
+                    const laterSame = arrivals
+                        .filter(x => x.line === d.line && x.direction === d.direction && x.mins > d.mins)
+                        .sort((x, y) => x.mins - y.mins);
+                    const catch_ = this._catchability(d.mins, walk, laterSame.map(x => x.mins));
+                    const missedNote = catch_.struckMins != null
+                        ? `<span class="ni-next-missed">${catch_.struckMins <= 0 ? 'due' : catch_.struckMins + ' min'}</span>` : '';
+                    const promoted = catch_.struckMins != null ? laterSame.find(x => x.mins === catch_.displayMins) : null;
+                    const dueEpoch = promoted ? (promoted.due || '') : (d.due || '');
+                    return `<span class="ni-next-row"><span class="ni-next-dest">${this.escapeHtml(d.line)} → ${this.escapeHtml(d.dest)}</span>${missedNote}<span class="ni-next-mins ${catch_.displayMuted ? 'muted' : ''} ${catch_.displayMins <= 3 ? 'urgent' : ''}" data-due="${dueEpoch}">${catch_.displayMins <= 0 ? 'due' : catch_.displayMins + ' min'}</span></span>`;
+                }).join('') + '</span>';
             } else {
                 nextHtml = '<span class="ni-next-empty">No live times right now</span>';
             }
@@ -835,12 +848,28 @@ class PengeDash {
     }
 
     // ==================== BUSES TAB + LIVE TRACKER ====================
-    // Walk-aware "can I catch it": compares the bus's arrival to the walk to the stop.
-    _catchability(arrivalMins, walkMins, nextMins) {
+    // Walk-aware "can I catch it": compares the bus's arrival to the walk to the stop,
+    // and resolves which number is safe to show prominently (journey-guidance.js — a
+    // "miss" tier must never leave the big number reading a bus you can't reach).
+    // `nextCandidateMins` is every later same-line/same-direction arrival's
+    // minutes, sorted ascending (not just "the next one") — resolveBusProminence
+    // picks the first that actually clears the walk, so a later bus that is
+    // itself still inside the walk window is never promoted as "catchable".
+    _catchability(arrivalMins, walkMins, nextCandidateMins) {
+        const helper = globalThis.JourneyGuidance;
+        if (helper && typeof helper.resolveBusProminence === 'function') {
+            const r = helper.resolveBusProminence(arrivalMins, walkMins, nextCandidateMins);
+            return { tier: r.tier, label: r.catchLabel, displayMins: r.displayMins, displayMuted: r.displayMuted, struckMins: r.struckMins };
+        }
+        // Fallback if the module failed to load — same tiers, no prominence fix.
         const margin = arrivalMins - walkMins;
-        if (margin >= 2) return { tier: 'go', label: `Leave in ${margin} min` };
-        if (margin >= 0) return { tier: 'run', label: 'Leave now' };
-        return { tier: 'miss', label: (nextMins > 0 ? `Too late — next in ${nextMins} min` : 'Just missed') };
+        const tier = margin >= 2 ? 'go' : (margin >= 0 ? 'run' : 'miss');
+        const candidates = Array.isArray(nextCandidateMins) ? nextCandidateMins : [];
+        const nextCatchable = candidates.find(m => typeof m === 'number' && m - walkMins >= 0);
+        const label = tier === 'go' ? `Leave in ${margin} min` : tier === 'run' ? 'Leave now'
+            : (nextCatchable != null ? `Too late — next in ${nextCatchable} min` : 'Just missed');
+        return { tier, label, displayMins: tier === 'miss' && nextCatchable != null ? nextCatchable : arrivalMins,
+            displayMuted: tier === 'miss' && nextCatchable == null, struckMins: tier === 'miss' && nextCatchable != null ? arrivalMins : null };
     }
 
     // Flatten every nearby bus arrival into one list, annotated with its stop + walk +
@@ -851,14 +880,18 @@ class PengeDash {
             const walk = Math.max(1, Math.round((stop.distance || 0) / 80));
             const arrivals = (this.busStopData && this.busStopData[stop.id]) || [];
             arrivals.forEach(a => {
-                // Same line AND same direction, so the fallback isn't the opposite-way bus.
-                const nextSame = arrivals.find(x => x.line === a.line && x.direction === a.direction && x.mins > a.mins);
+                // Same line AND same direction, so the fallback isn't the opposite-way
+                // bus. ALL later ones (not just the very next), sorted ascending, so
+                // resolveBusProminence can pick the first that actually clears the walk.
+                const laterSame = arrivals
+                    .filter(x => x.line === a.line && x.direction === a.direction && x.mins > a.mins)
+                    .sort((x, y) => x.mins - y.mins);
                 rows.push({
                     line: a.line, lineId: a.lineId, dest: a.dest, direction: a.direction,
                     mins: a.mins, due: a.due, vehicleId: a.vehicleId,
                     stopId: stop.id, stopName: stop.name, walk,
                     boardIn: a.mins - walk,
-                    nextMins: nextSame ? nextSame.mins : null
+                    nextCandidates: laterSame
                 });
             });
         });
@@ -888,8 +921,15 @@ class PengeDash {
             return;
         }
         el.innerHTML = rows.map(r => {
-            const catch_ = this._catchability(r.mins, r.walk, r.nextMins);
+            const catch_ = this._catchability(r.mins, r.walk, (r.nextCandidates || []).map(c => c.mins));
             const disrupt = (this.busDisruptions && this.busDisruptions[r.lineId]) ? '<span class="disrupt-chip">⚠️ Diversion</span>' : '';
+            // Big number must be the one the user can act on — when the tier is
+            // "miss" that's the promoted next CATCHABLE bus (catch_.displayMins),
+            // with the unreachable one demoted to a struck-through note, not dropped.
+            const missedNote = catch_.struckMins != null
+                ? `<span class="mins-missed">${catch_.struckMins <= 0 ? 'due' : catch_.struckMins + ' min'}</span>` : '';
+            const promoted = catch_.struckMins != null ? (r.nextCandidates || []).find(c => c.mins === catch_.displayMins) : null;
+            const dueEpoch = promoted ? promoted.due : r.due;
             return `
             <button class="bus-row catch-${catch_.tier}" data-vehicle="${this.escapeAttr(r.vehicleId)}" data-line="${this.escapeAttr(r.line)}" data-lineid="${this.escapeAttr(r.lineId)}" data-dest="${this.escapeAttr(r.dest)}" data-stopid="${this.escapeAttr(r.stopId)}" data-stopname="${this.escapeAttr(r.stopName)}" data-dir="${this.escapeAttr(r.direction || '')}">
                 <span class="bus-line">${this.escapeHtml(r.line)}</span>
@@ -899,7 +939,8 @@ class PengeDash {
                     <span class="catch-chip ${catch_.tier}">${catch_.label}</span>
                 </span>
                 <span class="bus-right">
-                    <span class="mins ${r.mins <= 3 ? 'urgent' : ''}" data-due="${r.due}">${r.mins <= 0 ? 'due' : r.mins + ' min'}</span>
+                    ${missedNote}
+                    <span class="mins ${catch_.displayMuted ? 'muted' : ''} ${catch_.displayMins <= 3 ? 'urgent' : ''}" data-due="${dueEpoch}">${catch_.displayMins <= 0 ? 'due' : catch_.displayMins + ' min'}</span>
                     <span class="ni-chev">›</span>
                 </span>
             </button>`;
@@ -2233,6 +2274,30 @@ class PengeDash {
         return [...new Set([...base, ...nearby])];
     }
 
+    // TfL's statusSeverityDescription strings are its own operational jargon — a
+    // commuter can't tell from "Special Service" alone whether their train runs.
+    // Supplement (never rewrite) the raw text with a short plain-English gloss.
+    _statusGloss(statusText) {
+        const GLOSS = {
+            'special service': 'a revised, non-standard timetable is running',
+            'part suspended': 'part of this line has no service',
+            'suspended': 'no service on this line right now',
+            'part closure': 'part of the line is closed',
+            'planned closure': 'a planned engineering closure',
+            'reduced service': 'fewer trains than usual',
+            'bus service': 'a bus replaces trains for part of this line',
+            'diverted': 'services are taking a different route',
+            'not running': 'no service on this line',
+            'exit only': 'trains stop but do not pick up passengers here',
+            'change of frequency': 'trains are running less often than usual',
+            'severe delays': 'long delays across the line',
+            'minor delays': 'some delays — services are still running',
+            'no step free access': 'step-free access is unavailable',
+            'issues reported': 'problems reported, extent unclear'
+        };
+        return GLOSS[String(statusText || '').toLowerCase().trim()] || null;
+    }
+
     displayLineStatus(lines) {
         const container = document.getElementById('line-statuses');
 
@@ -2259,11 +2324,15 @@ class PengeDash {
             const ls = line.lineStatuses && line.lineStatuses[0];
             const statusText = (ls && ls.statusSeverityDescription) || 'Unknown';
             const statusClass = statusText.toLowerCase().replace(/\s+/g, '-');
+            const gloss = this._statusGloss(statusText);
 
             return `
                 <button class="line-status ${meta.class}" data-line-id="${this.escapeAttr(line.id)}">
                     <span class="line-name">${this.escapeHtml(meta.name)}</span>
-                    <span class="line-status-badge ${statusClass}">${this.escapeHtml(statusText)}</span>
+                    <span class="line-status-wrap">
+                        <span class="line-status-badge ${statusClass}">${this.escapeHtml(statusText)}</span>
+                        ${gloss ? `<span class="line-status-gloss">${this.escapeHtml(gloss)}</span>` : ''}
+                    </span>
                 </button>`;
         }).join('');
         container.querySelectorAll('.line-status').forEach(el =>
@@ -2273,7 +2342,10 @@ class PengeDash {
     openLineDetail(lineId) {
         const d = (this.lineDetails || {})[lineId];
         if (!d) return;
-        const detail = d.reason || d.disruption ||
+        // TfL's own reason/disruption text wins when it gave one; otherwise fall
+        // back to our plain-English gloss of its status category rather than a
+        // dead-end "no detail" message for opaque wording like "Special Service".
+        const detail = d.reason || d.disruption || this._statusGloss(d.status) ||
             (d.status === 'Good Service' ? 'Good service on the whole line.' : 'No further detail provided by TfL.');
         this.openDetailModal(`${d.name} · ${d.status}`,
             `<div class="alert-detail-item ${d.status !== 'Good Service' ? 'bad' : ''}">
@@ -2916,8 +2988,14 @@ class PengeDash {
         const cards = journeys.map((journey, index) => {
             const tag = tagFor(index);
             const dep = new Date(journey.startDateTime);
-            const leaveMins = Math.max(0, Math.round((dep - new Date()) / 60000));
+            // Math.floor to match the ticker (app.js _startCountdownTicker) — Math.round
+            // here made the number visibly jump by a minute one second after render.
+            const leaveMins = Math.max(0, Math.floor((dep - new Date()) / 60000));
             const depStr = dep.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+            // Board slot's data-time is reused to resolve a live departure for this leg
+            // (see _enrichJourneyPlatforms), so the "Leaves in" countdown can be upgraded
+            // from the TfL schedule to the live estimate instead of silently disagreeing
+            // with the Details screen.
             const arrStr = new Date(journey.arrivalDateTime).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
             const status = this.routeStatus(journey);
             const fare = (journey.fare && journey.fare.totalCost != null) ? `£${(journey.fare.totalCost / 100).toFixed(2)}` : '—';
@@ -2925,7 +3003,7 @@ class PengeDash {
             // Where you board the first train + a live platform slot (filled async).
             const board = this._boardingLeg(journey);
             const boardLine = board && board.station
-                ? `<div class="route-board">🚉 Board at <b>${this.escapeHtml(board.station)}</b><span class="jp-plat" data-fmt="short" data-lat="${board.lat}" data-lon="${board.lon}" data-time="${this.escapeAttr(board.time)}"></span></div>`
+                ? `<div class="route-board">🚉 Board at <b>${this.escapeHtml(board.station)}</b><span class="jp-plat" data-fmt="short" data-lat="${board.lat}" data-lon="${board.lon}" data-time="${this.escapeAttr(board.time)}" data-dest="${this.escapeAttr(board.dest || '')}"></span></div>`
                 : '';
             return `
                 <div class="route-card ${tag ? tag.cls : ''}" data-index="${index}">
@@ -2939,7 +3017,7 @@ class PengeDash {
                     </div>
                     <div class="route-modes">${this.buildModeStrip(journey)}</div>
                     ${boardLine}
-                    <div class="route-meta">Leaves in <b>${leaveMins} min</b> · ${depStr}–${arrStr}</div>
+                    <div class="route-meta">Leaves in <b class="route-leave-mins" data-due="${dep.getTime()}" data-sched-due="${dep.getTime()}">${leaveMins} min</b><span class="route-leave-tag sched" data-role="route-leave-tag">sched</span> · <span class="route-dep-time">${depStr}</span>–${arrStr}</div>
                     <div class="route-foot">
                         <span class="route-foot-item">💷 ${fare}</span>
                         <span class="route-foot-item">🚶 ${walkTotal} min</span>
@@ -3022,8 +3100,9 @@ class PengeDash {
         // Cache boards per lat/lon so several cards for the same station fetch once.
         const slots = [...document.querySelectorAll('.jp-plat[data-lat]')];
         const boardCache = new Map();
+        const helper = globalThis.JourneyGuidance;
         await Promise.all(slots.map(async slot => {
-            const { lat, lon, time, fmt } = slot.dataset;
+            const { lat, lon, time, fmt, dest } = slot.dataset;
             if (!lat || !lon || !time) return;
             try {
                 const key = `${lat},${lon}`;
@@ -3034,19 +3113,55 @@ class PengeDash {
                 const data = await boardCache.get(key);
                 const deps = (data && Array.isArray(data.departures)) ? data.departures : [];
                 const withPlat = deps.filter(d => d.platform && d.platform !== '-' && d.scheduledTime);
-                if (!withPlat.length) return;
-                // Exact scheduled-time match first, else the closest within 3 minutes.
-                let match = withPlat.find(d => d.scheduledTime === time);
-                if (!match) {
-                    const target = toMins(time);
-                    withPlat.sort((a, b) => Math.abs(toMins(a.scheduledTime) - target) - Math.abs(toMins(b.scheduledTime) - target));
-                    if (Math.abs(toMins(withPlat[0].scheduledTime) - target) <= 3) match = withPlat[0];
+                if (withPlat.length) {
+                    // Platform badge stays cosmetic: exact scheduled-time match first,
+                    // else the closest within 3 minutes — fine for a "P4" label, NOT
+                    // tight enough to also drive a "live" time claim (see below).
+                    let plat = withPlat.find(d => d.scheduledTime === time);
+                    if (!plat) {
+                        const target = toMins(time);
+                        withPlat.sort((a, b) => Math.abs(toMins(a.scheduledTime) - target) - Math.abs(toMins(b.scheduledTime) - target));
+                        if (Math.abs(toMins(withPlat[0].scheduledTime) - target) <= 3) plat = withPlat[0];
+                    }
+                    if (plat) {
+                        const p = this.escapeHtml(String(plat.platform));
+                        slot.innerHTML = fmt === 'short'
+                            ? ` · <b class="rc-plat-badge">P${p}</b>`
+                            : ` · <b class="tl-plat-badge">Platform ${p}</b>`;
+                    }
                 }
-                if (!match) return;
-                const p = this.escapeHtml(String(match.platform));
-                slot.innerHTML = fmt === 'short'
-                    ? ` · <b class="rc-plat-badge">P${p}</b>`
-                    : ` · <b class="tl-plat-badge">Platform ${p}</b>`;
+                // Reconcile the results-card countdown (schedule-only by default) with a
+                // LIVE departure so it never quietly disagrees with the Details screen
+                // (Fix 2) — but only ever claim "live" on a high-confidence match
+                // (Defect 3): exact scheduled-time match, or a tight (<=1 min) match
+                // corroborated by destination. A fuzzy nearest-in-3-minutes match is
+                // fine for the cosmetic platform badge above, not for a time claim.
+                if (fmt === 'short' && helper && typeof helper.selectConfidentDeparture === 'function') {
+                    const now = Date.now();
+                    const confident = helper.selectConfidentDeparture(deps, time, dest, now);
+                    if (confident) {
+                        const board = helper.resolveBoardDeparture(confident, now);
+                        if ((board.source === 'live' || board.source === 'live-mins') && Number.isFinite(board.epochMs)) {
+                            const card = slot.closest('.route-card');
+                            const leaveEl = card && card.querySelector('.route-leave-mins');
+                            const scheduleEpoch = leaveEl ? +leaveEl.dataset.schedDue : NaN;
+                            const resolved = typeof helper.resolveLeaveCountdown === 'function'
+                                ? helper.resolveLeaveCountdown(scheduleEpoch, board.epochMs)
+                                : { epochMs: board.epochMs, source: 'live' };
+                            if (resolved.source === 'live' && Number.isFinite(resolved.epochMs)) {
+                                const tagEl = card && card.querySelector('[data-role="route-leave-tag"]');
+                                const depEl = card && card.querySelector('.route-dep-time');
+                                if (leaveEl) {
+                                    leaveEl.dataset.due = String(resolved.epochMs);
+                                    const m = Math.max(0, Math.floor((resolved.epochMs - now) / 60000));
+                                    leaveEl.textContent = m <= 0 ? 'due' : m + ' min';
+                                }
+                                if (tagEl) { tagEl.textContent = 'live'; tagEl.classList.remove('sched'); tagEl.classList.add('live'); }
+                                if (depEl) depEl.textContent = new Date(resolved.epochMs).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+                            }
+                        }
+                    }
+                }
             } catch (e) { /* leave slot blank on failure */ }
         }));
     }
@@ -3097,7 +3212,11 @@ class PengeDash {
         const dp = leg.departurePoint;
         const time = leg.departureTime
             ? new Date(leg.departureTime).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '';
-        return { station: this.cleanStationName(dp.commonName || ''), lat: dp.lat, lon: dp.lon, time };
+        // Destination of THIS leg (where it ends), carried through so a live-board
+        // lookup can corroborate which departure is really ours before ever calling
+        // it "live" — see _enrichJourneyPlatforms.
+        const dest = this.cleanStationName((leg.arrivalPoint && leg.arrivalPoint.commonName) || '');
+        return { station: this.cleanStationName(dp.commonName || ''), lat: dp.lat, lon: dp.lon, time, dest };
     }
 
     showJourneyDetail(journey, destination) {

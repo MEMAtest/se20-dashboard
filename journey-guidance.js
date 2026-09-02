@@ -440,8 +440,166 @@
         return { index: index, segment: segment, shouldFire: shouldFire };
     }
 
+    // Number(...) coerces null/undefined/''/false to 0 — a legitimate walk time —
+    // so "unknown" would silently read as "no walk at all". Only real numeric
+    // input (including numeric strings) counts as known.
+    function strictNumber(value) {
+        if (value === null || value === undefined || value === '' || typeof value === 'boolean') return NaN;
+        const n = Number(value);
+        return Number.isFinite(n) ? n : NaN;
+    }
+
+    // Of a sorted-ascending list of later same-line/same-direction arrivals,
+    // the first one that itself clears the walk (margin >= 0 — "run" or better).
+    // A later bus that is STILL inside the walk window is exactly as uncatchable
+    // as the one it would be replacing, so it must never be promoted. Returns
+    // null when nothing in the list is catchable, or when walk isn't known (we
+    // can't assert catchability without it).
+    function selectCatchableNext(candidateMins, walkMins) {
+        const walk = strictNumber(walkMins);
+        if (!Number.isFinite(walk)) return null;
+        const list = Array.isArray(candidateMins) ? candidateMins : [];
+        for (let i = 0; i < list.length; i++) {
+            const mins = strictNumber(list[i]);
+            if (Number.isFinite(mins) && mins - walk >= 0) return mins;
+        }
+        return null;
+    }
+
+    // Walk-aware "can I catch it", resolved into what should actually be the
+    // most prominent number on a bus card. A "miss" tier must never leave the
+    // big number reading the unreachable bus's time OR a later bus that is
+    // itself still inside the walk window — it promotes the first genuinely
+    // catchable later arrival (via selectCatchableNext) and demotes the missed
+    // one to a struck-through secondary note. `nextCandidateMins` is every
+    // later same-line/same-direction arrival's minutes, sorted ascending —
+    // not just "the next one".
+    function resolveBusProminence(arrivalMins, walkMins, nextCandidateMins) {
+        const arrival = strictNumber(arrivalMins);
+        const walk = strictNumber(walkMins);
+        const walkKnown = Number.isFinite(walk);
+        const margin = walkKnown ? arrival - walk : NaN;
+        const tier = (walkKnown && margin >= 2) ? 'go' : (walkKnown && margin >= 0) ? 'run' : 'miss';
+        if (tier !== 'miss') {
+            return { tier: tier, catchLabel: tier === 'go' ? `Leave in ${margin} min` : 'Leave now',
+                displayMins: arrival, displayMuted: false, struckMins: null };
+        }
+        const candidates = Array.isArray(nextCandidateMins) ? nextCandidateMins
+            : (typeof nextCandidateMins === 'number' ? [nextCandidateMins] : []);
+        const nextCatchable = selectCatchableNext(candidates, walk);
+        const hasNext = nextCatchable != null;
+        return {
+            tier: tier,
+            catchLabel: hasNext ? `Too late — next in ${nextCatchable} min` : 'Just missed',
+            displayMins: hasNext ? nextCatchable : arrival,
+            displayMuted: !hasNext,
+            struckMins: hasNext ? arrival : null
+        };
+    }
+
+    // Which epoch a "leave in" countdown should tick from: live data (when we
+    // have a live departure for the boarding leg) takes precedence over the
+    // scheduled plan time, so a results-list card doesn't disagree with the
+    // Details screen it links to. `source` tells the caller whether to show
+    // this as live or scheduled, so it never implies precision we don't have.
+    function resolveLeaveCountdown(scheduleEpochMs, liveEpochMs) {
+        const live = Number(liveEpochMs);
+        if (Number.isFinite(live) && live > 0) return { epochMs: live, source: 'live' };
+        const scheduled = Number(scheduleEpochMs);
+        return { epochMs: Number.isFinite(scheduled) ? scheduled : null, source: 'scheduled' };
+    }
+
+    const NON_TIME_BOARD_WORDS = /^(on time|delayed|cancelled|canceled|no report|not available|due|-)$/i;
+
+    // A bare "HH:MM" clock reading, resolved to an epoch relative to `nowMs`.
+    // Board data never carries a date, only a clock — so a reading that's more
+    // than ~12h in the past is actually tomorrow (crossed midnight), and one
+    // more than ~12h ahead is actually today/yesterday, not a ~24h countdown.
+    function parseClockToEpoch(hhmm, nowMs) {
+        const match = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || '').trim());
+        if (!match) return null;
+        const h = +match[1], m = +match[2];
+        if (h > 23 || m > 59) return null;
+        const now = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+        const candidate = new Date(now);
+        candidate.setHours(h, m, 0, 0);
+        let epoch = candidate.getTime();
+        if (epoch < now - 12 * 3600000) epoch += 24 * 3600000;
+        else if (epoch > now + 12 * 3600000) epoch -= 24 * 3600000;
+        return epoch;
+    }
+
+    // Resolves a board departure record to an epoch, preferring the most
+    // reliable field available rather than assuming any one field is present
+    // or in a parseable shape: an integer minutes-to-departure field first
+    // (most reliable — no clock-crossing ambiguity), then a real "HH:MM"
+    // expectedTime, then falling back to scheduledTime when expectedTime is
+    // missing or a non-time status word ("On time"/"Delayed"/"Cancelled"/etc).
+    // `source` is 'live-mins' or 'live' only when we resolved an actual live
+    // reading — a caller must treat anything else as schedule-only.
+    function resolveBoardDeparture(departure, nowMs) {
+        const now = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+        const d = departure && typeof departure === 'object' ? departure : {};
+        if (Number.isFinite(Number(d.mins))) {
+            return { epochMs: now + Math.max(0, Number(d.mins)) * 60000, source: 'live-mins' };
+        }
+        const expected = String(d.expectedTime || '').trim();
+        if (expected && !NON_TIME_BOARD_WORDS.test(expected)) {
+            const epoch = parseClockToEpoch(expected, now);
+            if (epoch != null) return { epochMs: epoch, source: 'live' };
+        }
+        const scheduled = String(d.scheduledTime || '').trim();
+        if (scheduled && !NON_TIME_BOARD_WORDS.test(scheduled)) {
+            const epoch = parseClockToEpoch(scheduled, now);
+            if (epoch != null) return { epochMs: epoch, source: 'scheduled' };
+        }
+        return { epochMs: null, source: 'unknown' };
+    }
+
+    function normaliseBoardText(value) {
+        return text(value).toLowerCase().replace(/\b(underground|railway|rail|bus|station|stop)\b/g, ' ')
+            .replace(/[^a-z0-9]+/g, ' ').trim();
+    }
+
+    // Picks the one departure (from a station board) we can confidently say IS
+    // the boarding leg's service, for driving a "live" claim. An exact
+    // scheduled-time string match is trusted outright; anything looser is only
+    // trusted within a tight 1-minute tolerance AND a matching destination —
+    // a platform badge can tolerate a fuzzy 3-minute nearest-match, but a
+    // "live" countdown cannot: two departures a couple of minutes apart would
+    // let it confidently show the wrong service's time. No corroborating
+    // destination and no exact match means no confident match — stay on sched.
+    function selectConfidentDeparture(departures, targetTime, targetDestination, nowMs) {
+        const list = Array.isArray(departures) ? departures : [];
+        const target = text(targetTime);
+        if (!target) return null;
+        const exact = list.find(d => text(d && d.scheduledTime) === target);
+        if (exact) return exact;
+        const targetDest = normaliseBoardText(targetDestination);
+        if (!targetDest) return null;
+        const now = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+        const targetClock = parseClockToEpoch(target, now);
+        if (targetClock == null) return null;
+        let best = null, bestDiff = Infinity;
+        list.forEach(d => {
+            const dClock = parseClockToEpoch(text(d && d.scheduledTime), now);
+            if (dClock == null) return;
+            const diff = Math.abs(dClock - targetClock);
+            if (diff > 60000) return; // tight tolerance for a *live* claim only
+            const dest = normaliseBoardText((d && (d.destination || d.dest)) || '');
+            if (!dest || (!dest.includes(targetDest) && !targetDest.includes(dest))) return;
+            if (diff < bestDiff) { best = d; bestDiff = diff; }
+        });
+        return best;
+    }
+
     return Object.freeze({
         buildJourneyGuidance: buildJourneyGuidance,
+        resolveBusProminence: resolveBusProminence,
+        selectCatchableNext: selectCatchableNext,
+        resolveLeaveCountdown: resolveLeaveCountdown,
+        resolveBoardDeparture: resolveBoardDeparture,
+        selectConfidentDeparture: selectConfidentDeparture,
         isThroughService: isThroughService,
         transferMinutes: transferMinutes,
         normalizeTflDepartures: normalizeTflDepartures,

@@ -326,3 +326,201 @@ test('resolveLiveAlert respects idempotency (lastAlertedIndex) the same as shoul
     const second = Guidance.resolveLiveAlert(segments, now, first.index, 2);
     assert.equal(second.shouldFire, false);
 });
+
+// Board clock readings ("HH:MM") are local wall-clock, resolved with the
+// machine's local Date methods — so tests must build "now"/expected epochs
+// the same way (local components), not as UTC 'Z' strings, to stay
+// timezone-independent.
+function localTime(y, mo, d, h, mi) { return new Date(y, mo - 1, d, h, mi, 0, 0).getTime(); }
+
+test('resolveBusProminence: plenty of margin is a "go" tier showing the bus\'s own time', () => {
+    const r = Guidance.resolveBusProminence(12, 5, null);
+    assert.equal(r.tier, 'go');
+    assert.equal(r.catchLabel, 'Leave in 7 min');
+    assert.equal(r.displayMins, 12);
+    assert.equal(r.displayMuted, false);
+    assert.equal(r.struckMins, null);
+});
+
+test('resolveBusProminence: tight margin is a "run" tier, still shows the bus\'s own time', () => {
+    const r = Guidance.resolveBusProminence(6, 6, null);
+    assert.equal(r.tier, 'run');
+    assert.equal(r.catchLabel, 'Leave now');
+    assert.equal(r.displayMins, 6);
+    assert.equal(r.displayMuted, false);
+});
+
+test('resolveBusProminence: unreachable bus with a known catchable next departure promotes it, demotes the missed one', () => {
+    const r = Guidance.resolveBusProminence(3, 6, [15]);
+    assert.equal(r.tier, 'miss');
+    assert.equal(r.catchLabel, 'Too late — next in 15 min');
+    // The big number must be the catchable one, not the missed bus's "3 min".
+    assert.equal(r.displayMins, 15);
+    assert.equal(r.displayMuted, false);
+    assert.equal(r.struckMins, 3);
+});
+
+test('resolveBusProminence: unreachable bus with no known next departure mutes the only number we have', () => {
+    const r = Guidance.resolveBusProminence(1, 6, null);
+    assert.equal(r.tier, 'miss');
+    assert.equal(r.catchLabel, 'Just missed');
+    assert.equal(r.displayMins, 1);
+    assert.equal(r.displayMuted, true);
+    assert.equal(r.struckMins, null);
+});
+
+// Defect 1 regression: a later bus that is STILL inside the walk window is
+// exactly as uncatchable as the one it would replace — promoting it just
+// moves the bug one step down the list instead of removing it.
+test('resolveBusProminence: no candidate at all clears the walk — nothing is promoted, big number is muted', () => {
+    const r = Guidance.resolveBusProminence(3, 20, [8, 12, 18]);
+    assert.equal(r.tier, 'miss');
+    assert.equal(r.catchLabel, 'Just missed');
+    assert.equal(r.displayMins, 3);
+    assert.equal(r.displayMuted, true);
+    assert.equal(r.struckMins, null);
+});
+
+test('resolveBusProminence: the very next bus is also inside the walk window — must not be promoted', () => {
+    // walk=20, arrival=3 (miss), next candidate=8 (also a miss on its own: 8-20<0)
+    const r = Guidance.resolveBusProminence(3, 20, [8]);
+    assert.equal(r.tier, 'miss');
+    assert.equal(r.catchLabel, 'Just missed');
+    assert.equal(r.displayMins, 3);
+    assert.equal(r.displayMuted, true);
+    assert.equal(r.struckMins, null);
+});
+
+test('resolveBusProminence: several candidates, only a later one clears the walk — that one is promoted', () => {
+    const r = Guidance.resolveBusProminence(3, 20, [8, 12, 25, 40]);
+    assert.equal(r.tier, 'miss');
+    assert.equal(r.catchLabel, 'Too late — next in 25 min');
+    assert.equal(r.displayMins, 25);
+    assert.equal(r.displayMuted, false);
+    assert.equal(r.struckMins, 3);
+});
+
+test('resolveBusProminence: walkMins null/undefined/NaN never crashes and never fabricates a tier — falls back to miss/muted', () => {
+    for (const walk of [null, undefined, NaN]) {
+        const r = Guidance.resolveBusProminence(3, walk, [8]);
+        assert.equal(r.tier, 'miss');
+        assert.equal(r.displayMuted, true);
+        assert.equal(r.struckMins, null);
+        assert.ok(!/NaN|undefined/.test(r.catchLabel));
+    }
+});
+
+test('resolveBusProminence: arrivalMins === walkMins is the run/miss boundary (margin 0 is catchable — "run")', () => {
+    const r = Guidance.resolveBusProminence(6, 6, []);
+    assert.equal(r.tier, 'run');
+    assert.equal(r.catchLabel, 'Leave now');
+    assert.equal(r.displayMins, 6);
+    assert.equal(r.displayMuted, false);
+});
+
+test('resolveBusProminence: margin of exactly 2 is the run/go boundary ("go")', () => {
+    const r = Guidance.resolveBusProminence(8, 6, []);
+    assert.equal(r.tier, 'go');
+    assert.equal(r.catchLabel, 'Leave in 2 min');
+});
+
+test('selectCatchableNext returns the first candidate that clears the walk, in list order', () => {
+    assert.equal(Guidance.selectCatchableNext([8, 12, 25, 40], 20), 25);
+    assert.equal(Guidance.selectCatchableNext([8, 12], 20), null);
+    assert.equal(Guidance.selectCatchableNext([], 20), null);
+    assert.equal(Guidance.selectCatchableNext([25], null), null);
+});
+
+// Defect 2: /api/board returns bare "HH:MM" strings and often-null expectedTime,
+// not ISO timestamps — Date.parse on those is NaN. resolveBoardDeparture must
+// parse the board's actual shapes instead.
+test('resolveBoardDeparture prefers an integer mins field when present (most reliable)', () => {
+    const now = localTime(2026, 9, 2, 8, 0);
+    const r = Guidance.resolveBoardDeparture({ mins: 5, expectedTime: '08:20', scheduledTime: '08:15' }, now);
+    assert.equal(r.source, 'live-mins');
+    assert.equal(r.epochMs, now + 5 * 60000);
+});
+
+test('resolveBoardDeparture parses a bare "HH:MM" expectedTime as live', () => {
+    const now = localTime(2026, 9, 2, 8, 0);
+    const r = Guidance.resolveBoardDeparture({ expectedTime: '08:17', scheduledTime: '08:15' }, now);
+    assert.equal(r.source, 'live');
+    assert.equal(r.epochMs, localTime(2026, 9, 2, 8, 17));
+});
+
+test('resolveBoardDeparture falls back to scheduledTime when expectedTime is null/absent', () => {
+    const now = localTime(2026, 9, 2, 8, 0);
+    const r1 = Guidance.resolveBoardDeparture({ expectedTime: null, scheduledTime: '08:15' }, now);
+    assert.equal(r1.source, 'scheduled');
+    assert.equal(r1.epochMs, localTime(2026, 9, 2, 8, 15));
+    const r2 = Guidance.resolveBoardDeparture({ scheduledTime: '08:15' }, now);
+    assert.equal(r2.source, 'scheduled');
+});
+
+test('resolveBoardDeparture treats non-time status words ("On time"/"Delayed"/"Cancelled") as no live reading', () => {
+    const now = localTime(2026, 9, 2, 8, 0);
+    for (const word of ['On time', 'Delayed', 'Cancelled', 'CANCELED']) {
+        const r = Guidance.resolveBoardDeparture({ expectedTime: word, scheduledTime: '08:15' }, now);
+        assert.equal(r.source, 'scheduled');
+        assert.equal(r.epochMs, localTime(2026, 9, 2, 8, 15));
+    }
+});
+
+test('resolveBoardDeparture resolves a clock reading that has crossed midnight relative to now, not a ~24h countdown', () => {
+    const now = localTime(2026, 9, 2, 23, 58);
+    const r = Guidance.resolveBoardDeparture({ expectedTime: '00:05' }, now);
+    assert.equal(r.source, 'live');
+    const minsAway = Math.round((r.epochMs - now) / 60000);
+    assert.equal(minsAway, 7); // 23:58 -> 00:05 is 7 minutes, not ~1438
+});
+
+test('resolveBoardDeparture returns unknown when nothing usable is present', () => {
+    const now = localTime(2026, 9, 2, 8, 0);
+    const r = Guidance.resolveBoardDeparture({}, now);
+    assert.equal(r.source, 'unknown');
+    assert.equal(r.epochMs, null);
+});
+
+// Defect 3: the live countdown must only claim "live" on a high-confidence
+// match — an exact scheduled-time string match, or a tight (<=1 min) match
+// corroborated by destination. A fuzzy nearest-in-3-minutes match (fine for a
+// cosmetic platform badge) is not good enough to assert "this exact service".
+test('selectConfidentDeparture accepts an exact scheduled-time string match without needing a destination', () => {
+    const departures = [{ scheduledTime: '08:15', destination: 'Brixton' }, { scheduledTime: '08:17', destination: 'Victoria' }];
+    const match = Guidance.selectConfidentDeparture(departures, '08:17', null, localTime(2026, 9, 2, 8, 0));
+    assert.equal(match.destination, 'Victoria');
+});
+
+test('selectConfidentDeparture accepts a close (<=1 min) match only when the destination corroborates it', () => {
+    const now = localTime(2026, 9, 2, 8, 0);
+    const departures = [{ scheduledTime: '08:16', destination: 'Victoria' }];
+    assert.ok(Guidance.selectConfidentDeparture(departures, '08:17', 'Victoria', now));
+    assert.equal(Guidance.selectConfidentDeparture(departures, '08:17', 'Brixton', now), null);
+});
+
+test('selectConfidentDeparture refuses a match beyond the tight tolerance even with a matching destination', () => {
+    const now = localTime(2026, 9, 2, 8, 0);
+    // 3 minutes apart — fine for a cosmetic platform badge, not for a live claim.
+    const departures = [{ scheduledTime: '08:20', destination: 'Victoria' }];
+    assert.equal(Guidance.selectConfidentDeparture(departures, '08:17', 'Victoria', now), null);
+});
+
+test('selectConfidentDeparture returns null with no target time or no usable candidates', () => {
+    assert.equal(Guidance.selectConfidentDeparture([{ scheduledTime: '08:15', destination: 'Victoria' }], '', 'Victoria'), null);
+    assert.equal(Guidance.selectConfidentDeparture([], '08:17', 'Victoria'), null);
+});
+
+test('resolveLeaveCountdown prefers a known live epoch over the scheduled one', () => {
+    const scheduled = Date.parse('2026-08-07T08:10:00.000Z');
+    const live = Date.parse('2026-08-07T08:17:00.000Z');
+    const r = Guidance.resolveLeaveCountdown(scheduled, live);
+    assert.equal(r.epochMs, live);
+    assert.equal(r.source, 'live');
+});
+
+test('resolveLeaveCountdown falls back to the scheduled epoch when no live time is known', () => {
+    const scheduled = Date.parse('2026-08-07T08:10:00.000Z');
+    const r = Guidance.resolveLeaveCountdown(scheduled, null);
+    assert.equal(r.epochMs, scheduled);
+    assert.equal(r.source, 'scheduled');
+});
