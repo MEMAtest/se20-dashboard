@@ -524,3 +524,66 @@ test('resolveLeaveCountdown falls back to the scheduled epoch when no live time 
     assert.equal(r.epochMs, scheduled);
     assert.equal(r.source, 'scheduled');
 });
+
+// ==================== applyDurationConstraint ====================
+// "Get me there in 40 mins" means duration <= 40, never a departure offset.
+
+test('applyDurationConstraint matches journeys at or under the max, excludes those over', () => {
+    const journeys = [{ duration: 40 }, { duration: 41 }, { duration: 25 }];
+    const r = Guidance.applyDurationConstraint(journeys, 40);
+    assert.deepEqual(r.matchIndexes, [0, 2]);
+    assert.equal(r.noneMatch, false);
+    assert.equal(r.allMatch, false);
+});
+
+test('applyDurationConstraint: duration exactly equal to the limit counts as a match (boundary)', () => {
+    const r = Guidance.applyDurationConstraint([{ duration: 40 }], 40);
+    assert.deepEqual(r.matchIndexes, [0]);
+    assert.equal(r.allMatch, true);
+});
+
+test('applyDurationConstraint: all journeys over the limit — none match, fastest surfaced as near-miss', () => {
+    const journeys = [{ duration: 52 }, { duration: 60 }, { duration: 48 }];
+    const r = Guidance.applyDurationConstraint(journeys, 40);
+    assert.deepEqual(r.matchIndexes, []);
+    assert.equal(r.noneMatch, true);
+    assert.equal(r.fastest, 48);
+    assert.equal(r.fastestIndex, 2);
+    assert.match(r.message, /No route makes it in 40 min/);
+    assert.match(r.message, /48 min/);
+});
+
+test('applyDurationConstraint: all journeys under the limit — everything matches', () => {
+    const journeys = [{ duration: 10 }, { duration: 20 }];
+    const r = Guidance.applyDurationConstraint(journeys, 40);
+    assert.deepEqual(r.matchIndexes, [0, 1]);
+    assert.equal(r.allMatch, true);
+    assert.equal(r.noneMatch, false);
+    assert.match(r.message, /All routes/);
+});
+
+test('applyDurationConstraint: empty journeys array is safe and produces no crash/message', () => {
+    const r = Guidance.applyDurationConstraint([], 40);
+    assert.deepEqual(r.matchIndexes, []);
+    assert.equal(r.fastest, null);
+    assert.equal(r.fastestIndex, -1);
+    assert.equal(r.noneMatch, false);
+    assert.equal(r.allMatch, false);
+    assert.equal(r.message, null);
+});
+
+test('applyDurationConstraint ignores journeys with missing/null/non-numeric duration rather than crashing', () => {
+    const journeys = [{ duration: undefined }, { duration: null }, { duration: 'NaN' }, { duration: 30 }, {}];
+    const r = Guidance.applyDurationConstraint(journeys, 40);
+    assert.deepEqual(r.matchIndexes, [3]);
+    assert.equal(r.fastest, 30);
+    assert.equal(r.fastestIndex, 3);
+});
+
+test('applyDurationConstraint with no max set treats every usable journey as matching (no constraint active)', () => {
+    const journeys = [{ duration: 10 }, { duration: 90 }];
+    const r = Guidance.applyDurationConstraint(journeys, null);
+    assert.deepEqual(r.matchIndexes, [0, 1]);
+    assert.equal(r.allMatch, true);
+    assert.equal(r.message, null);
+});

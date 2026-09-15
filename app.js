@@ -1067,7 +1067,9 @@ class PengeDash {
                 if (!due) return;
                 // floor to match the initial render (a bus 1:59 away is "1 min", not "2").
                 const m = Math.max(0, Math.floor((due - now) / 60000));
-                el.textContent = m <= 0 ? (el.dataset.zero || 'due') : m + ' min';
+                // data-prefix lets a countdown read "in 5 min" and still collapse to
+                // a bare "now" at zero, instead of the ungrammatical "in now".
+                el.textContent = m <= 0 ? (el.dataset.zero || 'due') : (el.dataset.prefix || '') + m + ' min';
                 el.classList.toggle('urgent', m <= 3);
             });
         }, 1000);
@@ -2527,6 +2529,11 @@ class PengeDash {
         this.journeyModes = null;      // null = all modes
         this.journeyPref = '';         // '' | leastwalking | leastinterchange
         this.journeyStepFree = false;
+        // Duration CONSTRAINT ("get me there in N mins" — journey takes <= N mins).
+        // Distinct from journeyTimeOffset (a departure offset). Purely a client-side
+        // filter/annotation over results already fetched — changing it must NOT
+        // trigger a replan/refetch (see the duration pill handler below).
+        this.journeyMaxDuration = 0;   // 0 = no constraint ("Any length")
         try { this.journeyStepFree = localStorage.getItem('pengedash-stepfree') === '1'; } catch (e) { /* ignore */ }
         this.currentLocation = null;
         this._currentLocationAt = 0;
@@ -2617,6 +2624,49 @@ class PengeDash {
                 this._replanIfActive();
             });
         });
+
+        // Duration constraint pills ("get me there in N mins"). Deliberately does
+        // NOT call _replanIfActive — the constraint is a pure filter/annotation over
+        // journeys already in hand (their `duration` field), so no TfL call is needed.
+        document.querySelectorAll('#journey-duration-row .pill').forEach(pill => {
+            pill.addEventListener('click', () => {
+                document.querySelectorAll('#journey-duration-row .pill').forEach(p => p.classList.remove('active'));
+                pill.classList.add('active');
+                this.journeyMaxDuration = parseInt(pill.dataset.max, 10) || 0;
+                this._persistJourneyState();
+                this._applyDurationConstraintToCards();
+            });
+        });
+    }
+
+    // Re-annotates the already-rendered route cards against journeyMaxDuration,
+    // without touching _lastJourneys, the tags, or triggering any fetch. Safe to
+    // call any time there may or may not be cards on screen.
+    _applyDurationConstraintToCards() {
+        const container = document.getElementById('journey-results');
+        const summary = document.getElementById('journey-duration-summary');
+        if (!container) return;
+        const helper = globalThis.JourneyGuidance;
+        if (!helper || typeof helper.applyDurationConstraint !== 'function') return;
+        const journeys = this._lastJourneys || [];
+        const result = helper.applyDurationConstraint(journeys, this.journeyMaxDuration);
+
+        container.querySelectorAll('.route-card').forEach(card => {
+            const idx = parseInt(card.dataset.index, 10);
+            const matches = !this.journeyMaxDuration || result.matchIndexes.includes(idx);
+            card.classList.toggle('route-card--duration-match', !!this.journeyMaxDuration && matches);
+            card.classList.toggle('route-card--duration-miss', !!this.journeyMaxDuration && !matches);
+        });
+
+        if (summary) {
+            if (this.journeyMaxDuration && result.message) {
+                summary.textContent = result.message;
+                summary.style.display = 'block';
+            } else {
+                summary.textContent = '';
+                summary.style.display = 'none';
+            }
+        }
     }
 
     _replanIfActive() {
@@ -3017,7 +3067,7 @@ class PengeDash {
                     </div>
                     <div class="route-modes">${this.buildModeStrip(journey)}</div>
                     ${boardLine}
-                    <div class="route-meta">Leaves in <b class="route-leave-mins" data-due="${dep.getTime()}" data-sched-due="${dep.getTime()}">${leaveMins} min</b><span class="route-leave-tag sched" data-role="route-leave-tag">sched</span> · <span class="route-dep-time">${depStr}</span>–${arrStr}</div>
+                    <div class="route-meta">Departs <b class="route-leave-mins" data-due="${dep.getTime()}" data-sched-due="${dep.getTime()}" data-zero="now" data-prefix="in ">${leaveMins <= 0 ? 'now' : 'in ' + leaveMins + ' min'}</b> <span class="route-leave-tag sched" data-role="route-leave-tag">sched</span> · <span class="route-dep-time">${depStr}</span>–${arrStr}</div>
                     <div class="route-foot">
                         <span class="route-foot-item">💷 ${fare}</span>
                         <span class="route-foot-item">🚶 ${walkTotal} min</span>
@@ -3048,6 +3098,11 @@ class PengeDash {
                 if (!isNaN(idx) && journeys[idx]) this.showJourneyDetail(journeys[idx], destination);
             });
         });
+
+        // Re-apply any active duration constraint to the freshly-rendered cards
+        // (a replan/restore replaces the cards, so the highlight would otherwise
+        // silently drop even though journeyMaxDuration is still set).
+        this._applyDurationConstraintToCards();
     }
 
     routeStatus(journey) {
@@ -3346,6 +3401,7 @@ class PengeDash {
                     resultSetId: this._resultSetId,
                     destination: this._lastDestination,
                     originLabel: this._activeOriginLabel,
+                    maxDuration: this.journeyMaxDuration || 0,
                     ts: Date.now()
                 });
                 if (candidate.length <= CAP) { payload = candidate; break; }
@@ -3367,6 +3423,11 @@ class PengeDash {
             this._lastDestination = data.destination;
             this._activeOriginLabel = data.originLabel || null;
             this._hasSearched = true;
+            this.journeyMaxDuration = Number.isFinite(data.maxDuration) ? data.maxDuration : 0;
+            if (this.journeyMaxDuration) {
+                document.querySelectorAll('#journey-duration-row .pill').forEach(p =>
+                    p.classList.toggle('active', parseInt(p.dataset.max, 10) === this.journeyMaxDuration));
+            }
             const input = document.getElementById('destination-input');
             if (input && data.destination) {
                 input.value = data.destination;

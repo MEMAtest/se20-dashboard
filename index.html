@@ -113,6 +113,16 @@
                         <button class="pill time" data-offset="60">+1h</button>
                         <button class="pill time" data-offset="120">+2h</button>
                     </div>
+                    <!-- Duration CONSTRAINT (journey takes <= N min), distinct from the
+                         departure-offset row above — "in 40 mins" means the trip itself,
+                         not when you leave. A client-side filter over results already in
+                         hand, so picking a pill here never triggers a refetch. -->
+                    <div class="pill-row" id="journey-duration-row">
+                        <button class="pill duration active" data-max="0">Any length</button>
+                        <button class="pill duration" data-max="20">≤20m</button>
+                        <button class="pill duration" data-max="40">≤40m</button>
+                        <button class="pill duration" data-max="60">≤60m</button>
+                    </div>
                 </div>
 
                 <!-- Route results -->
@@ -120,6 +130,8 @@
                     <h3>Best routes now</h3>
                     <span class="updated" id="journey-updated">Ready</span>
                 </div>
+                <!-- Filled/shown only when a duration constraint pill is active. -->
+                <div class="duration-summary" id="journey-duration-summary" style="display:none;"></div>
                 <div class="journey-results" id="journey-results">
                     <div class="empty-hint">Search a destination to see the fastest routes, fares and live times.</div>
                 </div>

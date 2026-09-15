@@ -593,8 +593,64 @@
         return best;
     }
 
+    // Answers "get me there in N minutes" — a duration CONSTRAINT (journey takes
+    // <= N minutes), never a departure offset. Pure/no-clock: caller supplies the
+    // journeys array and the max; this never reads a fetch or the system clock.
+    // Returns { maxMinutes, matchIndexes, allMatch, noneMatch, fastest, fastestIndex, message }.
+    // - matchIndexes: indexes into `journeys` whose duration <= maxMinutes (a
+    //   journey with a missing/non-numeric duration never counts as a match).
+    // - fastest/fastestIndex: the shortest-duration journey with a usable
+    //   duration, regardless of whether it matches — this is the near-miss
+    //   fallback so "nothing fits" never means "show nothing".
+    // - message: plain-language summary for the caller to surface.
+    function applyDurationConstraint(journeys, maxMinutes) {
+        const list = Array.isArray(journeys) ? journeys : [];
+        const max = Number(maxMinutes);
+        const hasMax = Number.isFinite(max) && max > 0;
+
+        const usable = list
+            .map((j, index) => ({ index, duration: (j && j.duration != null) ? Number(j.duration) : NaN }))
+            .filter(e => Number.isFinite(e.duration));
+
+        let fastest = null, fastestIndex = -1;
+        usable.forEach(e => {
+            if (fastest == null || e.duration < fastest) { fastest = e.duration; fastestIndex = e.index; }
+        });
+
+        if (!hasMax) {
+            // No constraint set — every journey with a usable duration "matches".
+            return {
+                maxMinutes: null,
+                matchIndexes: usable.map(e => e.index),
+                allMatch: true,
+                noneMatch: false,
+                fastest, fastestIndex,
+                message: null
+            };
+        }
+
+        const matches = usable.filter(e => e.duration <= max);
+        const matchIndexes = matches.map(e => e.index);
+        const noneMatch = usable.length > 0 && matches.length === 0;
+        const allMatch = usable.length > 0 && matches.length === usable.length;
+
+        let message;
+        if (usable.length === 0) {
+            message = null; // no usable durations at all — nothing to say
+        } else if (noneMatch) {
+            message = `No route makes it in ${max} min — quickest is ${fastest} min.`;
+        } else if (allMatch) {
+            message = `All routes make it in ${max} min or less.`;
+        } else {
+            message = `${matchIndexes.length} of ${usable.length} routes make it in ${max} min or less.`;
+        }
+
+        return { maxMinutes: max, matchIndexes, allMatch, noneMatch, fastest, fastestIndex, message };
+    }
+
     return Object.freeze({
         buildJourneyGuidance: buildJourneyGuidance,
+        applyDurationConstraint: applyDurationConstraint,
         resolveBusProminence: resolveBusProminence,
         selectCatchableNext: selectCatchableNext,
         resolveLeaveCountdown: resolveLeaveCountdown,

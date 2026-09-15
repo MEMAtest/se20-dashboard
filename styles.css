@@ -246,6 +246,18 @@ input { font-family: inherit; }
 }
 .pill.active { background: var(--blue-soft); color: var(--blue); border-color: var(--blue); }
 .pill.time, .pill.mode { font-size: 12.5px; padding: 7px 12px; }
+/* Duration CONSTRAINT pills ("in N mins" = trip takes <= N mins) — visually
+   distinct amber accent from the blue time-offset row so the two concepts
+   (when you leave vs. how long it takes) don't read as the same control. */
+.pill.duration { font-size: 12.5px; padding: 7px 12px; }
+.pill.duration.active { background: var(--amber-soft); color: var(--amber); border-color: var(--amber); }
+
+/* Plain-language summary shown only while a duration pill other than "Any
+   length" is active — see app.js _applyDurationConstraintToCards. */
+.duration-summary {
+    font-size: 12.5px; font-weight: 600; color: var(--amber);
+    background: var(--amber-soft); border-radius: 10px; padding: 8px 12px; margin-bottom: 10px;
+}
 
 /* ---------- Route cards ---------- */
 .route-options-header { font-size: 13px; color: var(--muted); margin: 2px 2px 10px; }
@@ -265,6 +277,12 @@ input { font-family: inherit; }
 }
 .route-card.tag-cheapest .route-tag { background: var(--blue-soft); color: var(--blue); }
 .route-card.tag-least .route-tag { background: var(--purple-soft); color: var(--purple); }
+/* Duration-constraint highlight (app.js _applyDurationConstraintToCards). Both
+   states stay fully visible/clickable — a near-miss route is still useful
+   information, so we dim+badge rather than hide it. */
+.route-card.route-card--duration-match { box-shadow: 0 0 0 2px var(--amber) inset, var(--shadow); }
+.route-card.route-card--duration-miss { opacity: 0.6; }
+.route-card.route-card--duration-miss .route-time .rt-num { color: var(--muted); }
 .route-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .route-time { display: flex; align-items: baseline; gap: 4px; }
 .route-time .rt-num { font-size: 30px; font-weight: 800; letter-spacing: -0.03em; }

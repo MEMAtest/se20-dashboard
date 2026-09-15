@@ -61,7 +61,10 @@ const CONFIG = {
     },
 
     // Darwin backend only serves these SE20 CRS stations (real National Rail times)
-    DARWIN_STATIONS: ['PNW', 'PNE', 'BKB', 'ANR'],
+    // CRS codes, verified against functions/stations-reference.json.
+    // Anerley is ANZ (not ANR) and Birkbeck is BIK (not BKB) — the old codes
+    // did not exist, so those two boards silently never loaded.
+    DARWIN_STATIONS: ['PNW', 'PNE', 'BIK', 'ANZ'],
 
     // TfL Bus Stop IDs (NaPTAN codes for High Street / Maple Road)
     BUS_STOPS: [
