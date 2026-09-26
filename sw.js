@@ -1,5 +1,5 @@
 // Penge Dash SE20 - Service Worker
-const CACHE_VERSION = 'v30';
+const CACHE_VERSION = 'v31';
 const TILE_CACHE = 'penge-dash-tiles-v1';
 const MAX_TILES = 300;
 const CACHE_NAME = `penge-dash-${CACHE_VERSION}`;
@@ -109,8 +109,13 @@ self.addEventListener('fetch', event => {
                         console.log('[SW] Serving cached API response:', event.request.url);
                         return cached;
                     }
-                    // Return empty response if nothing cached
+                    // Return empty response if nothing cached. Status 503 (not the
+                    // default 200) so callers' `res.ok` check actually reflects that
+                    // this failed — a 200 here previously let a backend-down state
+                    // be read as a real (empty) board, i.e. "no trains running",
+                    // which is a false negative rather than an honest error.
                     return new Response(JSON.stringify({ error: 'offline' }), {
+                        status: 503,
                         headers: { 'Content-Type': 'application/json' }
                     });
                 })

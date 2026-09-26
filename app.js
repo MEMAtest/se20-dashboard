@@ -327,7 +327,10 @@ class PengeDash {
             // Show the postcode district (e.g. "SE20") or label
             const pc = (this.home.postcode || '').toUpperCase();
             const district = pc.split(' ')[0] || this.home.label || 'Home';
-            el.textContent = district;
+            // The header already shows its own 📍 icon (index.html .location-pin) —
+            // a GPS-derived label ("📍 Near Gipsy Hill") carries its own pin too, so
+            // strip it here or the header renders a duplicated "📍 📍 Near ...".
+            el.textContent = district.replace(/^📍\s*/, '');
         }
     }
 
@@ -2851,6 +2854,19 @@ class PengeDash {
         return url;
     }
 
+    // Find a station/stop we already know about (nearby list or favourites) whose
+    // name matches the typed text closely enough to trust for direct lat/lon
+    // routing — see the comment at its call site in planJourney.
+    _resolveKnownLocalStation(text) {
+        const norm = s => String(s || '').toLowerCase()
+            .replace(/\b(rail|railway|tram|underground|overground|station|stop)\b/g, ' ')
+            .replace(/[^a-z0-9]+/g, ' ').trim();
+        const q = norm(text);
+        if (!q) return null;
+        const pool = [...(this.nearbyStations || []), ...(this.favStations || [])];
+        return pool.find(s => Number.isFinite(+s.lat) && Number.isFinite(+s.lon) && norm(s.name) === q) || null;
+    }
+
     async planJourney(destination, opts = {}) {
         const resultsContainer = document.getElementById('journey-results');
         const updateTime = document.getElementById('journey-updated');
@@ -2917,9 +2933,18 @@ class PengeDash {
             }
             // Explicit destination place (commute boards) → use coords/postcode, which
             // TfL resolves without disambiguation. Otherwise resolve the typed string.
+            // A short local-station name ("Birkbeck", "Anerley"...) sent as free text
+            // to TfL's JourneyResults gets disambiguated against every "Birkbeck Road"
+            // bus stop and "Birkbeck, Camden" point of interest nationwide — its own
+            // text search never surfaces the actual nearby station, so it silently
+            // "wins" on the FIRST (often wrong) option (defect: sent someone from SE20
+            // to a 67-minute trip near Euston Road for "Birkbeck"). If a known nearby
+            // station's name matches what was typed, route to its coordinates instead
+            // of trusting that disambiguation at all.
+            const knownStation = opts.destPlace ? null : this._resolveKnownLocalStation(destination);
             const to = opts.destPlace
                 ? (opts.destPlace.postcode ? opts.destPlace.postcode.replace(/\s/g, '') : `${opts.destPlace.lat},${opts.destPlace.lon}`)
-                : encodeURIComponent(destination);
+                : (knownStation ? `${knownStation.lat},${knownStation.lon}` : encodeURIComponent(destination));
 
             let url = `https://api.tfl.gov.uk/Journey/JourneyResults/${from}/to/${to}`;
             if (CONFIG.TFL_APP_KEY) {
@@ -3053,7 +3078,8 @@ class PengeDash {
             // Where you board the first train + a live platform slot (filled async).
             const board = this._boardingLeg(journey);
             const boardLine = board && board.station
-                ? `<div class="route-board">🚉 Board at <b>${this.escapeHtml(board.station)}</b><span class="jp-plat" data-fmt="short" data-lat="${board.lat}" data-lon="${board.lon}" data-time="${this.escapeAttr(board.time)}" data-dest="${this.escapeAttr(board.dest || '')}"></span></div>`
+                ? `<div class="route-board">🚉 Board at <b>${this.escapeHtml(board.station)}</b><span class="jp-plat" data-fmt="short" data-lat="${board.lat}" data-lon="${board.lon}" data-time="${this.escapeAttr(board.time)}" data-dest="${this.escapeAttr(board.dest || '')}"></span></div>
+                    <div class="jp-next-trains" data-lat="${board.lat}" data-lon="${board.lon}" data-time="${this.escapeAttr(board.time)}" data-dest="${this.escapeAttr(board.dest || '')}" data-direction="${this.escapeAttr(board.direction || '')}" data-station="${this.escapeAttr(board.station)}"><div class="jp-nt-loading">🚉 Checking live trains from ${this.escapeHtml(board.station)}…</div></div>`
                 : '';
             return `
                 <div class="route-card ${tag ? tag.cls : ''}" data-index="${index}">
@@ -3154,19 +3180,20 @@ class PengeDash {
         // render "P4") and the detail-timeline slots (data-fmt="long", "Platform 4").
         // Cache boards per lat/lon so several cards for the same station fetch once.
         const slots = [...document.querySelectorAll('.jp-plat[data-lat]')];
+        const nextTrainSlots = [...document.querySelectorAll('.jp-next-trains[data-lat]')];
         const boardCache = new Map();
+        const fetchBoard = (lat, lon) => {
+            const key = `${lat},${lon}`;
+            if (!boardCache.has(key)) boardCache.set(key, this._fetchDarwinBoardWithRetry(lat, lon));
+            return boardCache.get(key);
+        };
         const helper = globalThis.JourneyGuidance;
         await Promise.all(slots.map(async slot => {
             const { lat, lon, time, fmt, dest } = slot.dataset;
             if (!lat || !lon || !time) return;
             try {
-                const key = `${lat},${lon}`;
-                if (!boardCache.has(key)) {
-                    boardCache.set(key, fetch(`${CONFIG.DARWIN_API_URL}/api/board?lat=${lat}&lon=${lon}`)
-                        .then(r => r.ok ? r.json() : null).catch(() => null));
-                }
-                const data = await boardCache.get(key);
-                const deps = (data && Array.isArray(data.departures)) ? data.departures : [];
+                const board = await fetchBoard(lat, lon);
+                const deps = board.error ? [] : board.departures;
                 const withPlat = deps.filter(d => d.platform && d.platform !== '-' && d.scheduledTime);
                 if (withPlat.length) {
                     // Platform badge stays cosmetic: exact scheduled-time match first,
@@ -3195,14 +3222,14 @@ class PengeDash {
                     const now = Date.now();
                     const confident = helper.selectConfidentDeparture(deps, time, dest, now);
                     if (confident) {
-                        const board = helper.resolveBoardDeparture(confident, now);
-                        if ((board.source === 'live' || board.source === 'live-mins') && Number.isFinite(board.epochMs)) {
+                        const resolvedBoard = helper.resolveBoardDeparture(confident, now);
+                        if ((resolvedBoard.source === 'live' || resolvedBoard.source === 'live-mins') && Number.isFinite(resolvedBoard.epochMs)) {
                             const card = slot.closest('.route-card');
                             const leaveEl = card && card.querySelector('.route-leave-mins');
                             const scheduleEpoch = leaveEl ? +leaveEl.dataset.schedDue : NaN;
                             const resolved = typeof helper.resolveLeaveCountdown === 'function'
-                                ? helper.resolveLeaveCountdown(scheduleEpoch, board.epochMs)
-                                : { epochMs: board.epochMs, source: 'live' };
+                                ? helper.resolveLeaveCountdown(scheduleEpoch, resolvedBoard.epochMs)
+                                : { epochMs: resolvedBoard.epochMs, source: 'live' };
                             if (resolved.source === 'live' && Number.isFinite(resolved.epochMs)) {
                                 const tagEl = card && card.querySelector('[data-role="route-leave-tag"]');
                                 const depEl = card && card.querySelector('.route-dep-time');
@@ -3219,6 +3246,62 @@ class PengeDash {
                 }
             } catch (e) { /* leave slot blank on failure */ }
         }));
+        await Promise.all(nextTrainSlots.map(slot => this._renderCardNextTrains(slot, fetchBoard)));
+    }
+
+    // "Next trains from Anerley" mini-board on the results card / journey detail
+    // board line — the up-front answer to "what's actually coming up at the
+    // station I board at", not buried behind a tap into Details. Filters to
+    // departures that go this journey's way; on a genuinely dead backend or a
+    // cold (not-yet-warmed) station it says so plainly rather than showing
+    // nothing (a blank slot reads as "no trains", which is a false negative).
+    async _renderCardNextTrains(slot, fetchBoard) {
+        const { lat, lon, time, dest, direction, station } = slot.dataset;
+        if (!lat || !lon) return;
+        const label = station || 'this station';
+        let board;
+        try { board = await fetchBoard(lat, lon); } catch (e) { board = { error: true, departures: [] }; }
+        if (!board || board.error) {
+            slot.innerHTML = `<div class="jp-nt-error">🚉 Live trains from ${this.escapeHtml(label)} are unavailable right now — check the departure boards at the station.</div>`;
+            return;
+        }
+        const all = Array.isArray(board.departures) ? board.departures : [];
+        if (!all.length) {
+            slot.innerHTML = `<div class="jp-nt-loading">🚉 No live departures from ${this.escapeHtml(label)} showing yet — check back closer to travelling.</div>`;
+            return;
+        }
+        const now = Date.now();
+        const plannedClock = this._clockMinutes(time);
+        let relevant = await this._filterCompatibleDarwinDepartures(
+            all.filter(d => !d.cancelled).slice(0, 8), { fromName: label, toName: dest, direction, plannedClock });
+        if (!relevant.length) {
+            // Cheap fallback: destination/direction name match only (no calling-
+            // points fetch) rather than showing an unrelated board with nothing.
+            relevant = all.filter(d => this._journeyNamesMatch(d.destination || d.dest, dest) ||
+                this._journeyNamesMatch(d.destination || d.dest, direction));
+        }
+        if (!relevant.length) {
+            slot.innerHTML = `<div class="jp-nt-loading">🚉 No upcoming ${this.escapeHtml(dest ? 'trains towards ' + dest : 'services')} showing from ${this.escapeHtml(label)} right now.</div>`;
+            return;
+        }
+        const rows = relevant.slice(0, 4).map(d => {
+            const mins = this._minutesUntilClock(d.expectedTime || d.scheduledTime, now);
+            const dueEpoch = Number.isFinite(mins) ? now + mins * 60000 : null;
+            const cancelled = !!d.cancelled;
+            const delayed = !cancelled && d.expectedTime && d.scheduledTime && d.expectedTime !== d.scheduledTime;
+            const statusHtml = cancelled ? '<span class="jp-nt-status cancelled">Cancelled</span>'
+                : delayed ? '<span class="jp-nt-status delayed">Delayed</span>' : '';
+            const platform = (d.platform && d.platform !== '-') ? ` · Plat ${this.escapeHtml(String(d.platform))}` : '';
+            const timeHtml = (!cancelled && dueEpoch != null)
+                ? `<b class="jp-nt-mins" data-due="${dueEpoch}" data-zero="Departs now" data-prefix="Departs in ">${mins <= 0 ? 'Departs now' : 'Departs in ' + mins + ' min'}</b>`
+                : `<b class="jp-nt-mins">${this.escapeHtml(d.scheduledTime || '')}</b>`;
+            return `<div class="jp-nt-row${cancelled ? ' cancelled' : ''}">
+                <span class="jp-nt-dest">${this.escapeHtml(d.destination || d.dest || 'Train')}${platform}</span>
+                ${statusHtml}
+                ${timeHtml}
+            </div>`;
+        }).join('');
+        slot.innerHTML = `<div class="jp-nt-head">🚉 Next trains from ${this.escapeHtml(label)}</div><div class="jp-nt-list">${rows}</div>`;
     }
 
     // Replace a journey's scheduled bus-leg time with the live next arrivals of that
@@ -3271,7 +3354,8 @@ class PengeDash {
         // lookup can corroborate which departure is really ours before ever calling
         // it "live" — see _enrichJourneyPlatforms.
         const dest = this.cleanStationName((leg.arrivalPoint && leg.arrivalPoint.commonName) || '');
-        return { station: this.cleanStationName(dp.commonName || ''), lat: dp.lat, lon: dp.lon, time, dest };
+        const direction = (leg.routeOptions?.[0]?.direction || leg.routeOptions?.[0]?.destination || '');
+        return { station: this.cleanStationName(dp.commonName || ''), lat: dp.lat, lon: dp.lon, time, dest, direction };
     }
 
     showJourneyDetail(journey, destination) {
@@ -3694,11 +3778,15 @@ class PengeDash {
             return;
         }
         const tfL = await this._guidedTflDepartures(segment, helper, now);
-        const rail = this._isRailMode(segment.mode) ? await this._guidedDarwinDepartures(segment, now) : { compatible: [], all: [] };
+        const rail = this._isRailMode(segment.mode) ? await this._guidedDarwinDepartures(segment, now) : { compatible: [], all: [], status: 'n/a' };
         if (this.currentScreen !== 'journey' || this._journeyDetailGuidance?.segments?.[index] !== segment) return;
         const feed = tfL.compatible.length ? tfL : (rail.compatible.length ? rail : (tfL.all.length ? tfL : rail));
-        const source = tfL.compatible.length || tfL.all.length ? 'TfL live' : (rail.all.length ? 'National Rail live' : 'Scheduled');
-        this._renderGuidedDepartures(panel, segment, index, feed.compatible, source, feed.all);
+        const stationLabel = segment.fromName || 'this stop';
+        // "Next trains from Anerley" etc — always name the boarding station so it's
+        // never ambiguous which board this is, rather than a generic "TfL live".
+        const source = tfL.compatible.length || tfL.all.length || rail.all.length
+            ? `Next trains from ${stationLabel}` : 'Scheduled';
+        this._renderGuidedDepartures(panel, segment, index, feed.compatible, source, feed.all, this._isRailMode(segment.mode) ? rail.status : 'ok', stationLabel);
         this._renderGuidedPlatform(index, feed.compatible, segment);
     }
 
@@ -3733,44 +3821,85 @@ class PengeDash {
         }).sort((a, b) => this._departureView(a, now).mins - this._departureView(b, now).mins);
     }
 
-    async _guidedDarwinDepartures(segment, now) {
-        const c = segment.departureCoordinates;
-        if (!c || !Number.isFinite(+c.lat) || !Number.isFinite(+c.lon)) return { compatible: [], all: [] };
-        try {
-            const data = await fetch(`${CONFIG.DARWIN_API_URL}/api/board?lat=${encodeURIComponent(c.lat)}&lon=${encodeURIComponent(c.lon)}`)
-                .then(r => r.ok ? r.json() : null);
-            const all = (Array.isArray(data?.departures) ? data.departures : [])
-                .filter(d => d && !d.cancelled).slice(0, 8)
-                .map(d => ({ ...d, minutes: this._minutesUntilClock(d.expectedTime || d.scheduledTime, now) }))
-                .filter(d => d.minutes == null || d.minutes >= -1);
-            const compatible = (await Promise.all(all.map(async departure => {
-                const plannedClock = this._clockMinutes(this._departureClock(segment.departureTime));
+    // Fetch a Darwin /api/board, tolerating a cold station (backend warms a
+    // station's feed on first request, so the very first call can come back
+    // empty even though the station IS served). One retry after a short wait
+    // before we tell the user there is genuinely nothing — never confuse "cold,
+    // try again" with "the backend is down" (status distinguishes the two so the
+    // caller can show an honest message rather than a blank/false "no trains").
+    async _fetchDarwinBoardWithRetry(lat, lon, { retry = true } = {}) {
+        const url = `${CONFIG.DARWIN_API_URL}/api/board?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`;
+        const attempt = async () => {
+            const res = await fetch(url);
+            if (!res.ok) return { error: true, departures: [] };
+            const data = await res.json().catch(() => null);
+            // The service worker's offline fallback (sw.js) answers a failed API
+            // fetch with HTTP 200 + {error:'offline'} so the app can still render —
+            // but that is NOT a real (empty) board and must never be read as one,
+            // or a genuinely dead backend silently renders as "no trains running"
+            // (absence-is-not-assurance). Only an actual departures array counts.
+            if (!data || !Array.isArray(data.departures) || data.error) return { error: true, departures: [] };
+            return { error: false, departures: data.departures };
+        };
+        let result;
+        try { result = await attempt(); } catch (e) { result = { error: true, departures: [] }; }
+        if (retry && !result.error && result.departures.length === 0) {
+            await new Promise(r => setTimeout(r, 3000));
+            try {
+                const again = await attempt();
+                if (!again.error) result = again;
+            } catch (e) { /* keep the first (empty) result */ }
+        }
+        return result;
+    }
+
+    // Shared compatibility filter for a raw Darwin board: destination/direction
+    // name match first (cheap), falling back to the calling-points endpoint so a
+    // through service to a different blind isn't wrongly excluded — used by both
+    // the journey-detail "Next trains" panel and the results-card mini board.
+    async _filterCompatibleDarwinDepartures(all, { fromName, toName, direction, plannedClock } = {}) {
+        return (await Promise.all((all || []).map(async departure => {
+            if (Number.isFinite(plannedClock)) {
                 const serviceClock = this._clockMinutes(departure.expectedTime || departure.scheduledTime);
                 let relativeToPlan = serviceClock - plannedClock;
                 if (relativeToPlan < -720) relativeToPlan += 1440;
                 if (Number.isFinite(relativeToPlan) && relativeToPlan < -2) return null;
-                const destinationMatches = this._journeyNamesMatch(departure.destination || departure.dest, segment.toName) ||
-                    this._journeyNamesMatch(departure.destination || departure.dest, segment.direction);
-                if (destinationMatches) return departure;
-                if (!departure.rid) return null;
-                try {
-                    const service = await fetch(`${CONFIG.DARWIN_API_URL}/api/service?rid=${encodeURIComponent(departure.rid)}`)
-                        .then(r => r.ok ? r.json() : null);
-                    const points = service?.callingPoints || [];
-                    const helper = globalThis.JourneyGuidance;
-                    const callsAtTarget = helper && typeof helper.isCallingPatternCompatible === 'function'
-                        ? helper.isCallingPatternCompatible(points, segment.fromName, segment.toName)
-                        : (() => {
-                            const boardingIndex = points.findIndex(point => this._journeyNamesMatch(point?.name || point?.locationName || point, segment.fromName));
-                            const targetIndex = points.findIndex(point => this._journeyNamesMatch(point?.name || point?.locationName || point, segment.toName));
-                            return boardingIndex >= 0 && targetIndex > boardingIndex;
-                        })();
-                    return callsAtTarget ? (departure.destination || departure.dest
-                        ? departure : { ...departure, destination: segment.direction || segment.toName }) : null;
-                } catch (e) { return null; }
-            }))).filter(Boolean);
-            return { compatible, all };
-        } catch (e) { return { compatible: [], all: [] }; }
+            }
+            const destinationMatches = this._journeyNamesMatch(departure.destination || departure.dest, toName) ||
+                this._journeyNamesMatch(departure.destination || departure.dest, direction);
+            if (destinationMatches) return departure;
+            if (!departure.rid) return null;
+            try {
+                const service = await fetch(`${CONFIG.DARWIN_API_URL}/api/service?rid=${encodeURIComponent(departure.rid)}`)
+                    .then(r => r.ok ? r.json() : null);
+                const points = service?.callingPoints || [];
+                const helper = globalThis.JourneyGuidance;
+                const callsAtTarget = helper && typeof helper.isCallingPatternCompatible === 'function'
+                    ? helper.isCallingPatternCompatible(points, fromName, toName)
+                    : (() => {
+                        const boardingIndex = points.findIndex(point => this._journeyNamesMatch(point?.name || point?.locationName || point, fromName));
+                        const targetIndex = points.findIndex(point => this._journeyNamesMatch(point?.name || point?.locationName || point, toName));
+                        return boardingIndex >= 0 && targetIndex > boardingIndex;
+                    })();
+                return callsAtTarget ? (departure.destination || departure.dest
+                    ? departure : { ...departure, destination: direction || toName }) : null;
+            } catch (e) { return null; }
+        }))).filter(Boolean);
+    }
+
+    async _guidedDarwinDepartures(segment, now) {
+        const c = segment.departureCoordinates;
+        if (!c || !Number.isFinite(+c.lat) || !Number.isFinite(+c.lon)) return { compatible: [], all: [], status: 'unavailable' };
+        const board = await this._fetchDarwinBoardWithRetry(c.lat, c.lon);
+        if (board.error) return { compatible: [], all: [], status: 'error' };
+        const all = board.departures
+            .filter(d => d).slice(0, 8)
+            .map(d => ({ ...d, minutes: this._minutesUntilClock(d.expectedTime || d.scheduledTime, now) }))
+            .filter(d => d.minutes == null || d.minutes >= -1);
+        const plannedClock = this._clockMinutes(this._departureClock(segment.departureTime));
+        const compatible = await this._filterCompatibleDarwinDepartures(
+            all.filter(d => !d.cancelled), { fromName: segment.fromName, toName: segment.toName, direction: segment.direction, plannedClock });
+        return { compatible, all, status: all.length ? 'ok' : 'empty' };
     }
 
     _journeyNamesMatch(left, right) {
@@ -3810,7 +3939,21 @@ class PengeDash {
         return view.vehicleId || `${String(view.lineId || view.line).toLowerCase()}|${String(view.destination).toLowerCase()}|${view.scheduled}`;
     }
 
-    _renderGuidedDepartures(panel, segment, index, departures, source, allDepartures = []) {
+    _renderGuidedDepartures(panel, segment, index, departures, source, allDepartures = [], boardStatus = 'ok', stationLabel = 'this stop') {
+        // Rail leg whose board genuinely failed or is still cold — say so plainly
+        // rather than falling through to the "no suitable departure" copy, which
+        // reads as a normal/expected state rather than a fault (absence-is-not-
+        // assurance: a dead backend must never look like "nothing due").
+        if (this._isRailMode(segment.mode) && !departures.length && !allDepartures.length) {
+            if (boardStatus === 'error') {
+                panel.innerHTML = `<p class="scheduled-fallback board-error"><b>⚠️ Live trains unavailable</b><span>Couldn't reach live departures for ${this.escapeHtml(stationLabel)} — check the departure boards at the station.</span></p>`;
+                return;
+            }
+            if (boardStatus === 'empty') {
+                panel.innerHTML = `<p class="scheduled-fallback board-cold"><b>Checking live trains…</b><span>${this.escapeHtml(stationLabel)}'s board is still loading — try again shortly.</span></p>`;
+                return;
+            }
+        }
         const compatibleKeys = new Set((departures || []).map(row => this._departureKey(row)));
         const compatibleRows = (departures || []).map(row => ({ ...this._departureView(row), works: true }));
         const seen = new Set();
@@ -4151,8 +4294,12 @@ class PengeDash {
 
     async reverseGeocode(coords) {
         try {
-            // Use TfL's StopPoint search to find nearby stations/stops
-            let url = `https://api.tfl.gov.uk/StopPoint?lat=${coords.lat}&lon=${coords.lon}&stopTypes=NaptanRailStation,NaptanMetroStation&radius=500`;
+            // Use TfL's StopPoint search to find nearby stations/stops. Widened to
+            // include bus/tram stops and a bigger radius than the original 500m —
+            // a 500m rail/tube-only search came back empty in plenty of ordinary
+            // residential spots (e.g. near Gipsy Hill), silently dropping straight
+            // to raw coordinates even though a friendly name was one query away.
+            let url = `https://api.tfl.gov.uk/StopPoint?lat=${coords.lat}&lon=${coords.lon}&stopTypes=NaptanRailStation,NaptanMetroStation,NaptanPublicBusCoachTram&radius=800`;
             if (CONFIG.TFL_APP_KEY) {
                 url += `&app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}`;
             }
@@ -4169,14 +4316,24 @@ class PengeDash {
             const data = await response.json();
 
             if (data.stopPoints && data.stopPoints.length > 0) {
-                return `Near ${data.stopPoints[0].commonName}`;
+                return `Near ${this.cleanStationName(data.stopPoints[0].commonName)}`;
             }
+        } catch (error) { /* fall through to the postcode lookup below */ }
 
-            // Fallback to coordinates display
-            return `${coords.lat.toFixed(4)}, ${coords.lon.toFixed(4)}`;
-        } catch (error) {
-            return `${coords.lat.toFixed(4)}, ${coords.lon.toFixed(4)}`;
-        }
+        // Second-choice fallback: postcodes.io reverse lookup, so a spot with no
+        // nearby stop/station still gets a real place name (its postcode ward)
+        // instead of a bare lat/lon, which means nothing to the user.
+        try {
+            const res = await fetch(`${CONFIG.GEOCODE_URL}/postcodes?lon=${coords.lon}&lat=${coords.lat}&limit=1`);
+            if (res.ok) {
+                const json = await res.json();
+                const r = json.result && json.result[0];
+                const area = r && (r.admin_ward || r.parish || r.postcode);
+                if (area) return `Near ${area}`;
+            }
+        } catch (error) { /* fall through to raw coordinates */ }
+
+        return `${coords.lat.toFixed(4)}, ${coords.lon.toFixed(4)}`;
     }
 
     // ==================== FAVOURITE JOURNEYS ====================
