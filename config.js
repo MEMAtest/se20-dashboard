@@ -26,7 +26,7 @@ const CONFIG = {
     // 3. DARWIN TRAIN API (Live National Rail data)
     // ============================================
     // Backend consuming Darwin Push Port (Kafka) for real-time departures
-    DARWIN_API_URL: 'https://railway-tlmc.onrender.com',
+    DARWIN_API_URL: 'https://rail-89-167-95-173.sslip.io',
 
     // ============================================
     // LOCATION SETTINGS (SE20 7UA - Penge)

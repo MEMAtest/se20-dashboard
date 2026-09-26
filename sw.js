@@ -1,5 +1,5 @@
 // Penge Dash SE20 - Service Worker
-const CACHE_VERSION = 'v32';
+const CACHE_VERSION = 'v33';
 const TILE_CACHE = 'penge-dash-tiles-v1';
 const MAX_TILES = 300;
 const CACHE_NAME = `penge-dash-${CACHE_VERSION}`;
@@ -91,7 +91,7 @@ self.addEventListener('fetch', event => {
     if (url.hostname.includes('api.tfl.gov.uk') ||
         url.hostname.includes('api.open-meteo.com') ||
         url.hostname.includes('api.postcodes.io') ||
-        url.hostname.includes('railway-tlmc.onrender.com')) {
+        url.hostname.includes('rail-89-167-95-173.sslip.io')) {
         event.respondWith(
             fetch(event.request)
                 .then(response => {
