@@ -556,6 +556,9 @@ class PengeDash {
         if (this.home && this.home.userSet) return;
         this._acquirePosition().then((pos) => {
             if (this._userPickedLocation) return;   // user already chose a location this session
+            // Standing at home: stay on Home rather than relabelling the app after
+            // whichever stop TfL returns first ("Near Birkbeck Tram Stop").
+            if (this._isNearHome(pos.coords.latitude, pos.coords.longitude)) return;
             this.relocateToCoords(pos.coords.latitude, pos.coords.longitude);
         }).catch(() => { /* denied / unavailable / timeout — keep saved home, no nagging */ });
     }
@@ -4215,6 +4218,13 @@ class PengeDash {
 
     // ==================== SMART INSIGHTS ====================
     // ==================== ORIGIN TOGGLE (From Home / Current Location) ====================
+    // Within ~250m of the saved home counts as "at home" for labels (GPS drift
+    // indoors is routinely 50-150m). Routing still uses the exact GPS fix.
+    _isNearHome(lat, lon) {
+        if (!this.home || this.home.lat == null || this.home.lon == null) return false;
+        return this.calculateDistance(lat, lon, this.home.lat, this.home.lon) <= 0.25;
+    }
+
     homeLabel() {
         return (this.home && this.home.label) || `Home (${((this.home && this.home.postcode) || 'SE20').split(' ')[0]})`;
     }
@@ -4279,6 +4289,10 @@ class PengeDash {
             // Routing depends ONLY on the coordinates set above. The label below is
             // best-effort and resolved out of band so a hung TfL lookup can never
             // wedge callers (e.g. planJourney) awaiting this fix.
+            if (this._isNearHome(this.currentLocation.lat, this.currentLocation.lon)) {
+                setFrom(`📍 ${this.homeLabel()}`);
+                return;
+            }
             this.reverseGeocode(this.currentLocation)
                 .then(locationName => setFrom(`📍 ${locationName}`))
                 .catch(() => { /* label stays as-is; coordinates already usable */ });
