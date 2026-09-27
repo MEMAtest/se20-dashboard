@@ -3096,7 +3096,7 @@ class PengeDash {
                     </div>
                     <div class="route-modes">${this.buildModeStrip(journey)}</div>
                     ${boardLine}
-                    <div class="route-meta">Departs <b class="route-leave-mins" data-due="${dep.getTime()}" data-sched-due="${dep.getTime()}" data-zero="now" data-prefix="in ">${leaveMins <= 0 ? 'now' : 'in ' + leaveMins + ' min'}</b> <span class="route-leave-tag sched" data-role="route-leave-tag">sched</span> · <span class="route-dep-time">${depStr}</span>–${arrStr}</div>
+                    <div class="route-meta">Leave <b class="route-leave-mins" data-due="${dep.getTime()}" data-sched-due="${dep.getTime()}" data-zero="now" data-prefix="in ">${leaveMins <= 0 ? 'now' : 'in ' + leaveMins + ' min'}</b> <span class="route-leave-tag sched" data-role="route-leave-tag">sched</span> · <span class="route-dep-time">${depStr}</span>–${arrStr}</div>
                     <div class="route-foot">
                         <span class="route-foot-item">💷 ${fare}</span>
                         <span class="route-foot-item">🚶 ${walkTotal} min</span>
@@ -3234,15 +3234,22 @@ class PengeDash {
                                 ? helper.resolveLeaveCountdown(scheduleEpoch, resolvedBoard.epochMs)
                                 : { epochMs: resolvedBoard.epochMs, source: 'live' };
                             if (resolved.source === 'live' && Number.isFinite(resolved.epochMs)) {
+                                // The card's countdown is "leave home", NOT "train departs": a
+                                // trip with a 14-min walk to Anerley must say leave at 10:43, not
+                                // 10:57. Overwriting it with the train's live time made people
+                                // leave too late for every journey that starts with a walk or bus.
+                                // Live data only confirms the train; a delay is shown beside it but
+                                // never pushes the leave time later (estimates can shrink).
                                 const tagEl = card && card.querySelector('[data-role="route-leave-tag"]');
-                                const depEl = card && card.querySelector('.route-dep-time');
-                                if (leaveEl) {
-                                    leaveEl.dataset.due = String(resolved.epochMs);
-                                    const m = Math.max(0, Math.floor((resolved.epochMs - now) / 60000));
-                                    leaveEl.textContent = m <= 0 ? 'due' : m + ' min';
+                                const trainSched = toMins(confident.scheduledTime);
+                                const trainLive = toMins(new Date(resolved.epochMs).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }));
+                                let lateBy = trainLive - trainSched;
+                                if (lateBy < -720) lateBy += 1440;
+                                if (tagEl) {
+                                    tagEl.textContent = lateBy >= 2 ? `train +${lateBy} min late` : 'live';
+                                    tagEl.classList.remove('sched');
+                                    tagEl.classList.add(lateBy >= 2 ? 'late' : 'live');
                                 }
-                                if (tagEl) { tagEl.textContent = 'live'; tagEl.classList.remove('sched'); tagEl.classList.add('live'); }
-                                if (depEl) depEl.textContent = new Date(resolved.epochMs).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
                             }
                         }
                     }

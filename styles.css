@@ -307,6 +307,7 @@ input { font-family: inherit; }
 }
 .route-leave-tag.sched { background: var(--card-alt); color: var(--muted); }
 .route-leave-tag.live { background: var(--green-soft); color: var(--green); }
+.route-leave-tag.late { background: var(--amber-soft, #fff4e0); color: var(--amber, #b26a00); }
 .route-foot {
     display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
     margin-top: 11px; padding-top: 11px; border-top: 1px solid var(--line);
