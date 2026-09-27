@@ -953,7 +953,7 @@ input { font-family: inherit; }
     font-size: 12.5px; padding: 2px 0;
 }
 .jp-nt-row.cancelled { opacity: 0.7; }
-.jp-nt-dest { color: var(--text); font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jp-nt-dest { color: var(--text); font-weight: 600; flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .jp-nt-mins { color: var(--blue); font-weight: 700; white-space: nowrap; font-size: 12px; }
 .jp-nt-status { font-size: 10.5px; font-weight: 800; padding: 1px 6px; border-radius: 20px; white-space: nowrap; }
 .jp-nt-status.cancelled { background: #fdecec; color: #e53e3e; }

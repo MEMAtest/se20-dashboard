@@ -3328,8 +3328,10 @@ class PengeDash {
             const dueEpoch = Number.isFinite(mins) ? now + mins * 60000 : null;
             const cancelled = !!d.cancelled;
             const delayed = !cancelled && d.expectedTime && d.scheduledTime && d.expectedTime !== d.scheduledTime;
+            let lateBy = delayed ? this._clockMinutes(d.expectedTime) - this._clockMinutes(d.scheduledTime) : 0;
+            if (lateBy < -720) lateBy += 1440;
             const statusHtml = cancelled ? '<span class="jp-nt-status cancelled">Cancelled</span>'
-                : delayed ? '<span class="jp-nt-status delayed">Delayed</span>' : '';
+                : delayed ? `<span class="jp-nt-status delayed">${lateBy > 0 ? '+' + lateBy + ' min' : 'Delayed'}</span>` : '';
             const platform = (d.platform && d.platform !== '-') ? ` · Plat ${this.escapeHtml(String(d.platform))}` : '';
             const timeHtml = (!cancelled && dueEpoch != null)
                 ? `<b class="jp-nt-mins" data-due="${dueEpoch}" data-zero="Departs now" data-prefix="Departs in ">${mins <= 0 ? 'Departs now' : 'Departs in ' + mins + ' min'}</b>`
