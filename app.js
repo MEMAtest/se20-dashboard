@@ -223,7 +223,7 @@ class PengeDash {
         // Leaflet measures 0×0 while its screen is hidden — recompute size on show
         // (markers are already drawn by updateMap during detection; no need to re-add)
         if (name === 'nearby' && this.map) {
-            requestAnimationFrame(() => this.map.invalidateSize());
+            requestAnimationFrame(() => { this.map.invalidateSize(); this._applyMapFrame(); });
         }
         if (name === 'buses') this.renderBusesScreen();
         // Re-render from whatever guidance is already in memory (set by
@@ -640,7 +640,9 @@ class PengeDash {
             const live = this._hasLiveArrivals(st) || !!(st.nextDepartures && st.nextDepartures.length);
             const tagList = (st.modes || []).slice(0, 2)
                 .map(m => `<span class="ni-tag line">${this.escapeHtml(modeName[m] || m)}</span>`);
-            if (!live) tagList.push('<span class="ni-tag">No live times</span>');
+            if (!live) tagList.push(st.liveBoardChecked
+                ? '<span class="ni-tag">No trains due</span>'
+                : '<span class="ni-tag">No live times</span>');
             const cr = this.crowdingData[st.id];
             if (cr) {
                 const label = cr.level === 'quiet' ? '🟢 Quiet' : cr.level === 'busy' ? '🔴 Busy' : '🟡 Moderate';
@@ -1632,6 +1634,9 @@ class PengeDash {
                     // Drop rows with no resolved destination and self-referential rows
                     .filter(d => d.dest && d.dest.toLowerCase() !== selfName)
                     .sort((a, b) => a.mins - b.mins);
+                // Board answered: remember it so an empty board reads "no trains
+                // due", not "No live times" (which implies we can't see them).
+                st.liveBoardChecked = true;
                 if (deps.length) {
                     // Overlay TfL: the Darwin board carries real platform numbers
                     st.platformDirections = this.getPlatformDirections(deps);
@@ -2399,9 +2404,19 @@ class PengeDash {
                 <div class="alert-card ${bad ? 'bad' : ''}">
                     <div class="alert-card-line">${this.escapeHtml(i.name)}</div>
                     <div class="alert-card-status">${this.escapeHtml(i.status)}</div>
-                    <div class="alert-card-reason">${this.escapeHtml(detail)}</div>
+                    <div class="alert-card-reason">${this._linkifyAlert(detail)}</div>
                 </div>`;
         }).join('');
+    }
+
+    // Operators sometimes publish nothing but a URL as the reason; show it as a
+    // tappable "Details" link instead of a raw address.
+    _linkifyAlert(text) {
+        const parts = String(text).split(/(https?:\/\/[^\s]+)/g);
+        const html = parts.map(part => /^https?:\/\//.test(part)
+            ? `<a class="alert-link" href="${this.escapeAttr(part)}" target="_blank" rel="noopener">Details on ${this.escapeHtml(new URL(part).hostname.replace(/^www\./, ''))} ›</a>`
+            : this.escapeHtml(part)).join('');
+        return html.trim() || this.escapeHtml(text);
     }
 
     // ==================== TRAFFIC DISRUPTIONS ====================
@@ -2932,7 +2947,9 @@ class PengeDash {
                 }
                 // Keep the result card's origin label honest against what was
                 // actually routed from, not the (possibly since-changed) flag.
-                this._activeOriginLabel = usingHere ? 'Here' : this.homeLabel();
+                const hereIsHome = usingHere && this.currentLocation &&
+                    this._isNearHome(this.currentLocation.lat, this.currentLocation.lon);
+                this._activeOriginLabel = usingHere && !hereIsHome ? 'Here' : this.homeLabel();
             }
             // Explicit destination place (commute boards) → use coords/postcode, which
             // TfL resolves without disambiguation. Otherwise resolve the typed string.
@@ -3302,8 +3319,8 @@ class PengeDash {
                 this._journeyNamesMatch(d.destination || d.dest, direction));
         }
         if (!relevant.length) {
-            const after = Number.isFinite(plannedClock) && time ? ` from ${this.escapeHtml(time)}` : '';
-            slot.innerHTML = `<div class="jp-nt-loading">🚉 Live times for ${this.escapeHtml(dest ? 'trains towards ' + dest : 'your train')}${after} from ${this.escapeHtml(label)} aren't showing yet — check back nearer the time.</div>`;
+            const which = Number.isFinite(plannedClock) && time ? `your ${this.escapeHtml(time)} train` : 'your train';
+            slot.innerHTML = `<div class="jp-nt-loading">🚉 Live times for ${which} from ${this.escapeHtml(label)} will appear nearer departure.</div>`;
             return;
         }
         const rows = relevant.slice(0, 4).map(d => {
@@ -3380,13 +3397,24 @@ class PengeDash {
         return { station: this.cleanStationName(dp.commonName || ''), lat: dp.lat, lon: dp.lon, time, dest, direction };
     }
 
+    _applyMapFrame() {
+        const f = this._mapFrame;
+        if (!this.map || !f) return;
+        const size = this.map.getSize();
+        if (!size.x || !size.y) return;   // still hidden — showScreen re-applies
+        if (f.bounds) this.map.fitBounds(L.latLngBounds(f.bounds).pad(0.2), { maxZoom: 15 });
+        else this.map.setView(f.center, 14);
+    }
+
     showJourneyDetail(journey, destination) {
         const content = document.getElementById('journey-detail-content');
         if (!content) return;
         this._clearJourneyDetailRefresh();
         this.drawJourneyRoute(journey, false);
 
-        const fromLabel = this._activeOriginLabel || (this.journeyOrigin === 'here' ? 'Here' : (this.home.label || 'Home'));
+        const atHome = this.journeyOrigin === 'here' && this.currentLocation &&
+            this._isNearHome(this.currentLocation.lat, this.currentLocation.lon);
+        const fromLabel = this._activeOriginLabel || (this.journeyOrigin === 'here' && !atHome ? 'Here' : (this.home.label || 'Home'));
         const dep = new Date(journey.startDateTime);
         const arr = new Date(journey.arrivalDateTime);
         const arrStr = arr.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
@@ -4515,11 +4543,11 @@ class PengeDash {
 
         // Frame the local area: fit to the centre + nearby markers (never the whole
         // world). With no markers, just centre at a sensible walking zoom.
-        if (bounds.length > 1) {
-            this.map.fitBounds(L.latLngBounds(bounds).pad(0.2), { maxZoom: 15 });
-        } else {
-            this.map.setView(center, 14);
-        }
+        // Remember the frame: when this runs while the Nearby screen is hidden the
+        // map is 0x0, fitBounds resolves to zoom 0 and the user sees the whole
+        // world. _applyMapFrame re-fits once the screen is visible (showScreen).
+        this._mapFrame = { bounds: bounds.length > 1 ? bounds.slice() : null, center };
+        this._applyMapFrame();
 
         // Leaflet needs a size recalc when its container was hidden/resized
         setTimeout(() => { if (this.map) this.map.invalidateSize(); }, 200);

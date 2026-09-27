@@ -113,8 +113,10 @@ input { font-family: inherit; }
 }
 
 /* ---------- Top segmented tabs ---------- */
+/* Hidden: it duplicated the always-visible bottom nav exactly, and as a sticky
+   bar it sat over content on scroll. Markup kept so screen-state JS is untouched. */
 .top-tabs {
-    display: flex; gap: 4px;
+    display: none; gap: 4px;
     background: var(--card); border: 1px solid var(--line);
     border-radius: 16px; padding: 4px; margin-bottom: 14px;
     box-shadow: var(--shadow);
@@ -965,3 +967,5 @@ input { font-family: inherit; }
     .app-title { font-size: 26px; }
     .top-tab { font-size: 12px; }
 }
+
+.alert-link { color: var(--blue, #2563eb); font-weight: 600; text-decoration: none; }

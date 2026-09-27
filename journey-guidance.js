@@ -35,8 +35,14 @@
         return normaliseId(leg && leg.mode && (leg.mode.id || leg.mode.name)) || 'walking';
     }
 
+    // "East Croydon Rail Station" -> "East Croydon": TfL's suffixes add length,
+    // not meaning, on a phone screen (same rule as PengeDash.cleanStationName).
+    function tidyStationName(name) {
+        return text(name).replace(/ (Underground|Rail|DLR|Overground) Station$/i, '').replace(/ Station$/i, '').trim();
+    }
+
     function pointName(point, fallback) {
-        return text(point && (point.commonName || point.name || point.localName || point.id)) || text(fallback);
+        return tidyStationName(text(point && (point.commonName || point.name || point.localName || point.id)) || text(fallback));
     }
 
     function pointId(point) {
@@ -157,7 +163,7 @@
             acceptedLineIds: lines.map(line => line.id),
             // A string is easy to render; directionNames retains all TfL routeOptions
             // for matching rather than incorrectly treating routeOptions[0] as truth.
-            direction: directionNames[0] || null,
+            direction: directionNames[0] ? tidyStationName(directionNames[0]) : null,
             directionNames: directionNames,
             departureStopId: pointId(departurePoint),
             targetStopId: pointId(arrivalPoint),
