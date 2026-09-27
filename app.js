@@ -3807,7 +3807,7 @@ class PengeDash {
         // "Next trains from Anerley" etc — always name the boarding station so it's
         // never ambiguous which board this is, rather than a generic "TfL live".
         const source = tfL.compatible.length || tfL.all.length || rail.all.length
-            ? `Next trains from ${stationLabel}` : 'Scheduled';
+            ? `Next ${segment.mode === 'bus' ? 'buses' : segment.mode === 'tram' ? 'trams' : 'trains'} from ${stationLabel}` : 'Scheduled';
         this._renderGuidedDepartures(panel, segment, index, feed.compatible, source, feed.all, this._isRailMode(segment.mode) ? rail.status : 'ok', stationLabel);
         this._renderGuidedPlatform(index, feed.compatible, segment);
     }
