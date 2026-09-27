@@ -107,6 +107,12 @@ class PengeDash {
         // Nearby placeholder until detection completes
         this.renderNearbyNow(this.nearbyStations.length === 0);
 
+        // Live now board: paint the last saved boards instantly (times are clock
+        // times, so they stay honest), then fetch fresh ones straight away.
+        this.loadLiveNowCache();
+        this.renderLiveNow();
+        this.fetchLiveNow();
+
         // Initial data load
         this.refreshAll();
 
@@ -621,7 +627,143 @@ class PengeDash {
         return (st.modes || []).some(m => ['tube', 'overground', 'dlr', 'elizabeth-line', 'tram'].includes(m));
     }
 
+    // ==================== LIVE NOW (top of Plan) ====================
+    loadLiveNowCache() {
+        this._liveNow = {};
+        try {
+            const saved = JSON.parse(localStorage.getItem('pengedash-live-now') || '{}');
+            if (saved && typeof saved === 'object') this._liveNow = saved;
+        } catch (e) { /* first run */ }
+    }
+
+    async fetchLiveNow() {
+        const stations = CONFIG.LIVE_NOW_STATIONS || [];
+        await Promise.all(stations.map(async st => {
+            try {
+                const ctrl = new AbortController();
+                const timer = setTimeout(() => ctrl.abort(), 10000);
+                const res = await fetch(`${CONFIG.DARWIN_API_URL}/api/board?crs=${st.crs}`, { signal: ctrl.signal })
+                    .finally(() => clearTimeout(timer));
+                const data = res.ok ? await res.json() : null;
+                if (!data || !Array.isArray(data.departures)) throw new Error('bad board');
+                this._liveNow[st.crs] = {
+                    at: Date.now(), error: false,
+                    deps: data.departures.filter(d => d.destination).slice(0, 6).map(d => ({
+                        dest: d.destination, sched: d.scheduledTime, exp: d.expectedTime,
+                        plat: d.platform, cancelled: !!d.cancelled
+                    }))
+                };
+            } catch (e) {
+                // Keep the last good board (clock times stay valid) but flag it.
+                this._liveNow[st.crs] = Object.assign({}, this._liveNow[st.crs] || { deps: [] }, { error: true });
+            }
+        }));
+        try { localStorage.setItem('pengedash-live-now', JSON.stringify(this._liveNow)); } catch (e) { /* ignore */ }
+        this.renderLiveNow();
+    }
+
+    renderLiveNow() {
+        const el = document.getElementById('live-now');
+        if (!el) return;
+        const now = Date.now();
+        const home = this.home || CONFIG.DEFAULT_HOME;
+        const walkFor = (lat, lon) => Math.max(1, Math.round(this.calculateDistance(home.lat, home.lon, lat, lon) * 1000 / 80));
+
+        // Next bus: soonest one you can still walk to (from the Buses data).
+        let busHtml = '<div class="ln-row ln-muted">🚌 Finding the next bus…</div>';
+        const buses = (typeof this._flattenNearbyBuses === 'function' ? this._flattenNearbyBuses() : [])
+            .filter(b => Number.isFinite(b.mins) && b.mins >= b.walk)
+            .sort((a, b) => a.mins - b.mins);
+        if (buses.length) {
+            const b = buses[0];
+            const due = now + b.mins * 60000;
+            busHtml = `<button class="ln-row ln-bus" data-ln-bus="1">
+                <span class="ln-badge bus">${this.escapeHtml(b.line)}</span>
+                <span class="ln-main"><b>→ ${this.escapeHtml(b.dest || '')}</b><small>from ${this.escapeHtml(b.stopName || '')} · ${b.walk} min walk</small></span>
+                <b class="ln-mins" data-due="${due}" data-zero="due">${b.mins <= 0 ? 'due' : b.mins + ' min'}</b>
+            </button>`;
+        } else if (this.busStopData && Object.keys(this.busStopData).length) {
+            busHtml = '<div class="ln-row ln-muted">🚌 No buses due nearby right now</div>';
+        }
+
+        const stationHtml = (CONFIG.LIVE_NOW_STATIONS || []).map(st => {
+            const board = (this._liveNow || {})[st.crs];
+            const walk = walkFor(st.lat, st.lon);
+            let body;
+            if (!board) {
+                body = '<div class="ln-dep ln-muted">Checking live trains…</div>';
+            } else {
+                const upcoming = (board.deps || []).map(d => {
+                    const clock = d.exp || d.sched;
+                    const mins = this._minutesUntilClock(clock, now);
+                    return Object.assign({}, d, { mins });
+                }).filter(d => d.mins == null || d.mins >= 0).slice(0, 2);
+                if (!upcoming.length) {
+                    body = board.error
+                        ? '<div class="ln-dep ln-muted">Live trains unavailable — retrying</div>'
+                        : '<div class="ln-dep ln-muted">No trains due — none running right now</div>';
+                } else {
+                    body = upcoming.map(d => {
+                        let late = 0;
+                        if (d.exp && d.sched && d.exp !== d.sched) {
+                            late = this._clockMinutes(d.exp) - this._clockMinutes(d.sched);
+                            if (late < -720) late += 1440;
+                        }
+                        const status = d.cancelled ? '<span class="ln-status cancelled">Cancelled</span>'
+                            : late > 0 ? `<span class="ln-status late">+${late}</span>` : '';
+                        const plat = d.plat && d.plat !== '-' ? `<span class="ln-plat">P${this.escapeHtml(String(d.plat))}</span>` : '';
+                        const due = d.mins != null ? now + d.mins * 60000 : null;
+                        const time = d.cancelled ? `<b class="ln-mins muted">${this.escapeHtml(d.sched || '')}</b>`
+                            : `<b class="ln-mins${d.mins != null && d.mins <= walk ? ' tight' : ''}" ${due ? `data-due="${due}" data-zero="due"` : ''}>${d.mins == null ? this.escapeHtml(d.sched || '') : d.mins <= 0 ? 'due' : d.mins + ' min'}</b>`;
+                        return `<div class="ln-dep${d.cancelled ? ' cancelled' : ''}"><span class="ln-dest">${this.escapeHtml(d.dest)}</span>${plat}${status}${time}</div>`;
+                    }).join('');
+                }
+            }
+            return `<button class="ln-station" data-ln-station="${this.escapeAttr(st.id)}" data-ln-name="${this.escapeAttr(st.name)}">
+                <div class="ln-station-head"><b>🚆 ${this.escapeHtml(st.name)}</b><small>${walk} min walk ›</small></div>
+                ${body}
+            </button>`;
+        }).join('');
+
+        el.innerHTML = `<div class="ln-head"><span>Live now</span><small>${this.escapeHtml(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }))}</small></div>
+            ${busHtml}
+            <div class="ln-stations">${stationHtml}</div>`;
+
+        el.querySelectorAll('[data-ln-station]').forEach(btn => btn.addEventListener('click', () => {
+            const st = (CONFIG.LIVE_NOW_STATIONS || []).find(s => s.id === btn.dataset.lnStation);
+            if (st) this.openLiveNowStation(st);
+        }));
+        const busBtn = el.querySelector('[data-ln-bus]');
+        if (busBtn) busBtn.addEventListener('click', () => this.showScreen && this.showScreen('buses'));
+    }
+
+    // Full board for a Live-now station, straight from Darwin by CRS (TfL's own
+    // arrivals miss Southern/Thameslink at Norwood Junction and Birkbeck).
+    async openLiveNowStation(st) {
+        let deps = [];
+        try {
+            const data = await fetch(`${CONFIG.DARWIN_API_URL}/api/board?crs=${st.crs}`).then(r => r.ok ? r.json() : null);
+            const self = st.name.toLowerCase();
+            deps = ((data && data.departures) || [])
+                .filter(d => typeof d.mins === 'number' && d.mins >= -1)
+                .map(d => ({
+                    dest: d.destination ? this.cleanStationName(d.destination) : null,
+                    platform: (d.platform && d.platform !== '-') ? String(d.platform) : '-',
+                    line: '', mins: d.mins, scheduledTime: d.scheduledTime || '',
+                    cancelled: d.cancelled || false, delayed: d.delayed || false,
+                    reason: d.reason || null, rid: d.rid || null,
+                    exitAdvice: d.exitAdvice || null, loading: d.loading || null, association: d.association || null
+                }))
+                .filter(d => d.dest && d.dest.toLowerCase() !== self)
+                .sort((a, b) => a.mins - b.mins);
+        } catch (e) { /* modal shows its empty state */ }
+        this.stationData[st.id] = deps;
+        this._currentModalStop = { id: st.id, name: st.name, isBus: false, modes: ['national-rail'], lat: st.lat, lon: st.lon };
+        this.openStopModal(st.id, st.name, false);
+    }
+
     renderNearbyNow(detecting = false) {
+        this.renderLiveNow();
         const list = document.getElementById('nearby-now-list');
         if (!list) return;
         if (this.nearbyStations.length === 0 && this.nearbyBusStops.length === 0) {
@@ -1755,7 +1897,7 @@ class PengeDash {
             const key = localStorage.key(i);
             const preserve = ['pengedash-destinations', 'pengedash-favorite-journeys',
                 'pengedash-home', 'pengedash-saved-places', 'pengedash-fav-stations',
-                'pengedash-work', 'pengedash-pinned-train', 'pengedash-stepfree'];
+                'pengedash-work', 'pengedash-pinned-train', 'pengedash-stepfree', 'pengedash-live-now'];
             if (key && key.startsWith('pengedash-') && !preserve.includes(key)) {
                 keysToRemove.push(key);
             }
@@ -2075,6 +2217,7 @@ class PengeDash {
     }
 
     setupAutoRefresh() {
+        setInterval(() => this.fetchLiveNow(), 30 * 1000);
         setInterval(() => this.fetchWeather(), CONFIG.REFRESH_INTERVALS.weather);
         setInterval(() => this.fetchActiveTransit(), CONFIG.REFRESH_INTERVALS.trains);
         setInterval(() => this.fetchLineStatus(), CONFIG.REFRESH_INTERVALS.trains);

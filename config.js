@@ -52,6 +52,15 @@ const CONFIG = {
         isDefault: true
     },
 
+    // "Live now" board at the top of the Plan screen — the first thing on open.
+    // Order is display order. id = TfL NaPTAN (opens the full station board).
+    LIVE_NOW_STATIONS: [
+        { crs: 'ANZ', name: 'Anerley',          id: '910GANERLEY',  lat: 51.412151, lon: -0.065886 },
+        { crs: 'NWD', name: 'Norwood Junction', id: '910GNORWDJ',   lat: 51.397017, lon: -0.075222 },
+        { crs: 'PNW', name: 'Penge West',       id: '910GPENEW',    lat: 51.417553, lon: -0.060840 },
+        { crs: 'BIK', name: 'Birkbeck',         id: '910GBIRKBCK',  lat: 51.403890, lon: -0.055739 }
+    ],
+
     // Stations to monitor (CRS codes)
     STATIONS: {
         PENGE_WEST: 'PNW',      // Southern
