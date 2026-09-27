@@ -3275,16 +3275,28 @@ class PengeDash {
         }
         const now = Date.now();
         const plannedClock = this._clockMinutes(time);
+        // Only trains the traveller can actually reach: if earlier legs (a bus,
+        // a walk) get them to the platform at 10:53, a 10:20 train is noise.
+        // Filter BEFORE capping to 8, or eight too-early trains crowd out every
+        // catchable one — and the name-match fallback below must obey it too.
+        const reachable = all.filter(d => {
+            if (d.cancelled) return false;
+            if (!Number.isFinite(plannedClock)) return true;
+            let rel = this._clockMinutes(d.expectedTime || d.scheduledTime) - plannedClock;
+            if (rel < -720) rel += 1440;
+            return !Number.isFinite(rel) || rel >= -2;
+        });
         let relevant = await this._filterCompatibleDarwinDepartures(
-            all.filter(d => !d.cancelled).slice(0, 8), { fromName: label, toName: dest, direction, plannedClock });
+            reachable.slice(0, 8), { fromName: label, toName: dest, direction, plannedClock });
         if (!relevant.length) {
             // Cheap fallback: destination/direction name match only (no calling-
             // points fetch) rather than showing an unrelated board with nothing.
-            relevant = all.filter(d => this._journeyNamesMatch(d.destination || d.dest, dest) ||
+            relevant = reachable.filter(d => this._journeyNamesMatch(d.destination || d.dest, dest) ||
                 this._journeyNamesMatch(d.destination || d.dest, direction));
         }
         if (!relevant.length) {
-            slot.innerHTML = `<div class="jp-nt-loading">🚉 No upcoming ${this.escapeHtml(dest ? 'trains towards ' + dest : 'services')} showing from ${this.escapeHtml(label)} right now.</div>`;
+            const after = Number.isFinite(plannedClock) && time ? ` from ${this.escapeHtml(time)}` : '';
+            slot.innerHTML = `<div class="jp-nt-loading">🚉 Live times for ${this.escapeHtml(dest ? 'trains towards ' + dest : 'your train')}${after} from ${this.escapeHtml(label)} aren't showing yet — check back nearer the time.</div>`;
             return;
         }
         const rows = relevant.slice(0, 4).map(d => {
@@ -3895,11 +3907,19 @@ class PengeDash {
         if (!c || !Number.isFinite(+c.lat) || !Number.isFinite(+c.lon)) return { compatible: [], all: [], status: 'unavailable' };
         const board = await this._fetchDarwinBoardWithRetry(c.lat, c.lon);
         if (board.error) return { compatible: [], all: [], status: 'error' };
+        const plannedClock = this._clockMinutes(this._departureClock(segment.departureTime));
+        // Drop trains that leave before the traveller can reach this platform
+        // BEFORE capping to 8 (same reasoning as _renderCardNextTrains).
+        const reachable = d => {
+            if (!Number.isFinite(plannedClock)) return true;
+            let rel = this._clockMinutes(d.expectedTime || d.scheduledTime) - plannedClock;
+            if (rel < -720) rel += 1440;
+            return !Number.isFinite(rel) || rel >= -2;
+        };
         const all = board.departures
-            .filter(d => d).slice(0, 8)
+            .filter(d => d && reachable(d)).slice(0, 8)
             .map(d => ({ ...d, minutes: this._minutesUntilClock(d.expectedTime || d.scheduledTime, now) }))
             .filter(d => d.minutes == null || d.minutes >= -1);
-        const plannedClock = this._clockMinutes(this._departureClock(segment.departureTime));
         const compatible = await this._filterCompatibleDarwinDepartures(
             all.filter(d => !d.cancelled), { fromName: segment.fromName, toName: segment.toName, direction: segment.direction, plannedClock });
         return { compatible, all, status: all.length ? 'ok' : 'empty' };
