@@ -694,11 +694,20 @@ class PengeDash {
             if (!board) {
                 body = '<div class="ln-dep ln-muted">Checking live trains…</div>';
             } else {
-                const upcoming = (board.deps || []).map(d => {
+                const all = (board.deps || []).map(d => {
                     const clock = d.exp || d.sched;
                     const mins = this._minutesUntilClock(clock, now);
                     return Object.assign({}, d, { mins });
-                }).filter(d => d.mins == null || d.mins >= 0).slice(0, 2);
+                }).filter(d => d.mins == null || d.mins >= 0);
+                // What the station board says (next two), plus — when neither can
+                // be reached on foot — the first train you can actually make, so a
+                // "due / due" board at a 16-min walk still answers "what can I catch?".
+                const upcoming = all.slice(0, 2);
+                const catchable = d => !d.cancelled && d.mins != null && d.mins >= walk;
+                if (!upcoming.some(catchable)) {
+                    const next = all.slice(2).find(catchable);
+                    if (next) upcoming.push(next);
+                }
                 if (!upcoming.length) {
                     body = board.error
                         ? '<div class="ln-dep ln-muted">Live trains unavailable — retrying</div>'
