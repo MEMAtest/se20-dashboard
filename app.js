@@ -649,7 +649,7 @@ class PengeDash {
                 if (!data || !Array.isArray(data.departures)) throw new Error('bad board');
                 this._liveNow[st.crs] = {
                     at: Date.now(), error: false,
-                    deps: data.departures.filter(d => d.destination).slice(0, 6).map(d => ({
+                    deps: data.departures.filter(d => d.destination).slice(0, 15).map(d => ({
                         dest: d.destination, sched: d.scheduledTime, exp: d.expectedTime,
                         plat: d.platform, cancelled: !!d.cancelled
                     }))
