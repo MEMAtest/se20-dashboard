@@ -29,7 +29,8 @@ const LINE_META = {
     'dlr':         { name: 'DLR',         class: 'dlr' },
     'southern':     { name: 'Southern',     class: 'southern' },
     'southeastern': { name: 'Southeastern', class: 'southeastern' },
-    'thameslink':   { name: 'Thameslink',   class: 'thameslink' }
+    'thameslink':   { name: 'Thameslink',   class: 'thameslink' },
+    'tram':         { name: 'Tram',         class: 'tram' }
 };
 
 class PengeDash {
@@ -2423,7 +2424,7 @@ class PengeDash {
 
     getRelevantLineIds() {
         const base = ['jubilee', 'northern', 'victoria', 'elizabeth',
-            'southern', 'southeastern', 'thameslink', ...OVERGROUND_LINES];
+            'southern', 'southeastern', 'thameslink', 'tram', ...OVERGROUND_LINES];
         const nearby = [];
         (this.nearbyStations || []).forEach(s =>
             (s.lines || []).forEach(l => { if (l.id) nearby.push(l.id); }));
@@ -2454,7 +2455,26 @@ class PengeDash {
         return GLOSS[String(statusText || '').toLowerCase().trim()] || null;
     }
 
+    // SE20 is served directly by Windrush (Anerley/Penge West Overground), Southern,
+    // Thameslink, Southeastern and Tram — pin those first (in that order) so they
+    // aren't buried in an alphabetical list of lines from across London, then the
+    // rest alphabetically by display name.
+    _sortLinesForSE20(lines) {
+        const PRIORITY = ['windrush', 'southern', 'thameslink', 'southeastern', 'tram'];
+        const nameOf = (line) => (LINE_META[line.id] && LINE_META[line.id].name) || line.name || '';
+        return [...lines].sort((a, b) => {
+            const pa = PRIORITY.indexOf(a.id), pb = PRIORITY.indexOf(b.id);
+            if (pa !== -1 || pb !== -1) {
+                if (pa === -1) return 1;
+                if (pb === -1) return -1;
+                return pa - pb;
+            }
+            return nameOf(a).localeCompare(nameOf(b));
+        });
+    }
+
     displayLineStatus(lines) {
+        lines = this._sortLinesForSE20(lines);
         const container = document.getElementById('line-statuses');
 
         // Store line status data for smart journey insights (string map, used elsewhere)
@@ -2510,6 +2530,7 @@ class PengeDash {
     }
 
     checkServiceAlerts(lines) {
+        lines = this._sortLinesForSE20(lines);
         // Lines with issues (not "Good Service")
         const issues = lines.filter(line => {
             const ls = line.lineStatuses && line.lineStatuses[0];
@@ -2763,6 +2784,7 @@ class PengeDash {
                     pill.classList.add('active');
                     this.journeyPref = pill.dataset.pref || '';
                 }
+                this._updateOptionsSummary();
                 this._replanIfActive();
             });
         });
@@ -2775,6 +2797,7 @@ class PengeDash {
                 document.querySelectorAll('#journey-mode-row .pill').forEach(p => p.classList.remove('active'));
                 pill.classList.add('active');
                 this.journeyModes = pill.dataset.mode === 'all' ? null : pill.dataset.mode;
+                this._updateOptionsSummary();
                 this._replanIfActive();
             });
         });
@@ -2785,6 +2808,7 @@ class PengeDash {
                 document.querySelectorAll('#journey-time-row .pill').forEach(p => p.classList.remove('active'));
                 pill.classList.add('active');
                 this.journeyTimeOffset = parseInt(pill.dataset.offset, 10);
+                this._updateOptionsSummary();
                 this._replanIfActive();
             });
         });
@@ -2799,8 +2823,35 @@ class PengeDash {
                 this.journeyMaxDuration = parseInt(pill.dataset.max, 10) || 0;
                 this._persistJourneyState();
                 this._applyDurationConstraintToCards();
+                this._updateOptionsSummary();
             });
         });
+
+        // Collapsed-by-default "Options" summary button that expands/collapses
+        // the four filter rows in place — same pills, same behaviour, just hidden
+        // until asked for.
+        const optionsToggle = document.getElementById('options-toggle');
+        const filterStrip = document.getElementById('filter-strip');
+        if (optionsToggle && filterStrip) {
+            optionsToggle.addEventListener('click', () => {
+                const open = filterStrip.classList.toggle('open');
+                optionsToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+            });
+        }
+        this._updateOptionsSummary();
+    }
+
+    // Builds the one-line "⚡ Fastest · Any mode · Now" summary shown on the
+    // collapsed Options button, reading whichever pills are currently active.
+    _updateOptionsSummary() {
+        const el = document.getElementById('options-summary');
+        if (!el) return;
+        const pref = document.querySelector('#journey-pref-row .pill.active:not([data-stepfree])');
+        const mode = document.querySelector('#journey-mode-row .pill.active');
+        const time = document.querySelector('#journey-time-row .pill.active');
+        const parts = [pref ? pref.textContent.trim() : '⚡ Fastest', mode ? mode.textContent.trim() : 'Any mode', time ? time.textContent.trim() : 'Now'];
+        if (this.journeyStepFree) parts.push('♿ Step-free');
+        el.textContent = parts.join(' · ');
     }
 
     // Re-annotates the already-rendered route cards against journeyMaxDuration,
@@ -3252,7 +3303,7 @@ class PengeDash {
                             <div class="route-time"><span class="rt-num">${journey.duration}</span><span class="rt-unit">min</span></div>
                             <div class="route-time-label">Total time</div>
                         </div>
-                        <span class="route-status ${status.cls}">${status.label}</span>
+                        ${status.label ? `<span class="route-status ${status.cls}">${status.label}</span>` : ''}
                     </div>
                     <div class="route-modes">${this.buildModeStrip(journey)}</div>
                     ${boardLine}
@@ -3304,7 +3355,11 @@ class PengeDash {
                 else if (cls !== 'bad') cls = 'warn';
             }
         });
-        return { cls, label: cls === 'ok' ? 'On time' : cls === 'warn' ? 'Minor delays' : 'Disruption' };
+        // Quieter by design: a chip for every journey (even "On time") is noise
+        // once one local line (e.g. Southeastern) is running "Minor delays" —
+        // every route on it lit up. Only surface a chip when there's something
+        // to say; good service on every leg used means no chip at all.
+        return { cls, label: cls === 'warn' ? 'Minor delays' : cls === 'bad' ? 'Disruption' : null };
     }
 
     buildModeStrip(journey) {
@@ -3584,7 +3639,7 @@ class PengeDash {
             <div class="jd-summary">
                 <div class="jd-route">
                     <span class="jd-od">${this.escapeHtml(fromLabel)} → ${this.escapeHtml(destination)}</span>
-                    <span class="route-status ${status.cls}">${status.label}</span>
+                    ${status.label ? `<span class="route-status ${status.cls}">${status.label}</span>` : ''}
                 </div>
                 <div class="jd-big">
                     <span class="jd-total">${journey.duration}<span class="u"> min</span></span>

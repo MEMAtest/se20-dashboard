@@ -93,8 +93,12 @@
                     <div class="quick-chips recents" id="favourites-list"></div>
                 </div>
 
-                <!-- Preference + mode filters -->
-                <div class="filter-strip">
+                <!-- Preference + mode filters (collapsed behind one summary button) -->
+                <button class="options-toggle" id="options-toggle" aria-expanded="false">
+                    <span id="options-summary">⚡ Fastest · Any mode · Now</span>
+                    <span class="options-chevron">▾</span>
+                </button>
+                <div class="filter-strip" id="filter-strip">
                     <div class="pill-row" id="journey-pref-row">
                         <button class="pill active" data-pref="">⚡ Fastest</button>
                         <button class="pill" data-pref="leastwalking">🚶 Least walking</button>

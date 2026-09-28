@@ -238,9 +238,17 @@ input { font-family: inherit; }
 .chip.add { color: var(--blue); border-style: dashed; }
 
 /* ---------- Filter strip ---------- */
-.filter-strip { display: flex; flex-direction: column; gap: 8px; margin-bottom: 4px; }
-.pill-row { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
-.pill-row::-webkit-scrollbar { display: none; }
+.options-toggle {
+    display: flex; align-items: center; justify-content: space-between; width: 100%;
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-sm);
+    padding: 10px 14px; margin-bottom: 8px; font-size: 13.5px; font-weight: 600; color: var(--text);
+    cursor: pointer;
+}
+.options-toggle .options-chevron { transition: transform .15s ease; color: var(--muted); }
+.options-toggle[aria-expanded="true"] .options-chevron { transform: rotate(180deg); }
+.filter-strip { display: none; flex-direction: column; gap: 8px; margin-bottom: 4px; }
+.filter-strip.open { display: flex; }
+.pill-row { display: flex; flex-wrap: wrap; gap: 8px; padding-bottom: 2px; }
 .pill {
     flex: 0 0 auto; border: 1px solid var(--line); background: var(--card);
     color: var(--text-2); font-size: 13px; font-weight: 600;
@@ -454,6 +462,7 @@ input { font-family: inherit; }
 .line-status.southern { border-left-color: #8cc63f; }
 .line-status.southeastern { border-left-color: #0072ce; }
 .line-status.thameslink { border-left-color: #e60080; }
+.line-status.tram { border-left-color: #66cc00; }
 .line-name { font-size: 14.5px; font-weight: 700; }
 .line-status-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
 /* Plain-English gloss for TfL's own opaque status wording (e.g. "Special Service") */
