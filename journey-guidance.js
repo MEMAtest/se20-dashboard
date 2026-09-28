@@ -38,7 +38,8 @@
     // "East Croydon Rail Station" -> "East Croydon": TfL's suffixes add length,
     // not meaning, on a phone screen (same rule as PengeDash.cleanStationName).
     function tidyStationName(name) {
-        return text(name).replace(/ (Underground|Rail|DLR|Overground) Station$/i, '').replace(/ Station$/i, '').trim();
+        return text(name).replace(/ (Underground|Rail|DLR|Overground) Station$/i, '').replace(/ Station$/i, '')
+            .replace(/\bFairfield Halls?\b/gi, 'Fairfield Halls').trim();
     }
 
     function pointName(point, fallback) {
@@ -299,7 +300,7 @@
             serviceId: text(arrival.vehicleId || arrival.serviceId || arrival.id || arrival.$id) || null,
             lineId: lineId,
             lineName: text(arrival.lineName) || (line && line.name) || lineId,
-            destination: text(arrival.destinationName || arrival.towards) || null,
+            destination: text(arrival.destinationName || arrival.towards).replace(/\bFairfield Halls?\b/gi, 'Fairfield Halls') || null,
             direction: text(arrival.towards || arrival.direction || arrival.destinationName) || null,
             expectedTime: new Date(at).toISOString(),
             minutes: Math.max(0, Math.ceil((at - nowMs) / 60000)),

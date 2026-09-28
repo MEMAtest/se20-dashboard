@@ -1556,7 +1556,7 @@ class PengeDash {
         if (a.expectedArrival) scheduledTime = fmt(new Date(a.expectedArrival).getTime());
         else if (isBus) scheduledTime = fmt(due);
         return {
-            dest: isBus ? (a.destinationName || a.towards || 'Check board')
+            dest: isBus ? this._tidyBusDest(a.destinationName || a.towards || 'Check board')
                 : this.cleanStationName(a.destinationName || a.towards || 'Check board'),
             platform: isBus ? '-' : this.cleanPlatform(a.platformName),
             platformDir: isBus ? '' : (a.platformName || ''),
@@ -1789,6 +1789,12 @@ class PengeDash {
                 }
             } catch (e) { /* skip */ }
         }));
+    }
+
+    // TfL spells the same terminus two ways ("Croydon, Fairfield Hall" and
+    // "... Halls"), so one bus looked like two destinations. Normalise known ones.
+    _tidyBusDest(name) {
+        return String(name || '').replace(/\bFairfield Halls?\b/gi, 'Fairfield Halls');
     }
 
     cleanStationName(name) {
@@ -4192,7 +4198,7 @@ class PengeDash {
             : (row.mins != null && Number.isFinite(+row.mins) ? +row.mins
                 : (seconds != null && Number.isFinite(+seconds) ? Math.floor(+seconds / 60) : this._minutesUntilClock(row.expectedTime || row.scheduledTime, now)));
         const scheduled = row.expectedTime || row.scheduledTime || row.expectedArrival || row.aimedDepartureTime || '';
-        const destination = row.destinationName || row.destination || row.towards || row.dest || 'Destination not shown';
+        const destination = this._tidyBusDest(row.destinationName || row.destination || row.towards || row.dest || 'Destination not shown');
         return { mins, scheduled: this._departureClock(scheduled), destination, platform: row.platformName || row.platform || '', vehicleId: row.vehicleId || row.serviceId || row.rid || '', line: row.lineName || row.line || '', lineId: row.lineId || '', works: !!row.works };
     }
 
