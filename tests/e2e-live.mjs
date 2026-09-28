@@ -20,7 +20,7 @@ await p.fill('#destination-input','Canary Wharf'); await p.keyboard.press('Enter
 const cards = await p.$$('.route-card');
 ok('Journey results render', cards.length > 0, `${cards.length} options`);
 const meta = await p.$$eval('.route-meta', els => els.map(e => e.innerText.replace(/\s+/g,' ')));
-ok('Cards count down to leaving home', meta.length && meta.every(m => /^Leave (now|in \d+ min)/.test(m)), meta[0]);
+ok('Cards count down to leaving home', meta.length && meta.every(m => /^Leave (now|in \d+ min|at \d\d:\d\d)/.test(m)), meta[0]);
 const nt = await p.$$eval('.jp-next-trains', els => els.map(e => ({ t: e.innerText.replace(/\s+/g,' '), rows: e.querySelectorAll('[data-due]').length })));
 ok('Next-trains boxes filled with live trains', nt.some(n => n.rows > 0), nt.map(n => n.rows).join('/') + ' rows');
 ok('No "unavailable"/stuck boxes', nt.every(n => !/unavailable|Checking live/.test(n.t)));

@@ -3307,7 +3307,11 @@ class PengeDash {
                     </div>
                     <div class="route-modes">${this.buildModeStrip(journey)}</div>
                     ${boardLine}
-                    <div class="route-meta">Leave <b class="route-leave-mins" data-due="${dep.getTime()}" data-sched-due="${dep.getTime()}" data-zero="now" data-prefix="in ">${leaveMins <= 0 ? 'now' : 'in ' + leaveMins + ' min'}</b> <span class="route-leave-tag sched" data-role="route-leave-tag">sched</span> · <span class="route-dep-time">${depStr}</span>–${arrStr}</div>
+                    <div class="route-meta">Leave ${leaveMins > 90
+                        // Far ahead (e.g. planning tonight for the morning): a clock time,
+                        // not "in 1449 min". No data-due, so the ticker leaves it alone.
+                        ? `<b class="route-leave-mins" data-sched-due="${dep.getTime()}">at ${depStr}${dep.toDateString() !== new Date().toDateString() ? ' tomorrow' : ''}</b>`
+                        : `<b class="route-leave-mins" data-due="${dep.getTime()}" data-sched-due="${dep.getTime()}" data-zero="now" data-prefix="in ">${leaveMins <= 0 ? 'now' : 'in ' + leaveMins + ' min'}</b>`} <span class="route-leave-tag sched" data-role="route-leave-tag">sched</span> · <span class="route-dep-time">${depStr}</span>–${arrStr}</div>
                     <div class="route-foot">
                         <span class="route-foot-item">💷 ${fare}</span>
                         <span class="route-foot-item">🚶 ${walkTotal} min</span>
