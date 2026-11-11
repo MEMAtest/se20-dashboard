@@ -343,6 +343,12 @@ input { font-family: inherit; }
 
 /* ---------- Nearby ---------- */
 .map-card { padding: 0; overflow: hidden; }
+.area-controls, .nearby-modes { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.area-controls button, .nearby-modes button { border: 1px solid var(--line-strong); border-radius: 999px; background: var(--card); color: var(--text); padding: 10px 16px; min-height: 44px; font: inherit; cursor: pointer; }
+.area-controls button[aria-pressed="true"], .nearby-modes button[aria-pressed="true"] { background: #245bd8; color: #fff; border-color: #245bd8; }
+.area-controls button:focus-visible, .nearby-modes button:focus-visible { outline: 3px solid #77adff; outline-offset: 3px; }
+.location-privacy { font-size: 12px; line-height: 1.5; color: var(--text-2); }
+.nearby-item[hidden], #nearby-filter-empty[hidden] { display: none; }
 #map { height: 250px; width: 100%; }
 .leaflet-popup-content { font-family: inherit; font-size: 13px; font-weight: 600; }
 .leaflet-control-zoom a { border-radius: 8px !important; }
@@ -1028,3 +1034,14 @@ input { font-family: inherit; }
    overlap renders seamlessly (verified in both themes). */
 .leaflet-container img.leaflet-tile { mix-blend-mode: normal !important; }
 .leaflet-tile-container img.leaflet-tile { width: 256.5px !important; height: 256.5px !important; }
+/* Network reference and live service status stay separate. */
+.network-tabs { display: flex; gap: 8px; margin: 4px 0 20px; }
+.network-tabs button { flex: 1; padding: 12px 10px; border: 1px solid var(--blue, #335cff); border-radius: 12px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.network-tabs button[aria-selected="true"] { background: var(--blue, #335cff); color: white; }
+#network-map-panel[hidden], #network-status-panel[hidden] { display: none; }
+#tube-map-frame { width: 100%; height: min(70dvh, 760px); min-height: 340px; border: 1px solid #9aa6b5; border-radius: 12px; background: white; margin: 16px 0; }
+.map-links { display: flex; flex-wrap: wrap; gap: 12px 20px; margin-top: 12px; }
+.map-links a { color: var(--blue, #335cff); text-decoration: underline; }
+.map-source, .ln-source { font-size: 12px; line-height: 1.5; opacity: .8; }
+.ln-source { margin: 4px 0 8px; }
+#tube-map-station { display: block; width: 100%; min-height: 44px; margin: 8px 0; padding: 10px; border: 1px solid #9aa6b5; border-radius: 10px; font: inherit; background: var(--card, #fff); color: var(--text, #17233b); }

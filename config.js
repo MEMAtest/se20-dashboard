@@ -13,7 +13,7 @@ const CONFIG = {
     // ============================================
     // 2. TFL API (Buses + Overground)
     // ============================================
-    // FREE: Unlimited (works without key, but key recommended)
+    // Public TfL API; provider rate limits apply.
     // Register: https://api-portal.tfl.gov.uk/
     // Steps:
     //   1. Register for account
@@ -58,7 +58,7 @@ const CONFIG = {
         { crs: 'ANZ', name: 'Anerley',          id: '910GANERLEY',  lat: 51.412151, lon: -0.065886 },
         { crs: 'NWD', name: 'Norwood Junction', id: '910GNORWDJ',   lat: 51.397017, lon: -0.075222 },
         { crs: 'PNW', name: 'Penge West',       id: '910GPENEW',    lat: 51.417553, lon: -0.060840 },
-        { crs: 'BIK', name: 'Birkbeck',         id: '910GBIRKBCK',  lat: 51.403890, lon: -0.055739 }
+        { crs: 'BIK', name: 'Birkbeck',         id: '910GBIRKBCK', tflId: '940GZZCRBIR', lat: 51.403890, lon: -0.055739 }
     ],
 
     // Stations to monitor (CRS codes)

@@ -1,0 +1,11 @@
+{
+  "name": "journey-london",
+  "account_id": "58457ba44c5d8179b1982f81a1bb1944",
+  "compatibility_date": "2026-11-11",
+  "workers_dev": true,
+  "assets": {
+    "directory": ".deploy-assets",
+    "not_found_handling": "404-page"
+  },
+  "build": { "command": "node --test tests/*.test.js && node scripts/stage-assets.mjs" }
+}

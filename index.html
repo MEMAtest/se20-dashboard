@@ -16,7 +16,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
           integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=20261111c">
 </head>
 <body>
     <div class="app" id="app">
@@ -152,6 +152,12 @@
 
             <!-- ============ NEARBY ============ -->
             <section class="screen" id="screen-nearby">
+                <div class="area-controls" role="group" aria-label="Nearby area">
+                    <button id="nearby-here" type="button" aria-pressed="false">Near me</button>
+                    <button id="nearby-home" type="button" aria-pressed="true">Home</button>
+                </div>
+                <p id="nearby-location-status" class="map-source" role="status"></p>
+                <p class="location-privacy">Near me uses this device's location to find TfL stops. Coordinates are sent to TfL, not saved as your home. No background tracking. Nearby coverage is London; walking times are estimates.</p>
                 <!-- Search any station / stop -->
                 <div class="station-search">
                     <span class="ss-icon">🔍</span>
@@ -170,12 +176,20 @@
                 <div class="nearby-list" id="fav-stations-list"></div>
 
                 <div class="section-head">
-                    <h3>Nearby now</h3>
+                    <h3>Closest transport</h3>
                     <span class="updated" id="nearby-updated">--</span>
+                </div>
+                <div class="nearby-modes" role="group" aria-label="Transport type">
+                    <button data-nearby-mode="all" aria-pressed="true">All</button>
+                    <button data-nearby-mode="bus" aria-pressed="false">Bus</button>
+                    <button data-nearby-mode="tube" aria-pressed="false">Tube</button>
+                    <button data-nearby-mode="rail" aria-pressed="false">Rail / DLR</button>
+                    <button data-nearby-mode="tram" aria-pressed="false">Tram</button>
                 </div>
                 <div class="nearby-list" id="nearby-now-list">
                     <div class="loading">Finding nearby stations…</div>
                 </div>
+                <p id="nearby-filter-empty" class="map-source" hidden>No stops of this type found in the search radius. Try All or search a station above.</p>
 
                 <div class="section-head">
                     <h3>Live departures</h3>
@@ -204,11 +218,34 @@
 
             <!-- ============ LINES ============ -->
             <section class="screen" id="screen-lines">
+                <div class="network-tabs" role="tablist" aria-label="Network information">
+                    <button id="network-status-tab" role="tab" aria-selected="true" aria-controls="network-status-panel">Line status</button>
+                    <button id="network-map-tab" role="tab" aria-selected="false" aria-controls="network-map-panel" tabindex="-1">Tube map</button>
+                </div>
+                <div id="network-status-panel" role="tabpanel" aria-labelledby="network-status-tab">
                 <div class="section-head">
                     <h3>Line status</h3>
                     <span class="updated" id="lines-updated">--</span>
                 </div>
                 <div class="lines-list" id="line-statuses"><div class="loading">Loading…</div></div>
+                </div>
+                <div id="network-map-panel" role="tabpanel" aria-labelledby="network-map-tab" hidden>
+                    <h2>London Tube map</h2>
+                    <p class="map-source">Zoom and pan the geographic Tube network; tap a station for arrivals. This is a network reference, not live service status. For the familiar schematic, open TfL's official PDF below.</p>
+                    <div class="map-links">
+                        <a href="https://content.tfl.gov.uk/standard-tube-map.pdf" target="_blank" rel="noopener noreferrer">Open full-size Tube map (PDF)</a>
+                        <a href="https://tfl.gov.uk/transport-accessibility/download-accessibility-guides-and-maps" target="_blank" rel="noopener noreferrer">Step-free and accessible maps</a>
+                    </div>
+                    <p id="tube-map-status" class="map-source" role="status">Select Tube map to load the network.</p>
+                    <div class="area-controls" role="group" aria-label="Centre Tube map">
+                        <button id="tube-map-here" type="button">Near me</button>
+                        <button id="tube-map-home" type="button">Home</button>
+                    </div>
+                    <p id="tube-location-status" class="map-source" role="status"></p>
+                    <label for="tube-map-station">Find a Tube station</label>
+                    <select id="tube-map-station" disabled><option value="">Loading stations…</option></select>
+                    <div id="tube-map-frame" role="region" aria-label="Zoomable TfL Tube network map"></div>
+                </div>
             </section>
 
             <!-- ============ ALERTS ============ -->
@@ -320,8 +357,10 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
             integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-    <script src="config.js"></script>
-    <script src="journey-guidance.js"></script>
-    <script src="app.js"></script>
+    <script src="config.js?v=20261111c"></script>
+    <script src="journey-guidance.js?v=20261111c"></script>
+    <script src="transit-data.js?v=20261111c"></script>
+    <script src="network-map.js?v=20261111c"></script>
+    <script src="app.js?v=20261111c"></script>
 </body>
 </html>

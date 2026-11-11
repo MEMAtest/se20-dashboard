@@ -1,15 +1,18 @@
 // Penge Dash SE20 - Service Worker
-const CACHE_VERSION = 'v44';
+const CACHE_VERSION = 'v48';
+importScripts('/transit-data.js?v=20261111c');
 const TILE_CACHE = 'penge-dash-tiles-v1';
 const MAX_TILES = 300;
 const CACHE_NAME = `penge-dash-${CACHE_VERSION}`;
 const STATIC_ASSETS = [
     '/',
     '/index.html',
-    '/styles.css',
-    '/app.js',
-    '/journey-guidance.js',
-    '/config.js',
+    '/styles.css?v=20261111c',
+    '/app.js?v=20261111c',
+    '/journey-guidance.js?v=20261111c',
+    '/transit-data.js?v=20261111c',
+    '/network-map.js?v=20261111c',
+    '/config.js?v=20261111c',
     '/manifest.json',
     '/icon-192.png',
     '/icon-512.png',
@@ -22,7 +25,7 @@ self.addEventListener('install', event => {
         caches.open(CACHE_NAME)
             .then(cache => {
                 console.log('[SW] Caching static assets');
-                return cache.addAll(STATIC_ASSETS);
+                return cache.addAll(STATIC_ASSETS.map(url => new Request(url, { cache: 'reload' })));
             })
             .then(() => self.skipWaiting())
     );
@@ -87,7 +90,17 @@ self.addEventListener('fetch', event => {
         return;
     }
 
-    // For API requests, try network first with cache fallback
+    // Never replay a cached prediction or board as current travel information.
+    if ((url.hostname === 'api.tfl.gov.uk' || url.hostname === 'rail-89-167-95-173.sslip.io')
+        && TransitData.isLiveUrl(url)) {
+        event.respondWith(fetch(event.request, { cache: 'no-store' }).catch(() => new Response(
+            JSON.stringify({ error: 'live_data_unavailable' }),
+            { status: 503, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } }
+        )));
+        return;
+    }
+
+    // Static lookup APIs may still fall back to cached data.
     if (url.hostname.includes('api.tfl.gov.uk') ||
         url.hostname.includes('api.open-meteo.com') ||
         url.hostname.includes('api.postcodes.io') ||

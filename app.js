@@ -71,6 +71,8 @@ class PengeDash {
         // Navigation (top tabs + bottom nav) and shell links
         this.setupNav();
         this.setupShellLinks();
+        this.setupNetworkMaps();
+        this.setupNearbyLocation();
 
         // Modals (next-trains + generic detail)
         this.createModal();
@@ -276,9 +278,11 @@ class PengeDash {
             this.home.lat = CONFIG.DEFAULT_HOME.lat;
             this.home.lon = CONFIG.DEFAULT_HOME.lon;
         }
+        this.savedHome = { ...this.home };
     }
 
     saveHome() {
+        this.savedHome = { ...this.home };
         try {
             localStorage.setItem('pengedash-home', JSON.stringify(this.home));
         } catch (e) { /* ignore quota */ }
@@ -344,7 +348,7 @@ class PengeDash {
     applyHomeToJourney() {
         const fromText = document.getElementById('from-text');
         if (fromText && this.home && this.journeyOrigin !== 'here') {
-            fromText.textContent = this.home.label || `Home (${(this.home.postcode || '').split(' ')[0]})`;
+            fromText.textContent = this.homeLabel();
         }
     }
 
@@ -398,12 +402,23 @@ class PengeDash {
         const busUrl = `https://api.tfl.gov.uk/StopPoint?lat=${lat}&lon=${lon}` +
             `&stopTypes=NaptanPublicBusCoachTram&radius=${CONFIG.NEARBY.busRadius}${tflAuth}`;
 
-        const [stationsRes, busRes] = await Promise.all([
-            fetch(stationsUrl).then(r => r.json()).catch(() => ({ stopPoints: [] })),
-            fetch(busUrl).then(r => r.json()).catch(() => ({ stopPoints: [] }))
-        ]);
+        const read = async url => {
+            try {
+                const response = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
+                if (!response.ok) throw new Error('Nearby source unavailable');
+                const data = await response.json();
+                if (!Array.isArray(data.stopPoints)) throw new Error('Invalid nearby source');
+                return data;
+            } catch (_) { return { stopPoints: [], unavailable: true }; }
+        };
+        const [stationsRes, busRes] = await Promise.all([read(stationsUrl), read(busUrl)]);
+        if (stationsRes.unavailable && busRes.unavailable) throw new Error('Nearby transport is unavailable. Your previous area has not changed.');
+        const validStop = sp => sp && Number.isFinite(sp.lat) && Number.isFinite(sp.lon)
+            && Math.abs(sp.lat) <= 90 && Math.abs(sp.lon) <= 180;
 
         const stations = (stationsRes.stopPoints || [])
+            .filter(validStop)
+            .map(sp => ({ ...sp, distance: this.calculateDistance(lat, lon, sp.lat, sp.lon) * 1000 }))
             .sort((a, b) => (a.distance || 0) - (b.distance || 0))
             .map(sp => ({
                 id: sp.id || sp.naptanId,
@@ -442,6 +457,8 @@ class PengeDash {
         }
 
         const busStops = (busRes.stopPoints || [])
+            .filter(sp => validStop(sp) && (sp.modes || []).includes('bus'))
+            .map(sp => ({ ...sp, distance: this.calculateDistance(lat, lon, sp.lat, sp.lon) * 1000 }))
             .filter(sp => sp.id || sp.naptanId)
             .sort((a, b) => (a.distance || 0) - (b.distance || 0))
             .slice(0, CONFIG.NEARBY.maxBusStops)
@@ -455,7 +472,7 @@ class PengeDash {
                 distance: Math.round(sp.distance || 0)
             }));
 
-        return { stations: dedupedStations, busStops };
+        return { stations: dedupedStations, busStops, partial: !!(stationsRes.unavailable || busRes.unavailable) };
     }
 
     _stopProp(stopPoint, key) {
@@ -471,6 +488,7 @@ class PengeDash {
     // opts.isCurrentLocation (default false): treat as a transient GPS position —
     //   label from the nearest detected stop and never store it as a saved place.
     async resolveLocation(input, opts = {}) {
+        const revision = this._locationRevision = (this._locationRevision || 0) + 1;
         // input can be a postcode string, or {lat, lon, label} for "use current location"
         let home;
         if (typeof input === 'string') {
@@ -482,6 +500,9 @@ class PengeDash {
                 postcode: input.postcode || '',
                 label: input.label || 'Current area'
             };
+        }
+        if (!Number.isFinite(home.lat) || !Number.isFinite(home.lon) || Math.abs(home.lat) > 90 || Math.abs(home.lon) > 180) {
+            throw new Error('Invalid location coordinates');
         }
 
         // Is this the SE20 default?
@@ -499,6 +520,7 @@ class PengeDash {
         if (nearby.stations.length === 0) {
             nearby = await this.detectNearby(home.lat, home.lon, CONFIG.NEARBY.stationRadius * 2);
         }
+        if (revision !== this._locationRevision) return null;
 
         // For a live GPS fix, name the location from the nearest detected stop
         // (reuses the detection above — no extra geocode round-trip).
@@ -510,6 +532,7 @@ class PengeDash {
         this.home = home;
         this.nearbyStations = nearby.stations;
         this.nearbyBusStops = nearby.busStops;
+        this._nearbyPartial = nearby.partial;
         this.stationData = {};        // clear previous location's departures
         this.busStopData = {};
         this.liveDepartures = [];
@@ -518,7 +541,7 @@ class PengeDash {
         this.busDisruptions = {}; this._busDisruptAt = 0;   // old area's diversions
         this._accessCache = {}; this._busRouteCache = {};   // old area's station/route caches
         if (opts.persist !== false) this.saveHome();
-        this.cacheData('nearby-cache', { home: home.postcode, sig: this._coordSig(home.lat, home.lon), stations: nearby.stations, busStops: nearby.busStops });
+        if (!home.isCurrentLocation) this.cacheData('nearby-cache', { home: home.postcode, sig: this._coordSig(home.lat, home.lon), stations: nearby.stations, busStops: nearby.busStops });
 
         // Optionally remember as a saved place (never for a transient GPS position)
         if (opts.savePlace !== false && !opts.isCurrentLocation) {
@@ -532,6 +555,7 @@ class PengeDash {
         if (this.updateSettingsUI) this.updateSettingsUI();
         this.renderNearbyNow();
         this.updateMap();
+        this.updateNearbyLocationUI();
         await this.refreshAll();
         return home;
     }
@@ -542,7 +566,6 @@ class PengeDash {
     async relocateToCoords(lat, lon) {
         if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
         this._userPickedLocation = true;   // suppress a late startup fix from overriding
-        if (this._relocating) return this._relocating;
         this._relocating = this.resolveLocation(
             { lat, lon, postcode: '', label: 'Current area' },
             { isCurrentLocation: true, persist: false, savePlace: false }
@@ -555,19 +578,12 @@ class PengeDash {
     // timeout we keep the saved home (SE20) and never nag again. Non-blocking:
     // called after the first paint so the UI upgrades in place when GPS resolves.
     initGeolocation() {
-        if (!navigator.geolocation) return;
-        // Respect a home the user has explicitly set: don't auto-follow GPS over it
-        // for the NEARBY MAP (they can still recentre on GPS via the locate button).
-        // This is separate from the journey planner's origin, which follows GPS
-        // regardless of home.userSet — see getCurrentLocation().
-        if (this.home && this.home.userSet) return;
-        this._acquirePosition().then((pos) => {
-            if (this._userPickedLocation) return;   // user already chose a location this session
-            // Standing at home: stay on Home rather than relabelling the app after
-            // whichever stop TfL returns first ("Near Birkbeck Tram Stop").
-            if (this._isNearHome(pos.coords.latitude, pos.coords.longitude)) return;
-            this.relocateToCoords(pos.coords.latitude, pos.coords.longitude);
-        }).catch(() => { /* denied / unavailable / timeout — keep saved home, no nagging */ });
+        this.updateNearbyLocationUI();
+        // Only auto-follow an already granted permission; a fresh permission is
+        // requested by the explicit Near me control, not on every launch.
+        navigator.permissions?.query({ name: 'geolocation' })?.then(permission => {
+            if (permission.state === 'granted' && !this._userPickedLocation) this.locateMe({ navigate: false });
+        }).catch(() => {});
     }
 
     // Ensure SE20 is always available as a saved place so the user can tap back to
@@ -588,19 +604,26 @@ class PengeDash {
         // Coalesce concurrent calls (init + refreshAll can both trigger detection)
         if (this._detecting) return this._detecting;
         this._detecting = (async () => {
+            const revision = this._locationRevision;
+            const area = this.home;
             try {
-                let nearby = await this.detectNearby(this.home.lat, this.home.lon);
+                let nearby = await this.detectNearby(area.lat, area.lon);
                 if (nearby.stations.length === 0) {
-                    nearby = await this.detectNearby(this.home.lat, this.home.lon, CONFIG.NEARBY.stationRadius * 2);
+                    nearby = await this.detectNearby(area.lat, area.lon, CONFIG.NEARBY.stationRadius * 2);
                 }
+                if (revision !== this._locationRevision || area !== this.home) return;
                 this.nearbyStations = nearby.stations;
                 this.nearbyBusStops = nearby.busStops;
-                this.cacheData('nearby-cache', { home: this.home.postcode, sig: this._coordSig(this.home.lat, this.home.lon), stations: nearby.stations, busStops: nearby.busStops });
+                this._nearbyPartial = nearby.partial;
+                if (!area.isCurrentLocation) this.cacheData('nearby-cache', { home: area.postcode, sig: this._coordSig(area.lat, area.lon), stations: nearby.stations, busStops: nearby.busStops });
+                this.updateNearbyLocationUI();
                 this.renderNearbyNow();
                 this.updateMap();
                 await this.fetchNearbyArrivals();
             } catch (e) {
+                if (revision !== this._locationRevision || area !== this.home) return;
                 console.error('Nearby detection failed:', e);
+                this.updateNearbyLocationUI('Nearby transport could not be refreshed. Try again.');
                 // Don't leave the Nearby screen stuck on "Finding…"
                 this.renderNearbyNow(false);
                 this.liveDepartures = [];
@@ -616,12 +639,12 @@ class PengeDash {
     _stationMode(st) {
         const m = st.modes || [];
         return m.includes('tube') ? 'tube' : m.includes('overground') ? 'overground'
-            : m.includes('dlr') ? 'dlr' : m.includes('elizabeth-line') ? 'elizabeth' : 'rail';
+            : m.includes('dlr') ? 'dlr' : m.includes('elizabeth-line') ? 'elizabeth' : m.includes('tram') ? 'tram' : 'rail';
     }
     _modeEmoji(mode, isBus) {
         if (isBus) return '🚌';
         return mode === 'overground' ? '🚆' : mode === 'dlr' ? '🚈'
-            : mode === 'tube' ? '🚇' : mode === 'elizabeth' ? '🚆' : '🚉';
+            : mode === 'tube' ? '🚇' : mode === 'elizabeth' ? '🚆' : mode === 'tram' ? '🚊' : '🚉';
     }
     // TfL only provides live arrivals for these modes (National Rail is not covered)
     _hasLiveArrivals(st) {
@@ -633,31 +656,18 @@ class PengeDash {
         this._liveNow = {};
         try {
             const saved = JSON.parse(localStorage.getItem('pengedash-live-now') || '{}');
-            if (saved && typeof saved === 'object') this._liveNow = saved;
+            if (saved && typeof saved === 'object') {
+                this._liveNow = Object.fromEntries(Object.entries(saved).filter(([, board]) => TransitData.freshBoard(board)));
+            }
         } catch (e) { /* first run */ }
     }
 
     async fetchLiveNow() {
         const stations = CONFIG.LIVE_NOW_STATIONS || [];
         await Promise.all(stations.map(async st => {
-            try {
-                const ctrl = new AbortController();
-                const timer = setTimeout(() => ctrl.abort(), 10000);
-                const res = await fetch(`${CONFIG.DARWIN_API_URL}/api/board?crs=${st.crs}`, { signal: ctrl.signal })
-                    .finally(() => clearTimeout(timer));
-                const data = res.ok ? await res.json() : null;
-                if (!data || !Array.isArray(data.departures)) throw new Error('bad board');
-                this._liveNow[st.crs] = {
-                    at: Date.now(), error: false,
-                    deps: data.departures.filter(d => d.destination).slice(0, 15).map(d => ({
-                        dest: d.destination, sched: d.scheduledTime, exp: d.expectedTime,
-                        plat: d.platform, cancelled: !!d.cancelled
-                    }))
-                };
-            } catch (e) {
-                // Keep the last good board (clock times stay valid) but flag it.
-                this._liveNow[st.crs] = Object.assign({}, this._liveNow[st.crs] || { deps: [] }, { error: true });
-            }
+            this._liveNow[st.crs] = await TransitData.loadBoard(st, {
+                railBase: CONFIG.DARWIN_API_URL, auth: this._tflAuth()
+            });
         }));
         try { localStorage.setItem('pengedash-live-now', JSON.stringify(this._liveNow)); } catch (e) { /* ignore */ }
         this.renderLiveNow();
@@ -693,10 +703,12 @@ class PengeDash {
             let body;
             if (!board) {
                 body = '<div class="ln-dep ln-muted">Checking live trains…</div>';
+            } else if (!TransitData.freshBoard(board, now)) {
+                body = '<div class="ln-dep ln-muted">Live trains unavailable — retrying</div>';
             } else {
                 const all = (board.deps || []).map(d => {
                     const clock = d.exp || d.sched;
-                    const mins = this._minutesUntilClock(clock, now);
+                    const mins = d.expectedArrival ? Math.ceil((Date.parse(d.expectedArrival) - now) / 60000) : this._minutesUntilClock(clock, now);
                     return Object.assign({}, d, { mins });
                 }).filter(d => d.mins == null || d.mins >= 0);
                 // What the station board says (next two), plus — when neither can
@@ -721,7 +733,8 @@ class PengeDash {
                         }
                         const status = d.cancelled ? '<span class="ln-status cancelled">Cancelled</span>'
                             : late > 0 ? `<span class="ln-status late">+${late}</span>` : '';
-                        const plat = d.plat && d.plat !== '-' ? `<span class="ln-plat">P${this.escapeHtml(String(d.plat))}</span>` : '';
+                        const platform = String(d.plat || '').replace(/^Platform\s+/i, '').replace(/\s+Platform$/i, '');
+                        const plat = platform && platform !== '-' ? `<span class="ln-plat">${/^\d+[a-z]?$/i.test(platform) ? 'P' : ''}${this.escapeHtml(platform)}</span>` : '';
                         const due = d.mins != null ? now + d.mins * 60000 : null;
                         const time = d.cancelled ? `<b class="ln-mins muted">${this.escapeHtml(d.sched || '')}</b>`
                             : `<b class="ln-mins${d.mins != null && d.mins <= walk ? ' tight' : ''}" ${due ? `data-due="${due}" data-zero="due"` : ''}>${d.mins == null ? this.escapeHtml(d.sched || '') : d.mins <= 0 ? 'due' : d.mins + ' min'}</b>`;
@@ -731,6 +744,7 @@ class PengeDash {
             }
             return `<button class="ln-station" data-ln-station="${this.escapeAttr(st.id)}" data-ln-name="${this.escapeAttr(st.name)}">
                 <div class="ln-station-head"><b>🚆 ${this.escapeHtml(st.name)}</b><small>${walk} min walk ›</small></div>
+                ${board?.partial && !board.error ? '<div class="ln-source">TfL services only · National Rail unavailable</div>' : ''}
                 ${body}
             </button>`;
         }).join('');
@@ -750,17 +764,19 @@ class PengeDash {
     // Full board for a Live-now station, straight from Darwin by CRS (TfL's own
     // arrivals miss Southern/Thameslink at Norwood Junction and Birkbeck).
     async openLiveNowStation(st) {
+        const board = await TransitData.loadBoard(st, { railBase: CONFIG.DARWIN_API_URL, auth: this._tflAuth() });
+        this._liveNow[st.crs] = board;
         let deps = [];
         try {
-            const data = await fetch(`${CONFIG.DARWIN_API_URL}/api/board?crs=${st.crs}`).then(r => r.ok ? r.json() : null);
             const self = st.name.toLowerCase();
-            deps = ((data && data.departures) || [])
+            deps = (board.deps || [])
+                .map(d => ({ ...d, mins: Number.isFinite(d.mins) ? d.mins : this._minutesUntilClock(d.exp || d.sched) }))
                 .filter(d => typeof d.mins === 'number' && d.mins >= -1)
                 .map(d => ({
-                    dest: d.destination ? this.cleanStationName(d.destination) : null,
-                    platform: (d.platform && d.platform !== '-') ? String(d.platform) : '-',
-                    line: '', mins: d.mins, scheduledTime: d.scheduledTime || '',
-                    cancelled: d.cancelled || false, delayed: d.delayed || false,
+                    dest: d.dest ? this.cleanStationName(d.dest) : null,
+                    platform: (d.plat && d.plat !== '-') ? String(d.plat) : '-',
+                    line: d.line || '', mins: d.mins, scheduledTime: d.sched || d.exp || '',
+                    cancelled: d.cancelled || false, delayed: false,
                     reason: d.reason || null, rid: d.rid || null,
                     exitAdvice: d.exitAdvice || null, loading: d.loading || null, association: d.association || null
                 }))
@@ -770,6 +786,54 @@ class PengeDash {
         this.stationData[st.id] = deps;
         this._currentModalStop = { id: st.id, name: st.name, isBus: false, modes: ['national-rail'], lat: st.lat, lon: st.lon };
         this.openStopModal(st.id, st.name, false);
+        const subtitle = document.querySelector('#next-trains-modal .modal-subtitle');
+        if (subtitle) subtitle.textContent = board.partial ? 'TfL services only · National Rail unavailable' : 'Live National Rail departures';
+        if (board.error) document.getElementById('modal-departures').innerHTML = '<div class="no-data">Live departure sources are unavailable. This does not mean no trains are running. Check the station board or National Rail.</div>';
+    }
+
+    setupNetworkMaps() {
+        document.getElementById('tube-map-home')?.addEventListener('click', () => this.centerOnHome({ network: true }));
+        document.getElementById('tube-map-here')?.addEventListener('click', () => this.locateMe({ network: true }));
+        const tabs = ['network-status-tab', 'network-map-tab'].map(id => document.getElementById(id));
+        const select = selected => {
+            tabs.forEach(tab => {
+                const active = tab === selected;
+                tab.setAttribute('aria-selected', String(active));
+                tab.tabIndex = active ? 0 : -1;
+                document.getElementById(tab.getAttribute('aria-controls')).hidden = !active;
+            });
+            if (selected.id === 'network-map-tab') {
+                if (!this._tubeMapStarted) {
+                    this._tubeMapStarted = true;
+                    JourneyNetworkMap.mount({ element: document.getElementById('tube-map-frame'),
+                        stationSelect: document.getElementById('tube-map-station'),
+                        status: document.getElementById('tube-map-status'), leaflet: window.L,
+                        onStation: async station => {
+                            this.stationData[station.id] = [];
+                            this._currentModalStop = { id: station.id, name: station.name, modes: ['tube'], lat: station.lat, lon: station.lon };
+                            this.openStopModal(station.id, station.name, false);
+                            document.getElementById('modal-departures').textContent = 'Loading live TfL arrivals…';
+                            const rows = (await this._fetchStopArrivals(station.id)).filter(row => JourneyNetworkMap.tubeLineIds.includes(row.lineId));
+                            if (this._currentModalStop?.id !== station.id) return;
+                            this.stationData[station.id] = rows;
+                            this.openStopModal(station.id, station.name, false);
+                            if (!rows.length) document.getElementById('modal-departures').textContent = 'No live TfL predictions were received. Check Line status before travelling.';
+                        }
+                    }).then(map => { this._tubeMap = map; }).catch(() => {
+                        document.getElementById('tube-map-status').textContent = 'Map unavailable. Open the official Tube map above.';
+                    });
+                } else this._tubeMap?.invalidateSize();
+            }
+        };
+        tabs.forEach((tab, index) => {
+            tab.addEventListener('click', () => select(tab));
+            tab.addEventListener('keydown', event => {
+                if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+                event.preventDefault();
+                const next = event.key === 'Home' ? tabs[0] : event.key === 'End' ? tabs[1] : tabs[1 - index];
+                select(next); next.focus();
+            });
+        });
     }
 
     renderNearbyNow(detecting = false) {
@@ -808,14 +872,14 @@ class PengeDash {
                     `<span class="ni-next-row"><span class="ni-next-dest">${d.line ? this.escapeHtml(d.line) + ' → ' : ''}${this.escapeHtml(d.dest)}</span><span class="ni-next-mins ${d.mins <= 3 ? 'urgent' : ''}">${d.mins} min</span></span>`
                 ).join('') + '</span>';
             } else if (live) {
-                nextHtml = '<span class="ni-next-empty">No trains running right now</span>';
+                nextHtml = '<span class="ni-next-empty">No live predictions received. Check the station board.</span>';
             }
             items.push(`
-                <button class="nearby-item" data-station-id="${this.escapeAttr(st.id)}" data-station-name="${this.escapeAttr(st.name)}">
+                <button class="nearby-item" data-distance="${st.distance}" data-modes="${this.escapeAttr((st.modes || []).join(' '))}" data-station-id="${this.escapeAttr(st.id)}" data-station-name="${this.escapeAttr(st.name)}">
                     <span class="ni-icon ${mode}">${this._modeEmoji(mode)}</span>
                     <span class="ni-body">
                         <span class="ni-name">${this.escapeHtml(st.name)}</span>
-                        <span class="ni-sub">${walk} min walk · ${st.distance} m</span>
+                        <span class="ni-sub">~${walk} min walk · ${st.distance} m straight-line distance</span>
                         <span class="ni-tags">${tags}</span>
                         ${nextHtml}
                     </span>
@@ -852,11 +916,11 @@ class PengeDash {
             const freq = this._soonestLineFreq(arrivals);
             const freqHtml = freq ? `<span class="ni-tags"><span class="freq-chip">${freq.icon} ${this.escapeHtml(arrivals[0].line)} every ~${freq.everyMin} min</span></span>` : '';
             items.push(`
-                <button class="nearby-item" data-busstop-id="${this.escapeAttr(stop.id)}" data-busstop-name="${this.escapeAttr(stop.name)}">
+                <button class="nearby-item" data-distance="${stop.distance}" data-modes="bus" data-busstop-id="${this.escapeAttr(stop.id)}" data-busstop-name="${this.escapeAttr(stop.name)}">
                     <span class="ni-icon bus">🚌</span>
                     <span class="ni-body">
                         <span class="ni-name">${this.escapeHtml(stop.name)}</span>
-                        <span class="ni-sub">${walk} min walk · ${stop.distance} m${towards ? ' · ' + this.escapeHtml(towards) : ''}</span>
+                        <span class="ni-sub">~${walk} min walk · ${stop.distance} m${towards ? ' · ' + this.escapeHtml(towards) : ''}</span>
                         ${freqHtml}
                         ${nextHtml}
                     </span>
@@ -864,6 +928,10 @@ class PengeDash {
                 </button>`);
         });
         list.innerHTML = items.join('');
+        // Bus stops and stations share one nearest-first list, not two mode blocks.
+        [...list.querySelectorAll('.nearby-item')].sort((a, b) => Number(a.dataset.distance) - Number(b.dataset.distance))
+            .forEach(item => list.append(item));
+        this.filterNearby();
         list.querySelectorAll('.nearby-item').forEach(el => {
             el.addEventListener('click', () => {
                 if (el.dataset.stationId) this.openStopModal(el.dataset.stationId, el.dataset.stationName, false);
@@ -1706,7 +1774,7 @@ class PengeDash {
         const merged = [];
         (this.nearbyStations || []).forEach(st => {
             const mode = this._stationMode(st);
-            (this.stationData[st.id] || []).filter(d => !d.cancelled).slice(0, 2).forEach(d => merged.push({
+            (this.stationData[st.id] || []).filter(d => !d.cancelled && Number.isFinite(d.mins) && d.mins >= 0).slice(0, 2).forEach(d => merged.push({
                 mode, station: st.name, dest: d.dest, line: d.line || '', mins: d.mins,
                 platform: d.platform, id: st.id, name: st.name, isBus: false,
                 delayed: d.delayed || false, reason: d.reason || null
@@ -1793,7 +1861,7 @@ class PengeDash {
                     // Overlay TfL: the Darwin board carries real platform numbers
                     st.platformDirections = this.getPlatformDirections(deps);
                     // Inline preview shows running trains only (the modal handles cancelled).
-                    st.nextDepartures = deps.filter(d => !d.cancelled).slice(0, 3);
+                    st.nextDepartures = deps.filter(d => !d.cancelled && Number.isFinite(d.mins) && d.mins >= 0).slice(0, 3);
                     this.stationData[st.id] = deps;
                 }
             } catch (e) { /* skip */ }
@@ -2760,11 +2828,11 @@ class PengeDash {
         const swapBtn = document.getElementById('origin-swap-btn');
         if (swapBtn) swapBtn.addEventListener('click', () => this.toggleOrigin());
 
-        // Start acquiring GPS in parallel with the rest of boot — never blocks
-        // first paint. Falls back to Home (visibly) on denial/timeout.
         if (this.journeyOrigin === 'here') {
-            if (fromBtn) fromBtn.textContent = 'Locating…';
-            this.getCurrentLocation();
+            if (fromBtn) fromBtn.textContent = 'Use phone location (tap)';
+            navigator.permissions?.query({ name: 'geolocation' })?.then(permission => {
+                if (permission.state === 'granted' && this.journeyOrigin === 'here') this.getCurrentLocation();
+            }).catch(() => {});
         }
 
         // Search + clear
@@ -3151,7 +3219,7 @@ class PengeDash {
                     // Home (either the active origin, or a GPS fallback because the
                     // fix is denied/unavailable — from-text already says so, never
                     // a silent swap).
-                    const home = this.home || CONFIG.LOCATION;
+                    const home = this.savedHome || this.home || CONFIG.LOCATION;
                     from = home.postcode ? home.postcode.replace(/\s/g, '') : `${home.lat},${home.lon}`;
                 }
                 // Keep the result card's origin label honest against what was
@@ -4495,12 +4563,14 @@ class PengeDash {
     // Within ~250m of the saved home counts as "at home" for labels (GPS drift
     // indoors is routinely 50-150m). Routing still uses the exact GPS fix.
     _isNearHome(lat, lon) {
-        if (!this.home || this.home.lat == null || this.home.lon == null) return false;
-        return this.calculateDistance(lat, lon, this.home.lat, this.home.lon) <= 0.25;
+        const home = this.savedHome || this.home;
+        if (!home || home.lat == null || home.lon == null) return false;
+        return this.calculateDistance(lat, lon, home.lat, home.lon) <= 0.25;
     }
 
     homeLabel() {
-        return (this.home && this.home.label) || `Home (${((this.home && this.home.postcode) || 'SE20').split(' ')[0]})`;
+        const home = this.savedHome || this.home;
+        return (home && home.label) || `Home (${((home && home.postcode) || 'SE20').split(' ')[0]})`;
     }
 
     // Only an explicit toggle (this method) persists the chosen origin —
@@ -4526,6 +4596,7 @@ class PengeDash {
     // (getCurrentLocation) and the Nearby-map follow (initGeolocation) so
     // opening the app never fires two GPS requests at once.
     _acquirePosition() {
+        if (!navigator.geolocation) return Promise.reject(new Error('Phone location is unavailable.'));
         if (this._geoPromise) return this._geoPromise;
         this._geoPromise = new Promise((resolve, reject) => {
             navigator.geolocation.getCurrentPosition(resolve, reject, {
@@ -4683,6 +4754,62 @@ class PengeDash {
     }
 
     // ==================== MAP (Leaflet) ====================
+    setupNearbyLocation() {
+        document.getElementById('nearby-here')?.addEventListener('click', () => this.locateMe());
+        document.getElementById('nearby-home')?.addEventListener('click', () => this.centerOnHome());
+        document.querySelectorAll('[data-nearby-mode]').forEach(button => button.addEventListener('click', () => {
+            this._nearbyMode = button.dataset.nearbyMode; this.filterNearby();
+        }));
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible' && this.home?.isCurrentLocation
+                && Date.now() - (this._nearbyPositionAt || 0) > 60000) this.locateMe({ navigate: false });
+        });
+        this.updateNearbyLocationUI();
+    }
+
+    filterNearby() {
+        const mode = this._nearbyMode || 'all';
+        let count = 0;
+        document.querySelectorAll('#nearby-now-list .nearby-item').forEach(item => {
+            const modes = (item.dataset.modes || '').split(' ');
+            item.hidden = mode !== 'all' && !(mode === 'rail'
+                ? modes.some(m => ['national-rail', 'overground', 'elizabeth-line', 'dlr'].includes(m)) : modes.includes(mode));
+            if (!item.hidden) count++;
+        });
+        document.querySelectorAll('[data-nearby-mode]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.nearbyMode === mode)));
+        const empty = document.getElementById('nearby-filter-empty');
+        if (empty) empty.hidden = mode === 'all' || count > 0;
+    }
+
+    updateNearbyLocationUI(message) {
+        const live = !!this.home?.isCurrentLocation;
+        for (const id of ['nearby-here', 'nearby-home']) {
+            document.getElementById(id)?.setAttribute('aria-pressed', String(id === 'nearby-here' ? live : !live));
+        }
+        const accuracy = this._nearbyAccuracy > 250 ? ` Approximate fix (+/-${Math.round(this._nearbyAccuracy)} m).` : '';
+        const text = message || (live
+            ? `Near your phone - fixed at ${new Date(this._nearbyPositionAt || Date.now()).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}.${accuracy} Refresh Near me after moving.`
+            : `Around ${this.home?.label || this.homeLabel()}. Tap Near me to use this phone's location.`)
+            + (this._nearbyPartial ? ' Some nearby transport sources are unavailable.' : '');
+        for (const id of ['nearby-location-status', 'tube-location-status']) {
+            const node = document.getElementById(id); if (node) node.textContent = text;
+        }
+    }
+
+    async centerOnHome({ network = false } = {}) {
+        this._geoSelection = (this._geoSelection || 0) + 1;
+        this._userPickedLocation = true;
+        this._setLocateBusy(false);
+        try {
+            const home = this.savedHome || CONFIG.DEFAULT_HOME;
+            const area = await this.resolveLocation(home, { persist: false, savePlace: false });
+            if (!area) return;
+            this.userLayer?.clearLayers();
+            if (network) this._tubeMap?.setView([home.lat, home.lon], 14);
+            else this.showScreen('nearby');
+        } catch (error) { this.updateNearbyLocationUI(error.message); }
+    }
+
     initMap() {
         if (this._mapInit) return;
         const el = document.getElementById('map');
@@ -4711,6 +4838,7 @@ class PengeDash {
                 const btn = L.DomUtil.create('button', 'map-locate-btn');
                 btn.innerHTML = '◎';
                 btn.title = 'Find my location';
+                btn.setAttribute('aria-label', 'Find my location');
                 L.DomEvent.on(btn, 'click', (e) => { L.DomEvent.stop(e); this.locateMe(); });
                 return btn;
             }
@@ -4791,41 +4919,54 @@ class PengeDash {
     }
 
     _setLocateBusy(busy) {
-        const btn = document.querySelector('.map-locate-btn');
-        if (!btn) return;
-        btn.classList.toggle('busy', busy);
-        btn.innerHTML = busy ? '⏳' : '◎';
+        document.querySelectorAll('#nearby-here, #tube-map-here, .map-locate-btn').forEach(btn => {
+            btn.disabled = busy;
+            btn.classList.toggle('busy', busy);
+            btn.setAttribute('aria-busy', String(busy));
+        });
     }
 
     // Blue map button: find the user's real position, drop a "you are here" dot,
     // AND recentre the whole app (Nearby list + map + journey) on it — not just a
     // temporary map pan. Fast, low-accuracy fix; visible error if it fails.
-    locateMe() {
-        if (!this.map || typeof L === 'undefined' || !navigator.geolocation) {
-            this._toast('Location isn’t available on this device.');
+    async locateMe({ navigate = true, network = false } = {}) {
+        if (!navigator.geolocation) {
+            this.updateNearbyLocationUI('Phone location is unavailable. Use Home or search a station instead.');
             return;
         }
-        this.showScreen('nearby');
+        const selection = this._geoSelection = (this._geoSelection || 0) + 1;
+        this._userPickedLocation = true;
+        if (navigate && !network) this.showScreen('nearby');
         this._setLocateBusy(true);
-        navigator.geolocation.getCurrentPosition(async (pos) => {
+        this.updateNearbyLocationUI('Finding your phone location...');
+        try {
+            const pos = await this._acquirePosition();
+            if (selection !== this._geoSelection) return;
+            if (!Number.isFinite(pos.coords.latitude) || !Number.isFinite(pos.coords.longitude)
+                || Math.abs(pos.coords.latitude) > 90 || Math.abs(pos.coords.longitude) > 180
+                || !Number.isFinite(pos.timestamp) || Date.now() - pos.timestamp > 120000 || pos.timestamp > Date.now() + 10000) {
+                throw new Error('Your phone returned an old or invalid location. Please try again.');
+            }
             const here = [pos.coords.latitude, pos.coords.longitude];
-            this.userLayer.clearLayers();
-            // Pulsing blue "you are here" dot
-            L.circleMarker(here, { radius: 8, color: '#fff', weight: 3, fillColor: '#2f6bff', fillOpacity: 1 })
-                .addTo(this.userLayer).bindPopup('📍 You are here').openPopup();
-            L.circle(here, { radius: pos.coords.accuracy || 60, color: '#2f6bff', weight: 1, opacity: 0.4, fillColor: '#2f6bff', fillOpacity: 0.08 })
-                .addTo(this.userLayer);
-            this.map.setView(here, 15);
-            setTimeout(() => this.map.invalidateSize(), 100);
-            // Recentre the WHOLE app on the real position (Nearby list + map + journey)
-            try { await this.relocateToCoords(here[0], here[1]); } catch (e) { /* keep the dot */ }
-            this._setLocateBusy(false);
-        }, (err) => {
-            this._setLocateBusy(false);
-            this._toast(err && err.code === 1
-                ? 'Location permission denied — enable it to find nearby stops.'
-                : 'Couldn’t get your location. Please try again.');
-        }, { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 });
+            this._nearbyPositionAt = pos.timestamp;
+            this._nearbyAccuracy = pos.coords.accuracy;
+            this.currentLocation = { lat: here[0], lon: here[1] };
+            this._currentLocationAt = pos.timestamp;
+            const area = await this.relocateToCoords(here[0], here[1]);
+            if (!area || selection !== this._geoSelection) return;
+            if (this.userLayer && typeof L !== 'undefined') {
+                this.userLayer.clearLayers();
+                L.circleMarker(here, { radius: 8, color: '#fff', weight: 3, fillColor: '#2f6bff', fillOpacity: 1 })
+                    .addTo(this.userLayer).bindPopup('You are here');
+            }
+            if (network) this._tubeMap?.setView(here, 14);
+            this.updateNearbyLocationUI();
+        } catch (error) {
+            if (selection !== this._geoSelection) return;
+            this.updateNearbyLocationUI(error.code === 1
+                ? 'Location permission denied. Allow location in browser settings, or use Home / station search. Your previous area is unchanged.'
+                : error.message || 'Could not get your location. Your previous area is unchanged; tap Near me to retry.');
+        } finally { if (selection === this._geoSelection) this._setLocateBusy(false); }
     }
 
     drawJourneyRoute(journey, scrollToMap = false) {
@@ -4901,7 +5042,7 @@ class PengeDash {
 
     updateSettingsUI() {
         const cur = document.getElementById('settings-current-label');
-        if (cur) cur.textContent = this.home.label || this.home.postcode || 'SE20';
+        if (cur) cur.textContent = this.homeLabel();
         const reset = document.getElementById('settings-reset');
         if (reset) reset.style.display = this.home.isDefault ? 'none' : 'block';
     }
