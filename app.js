@@ -556,7 +556,9 @@ class PengeDash {
         this.renderNearbyNow();
         this.updateMap();
         this.updateNearbyLocationUI();
-        await this.refreshAll();
+        // A slow weather/traffic provider must not block a completed area switch.
+        const refresh = this.isRefreshing ? this.fetchNearbyArrivals() : this.refreshAll();
+        Promise.resolve(refresh).catch(() => this.updateNearbyLocationUI('Area selected, but live departures could not be refreshed.'));
         return home;
     }
 
@@ -4800,6 +4802,7 @@ class PengeDash {
         this._geoSelection = (this._geoSelection || 0) + 1;
         this._userPickedLocation = true;
         this._setLocateBusy(false);
+        this.updateNearbyLocationUI('Returning to Home and finding nearby transport...');
         try {
             const home = this.savedHome || CONFIG.DEFAULT_HOME;
             const area = await this.resolveLocation(home, { persist: false, savePlace: false });
