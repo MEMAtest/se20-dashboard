@@ -31,3 +31,17 @@ Reused the canonical checkout on branch `fix/journey-live-data-20261111`; no wor
 
 - TfL network map: https://content.tfl.gov.uk/standard-tube-map.pdf (HTTP 200 verified).
 - TfL API: https://api.tfl.gov.uk/StopPoint/910GANERLEY/Arrivals and https://api.tfl.gov.uk/Line/victoria/Route/Sequence/all (real public responses inspected).
+
+## Subsequent Production National Rail Recovery
+
+At 09:28:20.799 UTC on 11 November the rail upstream was restored under the user's explicit instruction to get National Rail available. This was a configuration-only deployment, not publication of the local frontend/Tube map branch. The old Azure Huxley instance returned HTTP 500 even for ten rows. The documented public community instance at `https://national-rail-api.davwheat.dev` returned current National Rail data, including Southeastern at Penge East and Southern at Birkbeck, and was independently tested from the server before promotion.
+
+The existing immutable image `sha256:6de0a59b309e4cb8e1159e79d7990c2ecfe54d51a258bf373826b0f3b2358eef` runs as `darwin-api-restored-20261111`, using the same protected environment file with only a non-secret `HUXLEY_URL` override. Kafka stays disabled. Only the rail site's Caddy upstream changed; the whole candidate configuration was validated first, and hash/identity guards protected the existing configuration. No image rebuild/download, permission, credential, subscription, database, paid service or other application change was made. The original `darwin-api` remained running to preserve its volatile state and rollback path.
+
+Public HTTP 200 boards with departures and platform rows were verified for PNE, PNW, BIK, ANZ and NWD. Internal calling-point probes passed for PNE, PNW and BIK. At 09:30:49 UTC, 148 seconds after acceptance and beyond the thirty-second cache window, five public Penge East services matched the freshly generated community source on scheduled time, cancellation and platform. A real production browser independently displayed the four home station boards, a Birkbeck platform-bearing departure and its expanded Crystal Palace-to-London Bridge calling pattern. No frontend publication was needed for this board recovery.
+
+This is community-proxied National Rail Darwin data, not a newly connected direct/account-owned feed or a provider SLA. The primary Kafka counters correctly remain disconnected/zero; they do not describe the separately recovered HTTP board source. Push delivery, historical crowds/coach loading, legacy Kafka-only endpoints and every other Journey feature are not certified by these tests.
+
+Protected server evidence and rollback copies are at `/opt/darwin-api/recovery-20261111` (root-only). Compact local evidence/scripts/screenshots are at `/Users/omosanya_main/storage-audit/journey-20261111`. The rollback is to restore `Caddyfile.before` into the existing bind-mounted Caddyfile inode and reload Caddy; the original container stays available. Retire the original only after acceptance and its six-hour volatile subscription TTL grace, without deleting images, databases or originals. This recovery added one small running container using existing shared image layers, capped at 512 MiB; observed resident usage was approximately 34 MiB. No new checkout, dependency installation or large local copy was made; retained evidence is below 1 MiB.
+
+Community API documentation: https://national-rail-api.davwheat.dev/. National Rail background: https://www.nationalrail.co.uk/developers/.
