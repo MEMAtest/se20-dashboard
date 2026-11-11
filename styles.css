@@ -343,6 +343,12 @@ input { font-family: inherit; }
 
 /* ---------- Nearby ---------- */
 .map-card { padding: 0; overflow: hidden; }
+.area-controls, .nearby-modes { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.area-controls button, .nearby-modes button { border: 1px solid var(--line-strong); border-radius: 999px; background: var(--card); color: var(--text); padding: 10px 16px; min-height: 44px; font: inherit; cursor: pointer; }
+.area-controls button[aria-pressed="true"], .nearby-modes button[aria-pressed="true"] { background: #245bd8; color: #fff; border-color: #245bd8; }
+.area-controls button:focus-visible, .nearby-modes button:focus-visible { outline: 3px solid #77adff; outline-offset: 3px; }
+.location-privacy { font-size: 12px; line-height: 1.5; color: var(--text-2); }
+.nearby-item[hidden], #nearby-filter-empty[hidden] { display: none; }
 #map { height: 250px; width: 100%; }
 .leaflet-popup-content { font-family: inherit; font-size: 13px; font-weight: 600; }
 .leaflet-control-zoom a { border-radius: 8px !important; }

@@ -13,7 +13,7 @@ const CONFIG = {
     // ============================================
     // 2. TFL API (Buses + Overground)
     // ============================================
-    // FREE: Unlimited (works without key, but key recommended)
+    // Public TfL API; provider rate limits apply.
     // Register: https://api-portal.tfl.gov.uk/
     // Steps:
     //   1. Register for account

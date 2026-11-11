@@ -9,6 +9,8 @@
       "functions/**",
       "tests/**",
       "docs/**",
+      "scripts/**",
+      "wrangler.jsonc",
       "README.md"
     ],
     "headers": [

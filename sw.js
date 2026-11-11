@@ -1,18 +1,18 @@
 // Penge Dash SE20 - Service Worker
-const CACHE_VERSION = 'v47b';
-importScripts('/transit-data.js?v=20261111b');
+const CACHE_VERSION = 'v48';
+importScripts('/transit-data.js?v=20261111c');
 const TILE_CACHE = 'penge-dash-tiles-v1';
 const MAX_TILES = 300;
 const CACHE_NAME = `penge-dash-${CACHE_VERSION}`;
 const STATIC_ASSETS = [
     '/',
     '/index.html',
-    '/styles.css?v=20261111b',
-    '/app.js?v=20261111b',
-    '/journey-guidance.js?v=20261111b',
-    '/transit-data.js?v=20261111b',
-    '/network-map.js?v=20261111b',
-    '/config.js?v=20261111b',
+    '/styles.css?v=20261111c',
+    '/app.js?v=20261111c',
+    '/journey-guidance.js?v=20261111c',
+    '/transit-data.js?v=20261111c',
+    '/network-map.js?v=20261111c',
+    '/config.js?v=20261111c',
     '/manifest.json',
     '/icon-192.png',
     '/icon-512.png',
