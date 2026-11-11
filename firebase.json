@@ -6,6 +6,9 @@
       "firebase.json",
       "**/.*",
       "**/node_modules/**",
+      "functions/**",
+      "tests/**",
+      "docs/**",
       "README.md"
     ],
     "headers": [

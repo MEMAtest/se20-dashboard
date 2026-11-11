@@ -1028,3 +1028,14 @@ input { font-family: inherit; }
    overlap renders seamlessly (verified in both themes). */
 .leaflet-container img.leaflet-tile { mix-blend-mode: normal !important; }
 .leaflet-tile-container img.leaflet-tile { width: 256.5px !important; height: 256.5px !important; }
+/* Network reference and live service status stay separate. */
+.network-tabs { display: flex; gap: 8px; margin: 4px 0 20px; }
+.network-tabs button { flex: 1; padding: 12px 10px; border: 1px solid var(--blue, #335cff); border-radius: 12px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.network-tabs button[aria-selected="true"] { background: var(--blue, #335cff); color: white; }
+#network-map-panel[hidden], #network-status-panel[hidden] { display: none; }
+#tube-map-frame { width: 100%; height: min(70dvh, 760px); min-height: 340px; border: 1px solid #9aa6b5; border-radius: 12px; background: white; margin: 16px 0; }
+.map-links { display: flex; flex-wrap: wrap; gap: 12px 20px; margin-top: 12px; }
+.map-links a { color: var(--blue, #335cff); text-decoration: underline; }
+.map-source, .ln-source { font-size: 12px; line-height: 1.5; opacity: .8; }
+.ln-source { margin: 4px 0 8px; }
+#tube-map-station { display: block; width: 100%; min-height: 44px; margin: 8px 0; padding: 10px; border: 1px solid #9aa6b5; border-radius: 10px; font: inherit; background: var(--card, #fff); color: var(--text, #17233b); }

@@ -71,6 +71,7 @@ class PengeDash {
         // Navigation (top tabs + bottom nav) and shell links
         this.setupNav();
         this.setupShellLinks();
+        this.setupNetworkMaps();
 
         // Modals (next-trains + generic detail)
         this.createModal();
@@ -633,31 +634,18 @@ class PengeDash {
         this._liveNow = {};
         try {
             const saved = JSON.parse(localStorage.getItem('pengedash-live-now') || '{}');
-            if (saved && typeof saved === 'object') this._liveNow = saved;
+            if (saved && typeof saved === 'object') {
+                this._liveNow = Object.fromEntries(Object.entries(saved).filter(([, board]) => TransitData.freshBoard(board)));
+            }
         } catch (e) { /* first run */ }
     }
 
     async fetchLiveNow() {
         const stations = CONFIG.LIVE_NOW_STATIONS || [];
         await Promise.all(stations.map(async st => {
-            try {
-                const ctrl = new AbortController();
-                const timer = setTimeout(() => ctrl.abort(), 10000);
-                const res = await fetch(`${CONFIG.DARWIN_API_URL}/api/board?crs=${st.crs}`, { signal: ctrl.signal })
-                    .finally(() => clearTimeout(timer));
-                const data = res.ok ? await res.json() : null;
-                if (!data || !Array.isArray(data.departures)) throw new Error('bad board');
-                this._liveNow[st.crs] = {
-                    at: Date.now(), error: false,
-                    deps: data.departures.filter(d => d.destination).slice(0, 15).map(d => ({
-                        dest: d.destination, sched: d.scheduledTime, exp: d.expectedTime,
-                        plat: d.platform, cancelled: !!d.cancelled
-                    }))
-                };
-            } catch (e) {
-                // Keep the last good board (clock times stay valid) but flag it.
-                this._liveNow[st.crs] = Object.assign({}, this._liveNow[st.crs] || { deps: [] }, { error: true });
-            }
+            this._liveNow[st.crs] = await TransitData.loadBoard(st, {
+                railBase: CONFIG.DARWIN_API_URL, auth: this._tflAuth()
+            });
         }));
         try { localStorage.setItem('pengedash-live-now', JSON.stringify(this._liveNow)); } catch (e) { /* ignore */ }
         this.renderLiveNow();
@@ -693,10 +681,12 @@ class PengeDash {
             let body;
             if (!board) {
                 body = '<div class="ln-dep ln-muted">Checking live trains…</div>';
+            } else if (!TransitData.freshBoard(board, now)) {
+                body = '<div class="ln-dep ln-muted">Live trains unavailable — retrying</div>';
             } else {
                 const all = (board.deps || []).map(d => {
                     const clock = d.exp || d.sched;
-                    const mins = this._minutesUntilClock(clock, now);
+                    const mins = d.expectedArrival ? Math.ceil((Date.parse(d.expectedArrival) - now) / 60000) : this._minutesUntilClock(clock, now);
                     return Object.assign({}, d, { mins });
                 }).filter(d => d.mins == null || d.mins >= 0);
                 // What the station board says (next two), plus — when neither can
@@ -721,7 +711,8 @@ class PengeDash {
                         }
                         const status = d.cancelled ? '<span class="ln-status cancelled">Cancelled</span>'
                             : late > 0 ? `<span class="ln-status late">+${late}</span>` : '';
-                        const plat = d.plat && d.plat !== '-' ? `<span class="ln-plat">P${this.escapeHtml(String(d.plat))}</span>` : '';
+                        const platform = String(d.plat || '').replace(/^Platform\s+/i, '').replace(/\s+Platform$/i, '');
+                        const plat = platform && platform !== '-' ? `<span class="ln-plat">${/^\d+[a-z]?$/i.test(platform) ? 'P' : ''}${this.escapeHtml(platform)}</span>` : '';
                         const due = d.mins != null ? now + d.mins * 60000 : null;
                         const time = d.cancelled ? `<b class="ln-mins muted">${this.escapeHtml(d.sched || '')}</b>`
                             : `<b class="ln-mins${d.mins != null && d.mins <= walk ? ' tight' : ''}" ${due ? `data-due="${due}" data-zero="due"` : ''}>${d.mins == null ? this.escapeHtml(d.sched || '') : d.mins <= 0 ? 'due' : d.mins + ' min'}</b>`;
@@ -731,6 +722,7 @@ class PengeDash {
             }
             return `<button class="ln-station" data-ln-station="${this.escapeAttr(st.id)}" data-ln-name="${this.escapeAttr(st.name)}">
                 <div class="ln-station-head"><b>🚆 ${this.escapeHtml(st.name)}</b><small>${walk} min walk ›</small></div>
+                ${board?.partial && !board.error ? '<div class="ln-source">TfL services only · National Rail unavailable</div>' : ''}
                 ${body}
             </button>`;
         }).join('');
@@ -750,17 +742,19 @@ class PengeDash {
     // Full board for a Live-now station, straight from Darwin by CRS (TfL's own
     // arrivals miss Southern/Thameslink at Norwood Junction and Birkbeck).
     async openLiveNowStation(st) {
+        const board = await TransitData.loadBoard(st, { railBase: CONFIG.DARWIN_API_URL, auth: this._tflAuth() });
+        this._liveNow[st.crs] = board;
         let deps = [];
         try {
-            const data = await fetch(`${CONFIG.DARWIN_API_URL}/api/board?crs=${st.crs}`).then(r => r.ok ? r.json() : null);
             const self = st.name.toLowerCase();
-            deps = ((data && data.departures) || [])
+            deps = (board.deps || [])
+                .map(d => ({ ...d, mins: Number.isFinite(d.mins) ? d.mins : this._minutesUntilClock(d.exp || d.sched) }))
                 .filter(d => typeof d.mins === 'number' && d.mins >= -1)
                 .map(d => ({
-                    dest: d.destination ? this.cleanStationName(d.destination) : null,
-                    platform: (d.platform && d.platform !== '-') ? String(d.platform) : '-',
-                    line: '', mins: d.mins, scheduledTime: d.scheduledTime || '',
-                    cancelled: d.cancelled || false, delayed: d.delayed || false,
+                    dest: d.dest ? this.cleanStationName(d.dest) : null,
+                    platform: (d.plat && d.plat !== '-') ? String(d.plat) : '-',
+                    line: d.line || '', mins: d.mins, scheduledTime: d.sched || d.exp || '',
+                    cancelled: d.cancelled || false, delayed: false,
                     reason: d.reason || null, rid: d.rid || null,
                     exitAdvice: d.exitAdvice || null, loading: d.loading || null, association: d.association || null
                 }))
@@ -770,6 +764,52 @@ class PengeDash {
         this.stationData[st.id] = deps;
         this._currentModalStop = { id: st.id, name: st.name, isBus: false, modes: ['national-rail'], lat: st.lat, lon: st.lon };
         this.openStopModal(st.id, st.name, false);
+        const subtitle = document.querySelector('#next-trains-modal .modal-subtitle');
+        if (subtitle) subtitle.textContent = board.partial ? 'TfL services only · National Rail unavailable' : 'Live National Rail departures';
+        if (board.error) document.getElementById('modal-departures').innerHTML = '<div class="no-data">Live departure sources are unavailable. This does not mean no trains are running. Check the station board or National Rail.</div>';
+    }
+
+    setupNetworkMaps() {
+        const tabs = ['network-status-tab', 'network-map-tab'].map(id => document.getElementById(id));
+        const select = selected => {
+            tabs.forEach(tab => {
+                const active = tab === selected;
+                tab.setAttribute('aria-selected', String(active));
+                tab.tabIndex = active ? 0 : -1;
+                document.getElementById(tab.getAttribute('aria-controls')).hidden = !active;
+            });
+            if (selected.id === 'network-map-tab') {
+                if (!this._tubeMapStarted) {
+                    this._tubeMapStarted = true;
+                    JourneyNetworkMap.mount({ element: document.getElementById('tube-map-frame'),
+                        stationSelect: document.getElementById('tube-map-station'),
+                        status: document.getElementById('tube-map-status'), leaflet: window.L,
+                        onStation: async station => {
+                            this.stationData[station.id] = [];
+                            this._currentModalStop = { id: station.id, name: station.name, modes: ['tube'], lat: station.lat, lon: station.lon };
+                            this.openStopModal(station.id, station.name, false);
+                            document.getElementById('modal-departures').textContent = 'Loading live TfL arrivals…';
+                            const rows = (await this._fetchStopArrivals(station.id)).filter(row => JourneyNetworkMap.tubeLineIds.includes(row.lineId));
+                            if (this._currentModalStop?.id !== station.id) return;
+                            this.stationData[station.id] = rows;
+                            this.openStopModal(station.id, station.name, false);
+                            if (!rows.length) document.getElementById('modal-departures').textContent = 'No live TfL predictions were received. Check Line status before travelling.';
+                        }
+                    }).then(map => { this._tubeMap = map; }).catch(() => {
+                        document.getElementById('tube-map-status').textContent = 'Map unavailable. Open the official Tube map above.';
+                    });
+                } else this._tubeMap?.invalidateSize();
+            }
+        };
+        tabs.forEach((tab, index) => {
+            tab.addEventListener('click', () => select(tab));
+            tab.addEventListener('keydown', event => {
+                if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+                event.preventDefault();
+                const next = event.key === 'Home' ? tabs[0] : event.key === 'End' ? tabs[1] : tabs[1 - index];
+                select(next); next.focus();
+            });
+        });
     }
 
     renderNearbyNow(detecting = false) {
