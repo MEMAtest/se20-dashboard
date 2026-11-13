@@ -249,6 +249,11 @@ class PengeDash {
         go('bell-btn', 'alerts');
         go('location-chip', 'saved');
         go('plan-alerts-link', 'alerts');
+        document.getElementById('plan-tube-link')?.addEventListener('click', () => {
+            this.showScreen('lines');
+            document.getElementById('network-map-tab')?.click();
+            document.getElementById('tube-route-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
         go('nearby-alerts-link', 'alerts');
         const back = document.getElementById('journey-back');
         if (back) back.addEventListener('click', () => this.showScreen('plan'));
@@ -794,6 +799,7 @@ class PengeDash {
     }
 
     setupNetworkMaps() {
+        this.setupTubeConnections();
         document.getElementById('tube-map-home')?.addEventListener('click', () => this.centerOnHome({ network: true }));
         document.getElementById('tube-map-here')?.addEventListener('click', () => this.locateMe({ network: true }));
         const tabs = ['network-status-tab', 'network-map-tab'].map(id => document.getElementById(id));
@@ -809,6 +815,19 @@ class PengeDash {
                     this._tubeMapStarted = true;
                     JourneyNetworkMap.mount({ element: document.getElementById('tube-map-frame'),
                         stationSelect: document.getElementById('tube-map-station'),
+                        routeFromSelect: document.getElementById('tube-route-from'),
+                        routeToSelect: document.getElementById('tube-route-to'),
+                        onStations: stations => {
+                            this._tubeStations = new Map(stations.map(station => [station.id, station]));
+                            const submit = document.getElementById('tube-route-submit');
+                            if (submit) submit.disabled = stations.length === 0;
+                        },
+                        onRouteTarget: station => {
+                            const target = document.getElementById('tube-route-to');
+                            if (target) { target.value = station.id; target.dispatchEvent(new Event('change')); }
+                            document.getElementById('tube-route-submit')?.focus();
+                            document.getElementById('tube-route-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        },
                         status: document.getElementById('tube-map-status'), leaflet: window.L,
                         onStation: async station => {
                             this.stationData[station.id] = [];
@@ -836,6 +855,97 @@ class PengeDash {
                 select(next); next.focus();
             });
         });
+    }
+
+    setupTubeConnections() {
+        const form = document.getElementById('tube-route-form');
+        if (!form) return;
+        const invalidate = () => {
+            this._tubeRouteGeneration = (this._tubeRouteGeneration || 0) + 1;
+            this._tubeRouteAbort?.abort();
+            clearTimeout(this._tubeRouteExpiry);
+            document.getElementById('tube-route-results').replaceChildren();
+            document.getElementById('tube-route-status').textContent = 'Choose your origin and destination, then find the quickest connection.';
+            const button = document.getElementById('tube-route-submit');
+            button.disabled = !this._tubeStations?.size;
+            button.setAttribute('aria-busy', 'false');
+        };
+        form.addEventListener('change', invalidate);
+        form.addEventListener('submit', event => { event.preventDefault(); this.findTubeConnection(); });
+    }
+
+    async findTubeConnection() {
+        const status = document.getElementById('tube-route-status');
+        const results = document.getElementById('tube-route-results');
+        const button = document.getElementById('tube-route-submit');
+        const generation = this._tubeRouteGeneration = (this._tubeRouteGeneration || 0) + 1;
+        this._tubeRouteAbort?.abort();
+        clearTimeout(this._tubeRouteExpiry);
+        this._tubeRouteAbort = new AbortController();
+        const controller = this._tubeRouteAbort;
+        const timeout = setTimeout(() => controller.abort(), 20000);
+        results.replaceChildren(); button.disabled = true; button.setAttribute('aria-busy', 'true');
+        status.textContent = 'Finding the quickest Tube connection...';
+        try {
+            const destination = this._tubeStations?.get(document.getElementById('tube-route-to').value);
+            if (!destination) throw new Error('Choose a destination Tube station first.');
+            const selected = document.getElementById('tube-route-from').value;
+            let origin, originLabel;
+            if (selected === 'here') {
+                status.textContent = 'Getting this phone\'s location...';
+                const position = await this._acquirePosition();
+                if (!Number.isFinite(position.timestamp) || Date.now() - position.timestamp > 120000 || position.timestamp > Date.now() + 10000) {
+                    throw new Error('Your phone returned an old location. Retry or select Saved Home.');
+                }
+                origin = { lat: position.coords.latitude, lon: position.coords.longitude }; originLabel = 'Phone location';
+            } else if (selected === 'home') {
+                origin = this.savedHome || CONFIG.DEFAULT_HOME; originLabel = this.homeLabel();
+            } else {
+                origin = this._tubeStations?.get(selected); originLabel = origin?.name;
+            }
+            if (generation !== this._tubeRouteGeneration) return;
+            if (controller.signal.aborted) throw new Error('Route request timed out.');
+            const tubeOnly = document.getElementById('tube-route-tube-only').checked;
+            const url = JourneyGuidance.tubeConnectionUrl(origin, destination, tubeOnly);
+            status.textContent = 'Checking TfL route estimates...';
+            const response = await fetch(url, { cache: 'no-store', signal: controller.signal });
+            if (!response.ok) throw new Error('TfL routing is unavailable. Please retry or use TfL Journey Planner.');
+            const data = await response.json();
+            const checkedAt = Date.now();
+            const routes = JourneyGuidance.rankTubeConnections(data, checkedAt, tubeOnly);
+            if (generation !== this._tubeRouteGeneration) return;
+            if (controller.signal.aborted) throw new Error('Route request timed out.');
+            if (!routes.length) throw new Error('TfL returned no usable Tube connection among these options. Try changing the origin or unticking Tube + walking only.');
+            const time = epoch => new Date(epoch).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' });
+            const arrivalLabel = epoch => new Date(epoch).toLocaleString('en-GB', { timeZone: 'Europe/London',
+                weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+            status.textContent = `Checked ${time(checkedAt)} London time. Quickest of the returned Tube connections, including the wait before departure. Estimates, not guaranteed live connections.`;
+            const escape = value => this.escapeHtml(String(value || ''));
+            results.innerHTML = routes.map((route, index) => {
+                const steps = route.journey.legs.map(leg => {
+                    const from = leg.departurePoint?.commonName || '', to = leg.arrivalPoint?.commonName || '';
+                    const instruction = leg.instruction?.summary || leg.mode?.name || leg.mode?.id;
+                    return `<li><strong>${escape(instruction)}</strong><span>${escape(from)} &rarr; ${escape(to)}</span><span>${Number.isFinite(leg.duration) ? `${Math.ceil(leg.duration)} min` : 'Time unavailable'}</span></li>`;
+                }).join('');
+                return `<article class="tube-route-card"><p class="tube-route-label">${index === 0 ? 'Quickest returned connection' : 'Alternative connection'}</p>
+                    <h3>${route.totalMinutes} min from now <span>Arrive ${arrivalLabel(route.arrival)} London</span></h3>
+                    <p>${escape(originLabel)} &rarr; ${escape(destination.name)}</p>
+                    <p>${route.changes} change${route.changes === 1 ? '' : 's'} &middot; ${route.walking == null ? 'Walking time unavailable' : `${route.walking} min walking`} &middot; ${route.leaveInMinutes ? `Leave in ${route.leaveInMinutes} min` : 'Leave now'}</p>
+                    <details${index === 0 ? ' open' : ''}><summary>Lines and change stations</summary><ol>${steps}</ol></details></article>`;
+            }).join('');
+            this._tubeRouteExpiry = setTimeout(() => {
+                if (generation !== this._tubeRouteGeneration) return;
+                results.replaceChildren(); status.textContent = 'These route estimates have expired. Find the quickest connection again for current options.';
+            }, 120000);
+        } catch (error) {
+            if (generation !== this._tubeRouteGeneration) return;
+            status.textContent = error.code === 1
+                ? 'Phone location was denied. Allow location, or choose Saved Home / a station. No other origin has been substituted.'
+                : controller.signal.aborted ? 'The route request timed out. Please try again.' : error.message || 'Could not check routes. Please retry.';
+        } finally {
+            clearTimeout(timeout);
+            if (generation === this._tubeRouteGeneration) { button.disabled = false; button.setAttribute('aria-busy', 'false'); }
+        }
     }
 
     renderNearbyNow(detecting = false) {

@@ -655,7 +655,87 @@
         return { maxMinutes: max, matchIndexes, allMatch, noneMatch, fastest, fastestIndex, message };
     }
 
+    // TfL's unzoned timestamps are London wall time, even on a phone abroad.
+    function tflJourneyInstant(value) {
+        if (typeof value !== 'string') return NaN;
+        if (/T.*(?:Z|[+-]\d{2}:?\d{2})$/.test(value)) return Date.parse(value);
+        const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?$/.exec(value);
+        if (!match) return NaN;
+        const parts = match.slice(1).map(Number);
+        const wall = Date.UTC(parts[0], parts[1] - 1, ...parts.slice(2));
+        const formatter = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London',
+            year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+        const candidates = [wall, wall - 3600000].filter(epoch => {
+            const actual = Object.fromEntries(formatter.formatToParts(new Date(epoch)).map(p => [p.type, p.value]));
+            return ['year', 'month', 'day', 'hour', 'minute', 'second'].every((key, index) => Number(actual[key]) === parts[index]);
+        });
+        // Ambiguous clock-change times are not sufficient evidence of quickest.
+        return candidates.length === 1 ? candidates[0] : NaN;
+    }
+
+    function tubeConnectionUrl(origin, destination, tubeOnly = false, now = Date.now()) {
+        const endpoint = place => {
+            if (place && /^(?:940G|HUB)[A-Za-z0-9]+$/.test(place.id || '')) return place.id;
+            if (place && Number.isFinite(place.lat) && Number.isFinite(place.lon)
+                && Math.abs(place.lat) <= 90 && Math.abs(place.lon) <= 180) return `${place.lat},${place.lon}`;
+            throw new Error('Select a valid origin and destination.');
+        };
+        if (!destination || !/^(?:940G|HUB)[A-Za-z0-9]+$/.test(destination.id || '')) throw new Error('Choose a Tube destination.');
+        const from = endpoint(origin), to = endpoint(destination);
+        if (from === to) throw new Error('You have selected the same station. Choose another destination.');
+        const url = new URL(`https://api.tfl.gov.uk/Journey/JourneyResults/${encodeURIComponent(from)}/to/${encodeURIComponent(to)}`);
+        url.searchParams.set('journeyPreference', 'leasttime');
+        url.searchParams.set('mode', tubeOnly ? 'tube,walking' : 'tube,bus,national-rail,overground,dlr,elizabeth-line,tram,walking');
+        const nextMinute = new Date(Math.ceil((now + 1) / 60000) * 60000);
+        const clock = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London',
+            year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+            .formatToParts(nextMinute).map(p => [p.type, p.value]));
+        url.searchParams.set('date', `${clock.year}${clock.month}${clock.day}`);
+        url.searchParams.set('time', `${clock.hour}${clock.minute}`);
+        url.searchParams.set('timeIs', 'Departing');
+        return url.href;
+    }
+
+    function rankTubeConnections(data, now = Date.now(), tubeOnly = false) {
+        if (!data || !Array.isArray(data.journeys)) throw new Error('TfL did not return a confirmed route. Please retry or check TfL Journey Planner.');
+        const candidates = [];
+        for (const journey of data.journeys.slice(0, 100)) {
+            const legs = journey.legs;
+            if (!Array.isArray(legs) || !legs.length || legs.length > 100 || !legs.some(l => l?.mode?.id === 'tube')) continue;
+            if (legs.some(l => !l || typeof l.mode?.id !== 'string')) continue;
+            if (tubeOnly && legs.some(l => !['tube', 'walking'].includes(l.mode?.id))) continue;
+            const departure = tflJourneyInstant(journey.startDateTime), arrival = tflJourneyInstant(journey.arrivalDateTime);
+            if (!Number.isFinite(departure) || !Number.isFinite(arrival) || departure < now - 1000
+                || arrival <= now || arrival <= departure || arrival - now > 36 * 3600000
+                || !Number.isFinite(journey.duration) || journey.duration <= 0) continue;
+            const services = legs.filter(l => !['walking', 'walk'].includes(l.mode?.id));
+            let changes = 0;
+            for (let index = 1; index < services.length; index++) {
+                if (!isThroughService(services[index - 1], services[index])) changes++;
+            }
+            const walks = legs.filter(l => ['walking', 'walk'].includes(l.mode?.id));
+            const walking = walks.every(l => Number.isFinite(l.duration) && l.duration >= 0)
+                ? Math.ceil(walks.reduce((sum, l) => sum + l.duration, 0)) : null;
+            candidates.push({ journey, departure, arrival, changes, walking,
+                totalMinutes: Math.ceil((arrival - now) / 60000),
+                leaveInMinutes: Math.max(0, Math.ceil((departure - now) / 60000)) });
+        }
+        candidates.sort((a, b) => a.arrival - b.arrival || a.changes - b.changes || a.journey.duration - b.journey.duration);
+        const seen = new Set();
+        return candidates.filter(({ journey }) => {
+            const signature = JSON.stringify(journey.legs.map(l => [l.mode?.id,
+                l.departurePoint?.naptanId || l.departurePoint?.commonName,
+                l.arrivalPoint?.naptanId || l.arrivalPoint?.commonName,
+                (Array.isArray(l.routeOptions) ? l.routeOptions : []).filter(Boolean).map(r => r.lineIdentifier?.id || r.name).sort()]));
+            if (seen.has(signature)) return false;
+            seen.add(signature); return true;
+        }).slice(0, 3);
+    }
+
     return Object.freeze({
+        tflJourneyInstant,
+        tubeConnectionUrl,
+        rankTubeConnections,
         buildJourneyGuidance: buildJourneyGuidance,
         applyDurationConstraint: applyDurationConstraint,
         resolveBusProminence: resolveBusProminence,
