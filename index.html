@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#eef1f6" media="(prefers-color-scheme: light)">
     <meta name="theme-color" content="#0c1020" media="(prefers-color-scheme: dark)">
@@ -14,9 +15,9 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css?journey=20261113b"
           integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
-    <link rel="stylesheet" href="styles.css?v=20261113a">
+    <link rel="stylesheet" href="styles.css?v=20261113b">
 </head>
 <body>
     <div class="app" id="app">
@@ -55,12 +56,6 @@
 
             <!-- ============ PLAN ============ -->
             <section class="screen active" id="screen-plan">
-                <!-- Live now: next bus + next trains from the local stations, first thing on open -->
-                <div class="live-now" id="live-now"></div>
-
-                <!-- Commute quick-boards (Home ⇄ Work, one tap) -->
-                <div class="commute-card" id="commute-card"></div>
-
                 <!-- Where to card -->
                 <div class="card plan-card">
                     <div class="plan-card-head">
@@ -71,22 +66,40 @@
                         <div class="route-input-fields">
                             <div class="ri-row">
                                 <span class="ri-dot from"></span>
-                                <button class="ri-from" id="from-text">Home (SE20)</button>
+                                <span class="ri-caption">From</span>
+                                <button class="ri-from" id="from-text" aria-expanded="false" aria-controls="origin-picker">Choose starting point</button>
                             </div>
                             <div class="ri-divider"></div>
                             <div class="ri-row">
                                 <span class="ri-dot to"></span>
+                                <label class="ri-caption" for="destination-input">To</label>
                                 <input type="text" id="destination-input" placeholder="Search destination…" autocomplete="off">
                                 <button class="ri-clear" id="destination-clear" aria-label="Clear" style="display:none;">&times;</button>
                             </div>
                             <div class="autocomplete-dropdown" id="autocomplete-dropdown"></div>
                         </div>
-                        <button class="ri-swap" id="origin-swap-btn" aria-label="Swap origin">
+                        <button class="ri-swap" id="origin-swap-btn" aria-label="Change starting point" aria-expanded="false" aria-controls="origin-picker">
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
                                 <path d="M7 4v16M7 20l-3-3M7 4l3 3M17 20V4M17 4l3 3M17 20l-3-3"/>
                             </svg>
                         </button>
                     </div>
+                    <div id="origin-picker" class="origin-picker" hidden>
+                        <h3>Starting from</h3>
+                        <div class="origin-presets">
+                            <button type="button" id="origin-phone">Use phone location</button>
+                            <button type="button" id="origin-home">Saved Home</button>
+                            <button type="button" id="origin-work" hidden>Work</button>
+                        </div>
+                        <div id="origin-saved" class="origin-presets"></div>
+                        <form id="origin-search-form">
+                            <label for="origin-query">Station or full UK postcode</label>
+                            <div class="origin-search-row"><input id="origin-query" type="search" placeholder="e.g. London Bridge or SE20 7UA" autocomplete="off" maxlength="100"><button type="submit">Search</button></div>
+                        </form>
+                        <div id="origin-candidates" class="origin-candidates"></div>
+                        <p class="origin-note">Choose a station result or confirm the postcode centre. This does not change your saved Home. Phone coordinates are sent to TfL for location-based journeys; no background tracking. TfL journey coverage is not a UK-wide guarantee.</p>
+                    </div>
+                    <p id="origin-status" class="origin-status" role="status" aria-live="polite"></p>
                     <button class="go-btn" id="journey-search-btn">Find routes</button>
                     <!-- quick chips -->
                     <div class="quick-chips" id="journey-quick-picks"></div>
@@ -152,6 +165,9 @@
                     <span class="lc-text"><strong>Live updates</strong><br><span class="muted">Real-time delays & disruptions</span></span>
                     <span class="lc-chevron">›</span>
                 </button>
+                <!-- Keep starting-point selection ahead of local departure boards. -->
+                <div class="commute-card" id="commute-card"></div>
+                <div class="live-now" id="live-now"></div>
             </section>
 
             <!-- ============ NEARBY ============ -->
@@ -374,12 +390,12 @@
         </nav>
     </div>
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js?journey=20261113b"
             integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-    <script src="config.js?v=20261113a"></script>
-    <script src="journey-guidance.js?v=20261113a"></script>
-    <script src="transit-data.js?v=20261113a"></script>
-    <script src="network-map.js?v=20261113a"></script>
-    <script src="app.js?v=20261113a"></script>
+    <script src="config.js?v=20261113b"></script>
+    <script src="journey-guidance.js?v=20261113b"></script>
+    <script src="transit-data.js?v=20261113b"></script>
+    <script src="network-map.js?v=20261113b"></script>
+    <script src="app.js?v=20261113b"></script>
 </body>
 </html>

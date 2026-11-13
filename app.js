@@ -2926,22 +2926,10 @@ class PengeDash {
         this.loadFavouriteJourneys();
         this.renderFavouriteJourneys();
 
-        // Origin toggle (Home ↔ current location). Tapping the label while a GPS
-        // fix is missing/failed retries acquisition instead of swapping to Home —
-        // the swap button (or a successful fix) is what actually changes origin.
+        this.setupOriginPicker();
         const fromBtn = document.getElementById('from-text');
-        if (fromBtn) fromBtn.addEventListener('click', () => {
-            if (this.journeyOrigin === 'here' && !this.currentLocation && !this.fetchingLocation) {
-                this.getCurrentLocation();
-            } else {
-                this.toggleOrigin();
-            }
-        });
-        const swapBtn = document.getElementById('origin-swap-btn');
-        if (swapBtn) swapBtn.addEventListener('click', () => this.toggleOrigin());
-
         if (this.journeyOrigin === 'here') {
-            if (fromBtn) fromBtn.textContent = 'Use phone location (tap)';
+            if (fromBtn) fromBtn.textContent = 'Phone location';
             navigator.permissions?.query({ name: 'geolocation' })?.then(permission => {
                 if (permission.state === 'granted' && this.journeyOrigin === 'here') this.getCurrentLocation();
             }).catch(() => {});
@@ -2959,9 +2947,15 @@ class PengeDash {
         input.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') { this.hideAutocomplete(); goBtn.click(); }
         });
-        input.addEventListener('input', () => { clearBtn.style.display = input.value ? 'flex' : 'none'; });
+        input.addEventListener('input', () => {
+            this._selectedDestination = null;
+            this._invalidateJourneySearch();
+            clearBtn.style.display = input.value ? 'flex' : 'none';
+        });
         clearBtn.addEventListener('click', () => {
             input.value = ''; clearBtn.style.display = 'none';
+            this._selectedDestination = null;
+            this._invalidateJourneySearch();
             this.hideAutocomplete(); input.focus();
         });
 
@@ -3093,7 +3087,7 @@ class PengeDash {
         this._acDebounceTimer = null;
 
         input.addEventListener('input', () => {
-            clearTimeout(this._acDebounceTimer);
+            this.hideAutocomplete();
             const query = input.value.trim();
 
             if (query.length < 2) {
@@ -3120,6 +3114,7 @@ class PengeDash {
     }
 
     async fetchAutocompleteSuggestions(query) {
+        const revision = this._autocompleteRevision = (this._autocompleteRevision || 0) + 1;
         try {
             let url = `https://api.tfl.gov.uk/StopPoint/Search?query=${encodeURIComponent(query)}&modes=tube,bus,national-rail,overground,dlr,elizabeth-line&maxResults=5`;
             if (CONFIG.TFL_APP_KEY) {
@@ -3127,16 +3122,17 @@ class PengeDash {
             }
 
             const response = await fetch(url);
+            if (!response.ok) throw new Error('Destination lookup unavailable');
             const data = await response.json();
 
+            if (revision !== this._autocompleteRevision || document.getElementById('destination-input')?.value.trim() !== query) return;
             if (data.matches && data.matches.length > 0) {
                 this.renderAutocomplete(data.matches);
             } else {
                 this.hideAutocomplete();
             }
         } catch (error) {
-            console.error('Autocomplete fetch error:', error);
-            this.hideAutocomplete();
+            if (revision === this._autocompleteRevision) this.hideAutocomplete();
         }
     }
 
@@ -3154,12 +3150,14 @@ class PengeDash {
                 .map(m => modeIcons[m] || '')
                 .filter(Boolean)
                 .join(' ');
+            const endpoint = /^\d{1,12}$/.test(String(result.icsId || '')) ? String(result.icsId)
+                : (/^[A-Za-z0-9_-]{3,80}$/.test(result.id || '') ? result.id : '');
 
             return `
-                <div class="autocomplete-item" data-name="${this.escapeAttr(result.name)}">
-                    <div class="ac-name">${this.escapeHtml(result.name)}</div>
-                    ${modes ? `<div class="ac-modes">${modes}</div>` : ''}
-                </div>
+                <button type="button" class="autocomplete-item" data-name="${this.escapeAttr(result.name)}" data-stop-id="${this.escapeAttr(endpoint)}">
+                    <span class="ac-name">${this.escapeHtml(result.name)}</span>
+                    ${modes ? `<span class="ac-modes">${modes}</span>` : ''}
+                </button>
             `;
         }).join('');
 
@@ -3167,11 +3165,12 @@ class PengeDash {
 
         // Click handlers on items
         dropdown.querySelectorAll('.autocomplete-item').forEach(item => {
-            item.addEventListener('mousedown', (e) => {
-                e.preventDefault(); // Prevent blur from firing first
+            item.addEventListener('mousedown', e => e.preventDefault());
+            item.addEventListener('click', () => {
                 const name = item.dataset.name;
                 const input = document.getElementById('destination-input');
                 input.value = name;
+                this._selectedDestination = item.dataset.stopId ? { label: name, id: item.dataset.stopId } : null;
                 this.hideAutocomplete();
                 document.querySelectorAll('.destination-chip').forEach(c => c.classList.remove('active'));
                 this.planJourney(name);
@@ -3180,11 +3179,110 @@ class PengeDash {
     }
 
     hideAutocomplete() {
+        clearTimeout(this._acDebounceTimer);
+        this._autocompleteRevision = (this._autocompleteRevision || 0) + 1;
         const dropdown = document.getElementById('autocomplete-dropdown');
         if (dropdown) {
             dropdown.classList.remove('visible');
             dropdown.innerHTML = '';
         }
+    }
+
+    _invalidateJourneySearch() {
+        this._journeySearchRevision = (this._journeySearchRevision || 0) + 1;
+        this._journeySearchController?.abort();
+        const results = document.getElementById('journey-results');
+        if (results) { results.innerHTML = ''; results.classList.remove('jp-loading-overlay'); }
+        const updated = document.getElementById('journey-updated');
+        if (updated) updated.textContent = 'Choose your route, then find routes';
+        this._lastJourneys = null;
+        try { sessionStorage.removeItem('pengedash-journey-cache'); } catch (e) { /* unavailable storage */ }
+    }
+
+    _originStatus(message) {
+        const status = document.getElementById('origin-status');
+        if (status) status.textContent = message;
+    }
+
+    _toggleOriginPicker(open) {
+        const picker = document.getElementById('origin-picker');
+        if (!picker) return;
+        const expanded = typeof open === 'boolean' ? open : picker.hidden;
+        picker.hidden = !expanded;
+        for (const id of ['from-text', 'origin-swap-btn']) document.getElementById(id)?.setAttribute('aria-expanded', String(expanded));
+    }
+
+    setupOriginPicker() {
+        for (const id of ['from-text', 'origin-swap-btn']) document.getElementById(id)?.addEventListener('click', () => this._toggleOriginPicker());
+        document.getElementById('origin-phone')?.addEventListener('click', () => this.setJourneyOrigin('here'));
+        document.getElementById('origin-home')?.addEventListener('click', () => this.setJourneyOrigin('home'));
+        const work = document.getElementById('origin-work');
+        if (work && this.workPlace) {
+            work.hidden = false;
+            work.addEventListener('click', () => this._selectJourneyOrigin(this.workPlace));
+        }
+        const saved = document.getElementById('origin-saved');
+        if (saved) {
+            const places = (this.savedPlaces || []).filter(p => JourneyGuidance.validJourneyCoordinates(p)).slice(0, 8);
+            saved.innerHTML = places.map((p, i) => `<button type="button" data-origin-saved="${i}">${this.escapeHtml(p.label || p.postcode || 'Saved place')}</button>`).join('');
+            saved.querySelectorAll('[data-origin-saved]').forEach(b => b.addEventListener('click', () => this._selectJourneyOrigin(places[+b.dataset.originSaved])));
+        }
+        document.getElementById('origin-query')?.addEventListener('input', () => {
+            this._originLookupRevision = (this._originLookupRevision || 0) + 1;
+            this._originLookupController?.abort();
+            this._invalidateJourneySearch();
+            this.journeyOrigin = 'search'; this.selectedOrigin = null;
+            document.getElementById('from-text').textContent = 'Choose a search result';
+            document.getElementById('origin-candidates').innerHTML = '';
+            this._originStatus('Search, then select the exact starting point.');
+        });
+        document.getElementById('origin-search-form')?.addEventListener('submit', e => { e.preventDefault(); this.searchJourneyOrigins(); });
+        if (this.journeyOrigin === 'home') {
+            document.getElementById('from-text').textContent = this.homeLabel();
+            this._originStatus('Saved Home selected. Postcodes locate the postcode centre, not your doorway.');
+        } else this._originStatus('Phone location selected. Tap the starting point to locate or choose somewhere else.');
+    }
+
+    _selectJourneyOrigin(place) {
+        if (!place || !JourneyGuidance.validJourneyCoordinates(place)) return;
+        this._originLookupRevision = (this._originLookupRevision || 0) + 1;
+        this._originLookupController?.abort();
+        this._invalidateJourneySearch();
+        this.selectedOrigin = { lat: place.lat, lon: place.lon, label: place.label || place.name || place.postcode || 'Selected place' };
+        this.journeyOrigin = 'place';
+        document.getElementById('from-text').textContent = this.selectedOrigin.label;
+        this._originStatus(place.postcode ? 'Postcode centre selected, not an exact street address.' : 'Selected starting point. Saved Home is unchanged.');
+        this._toggleOriginPicker(false);
+    }
+
+    async searchJourneyOrigins() {
+        const query = document.getElementById('origin-query')?.value.trim();
+        if (!query) { this._originStatus('Enter a station or full UK postcode.'); return; }
+        const revision = this._originLookupRevision = (this._originLookupRevision || 0) + 1;
+        this._originLookupController?.abort();
+        const controller = this._originLookupController = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 12000);
+        const target = document.getElementById('origin-candidates');
+        target.innerHTML = '';
+        this._originStatus('Searching starting points...');
+        try {
+            const isPostcode = /^(?:GIR\s?0AA|[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2})$/i.test(query);
+            const url = isPostcode ? `${CONFIG.GEOCODE_URL}/postcodes/${encodeURIComponent(query)}`
+                : `https://api.tfl.gov.uk/StopPoint/Search?query=${encodeURIComponent(query)}&modes=tube,bus,national-rail,overground,dlr,elizabeth-line,tram&maxResults=8`;
+            const response = await fetch(url, { signal: controller.signal, cache: 'no-store' });
+            if (!response.ok) throw new Error('Starting-point lookup unavailable. Please retry.');
+            const data = await response.json();
+            if (revision !== this._originLookupRevision) return;
+            const candidates = isPostcode
+                ? (data.status === 200 && data.result ? [{ lat: data.result.latitude, lon: data.result.longitude, postcode: data.result.postcode, label: `${data.result.postcode} (postcode centre)` }] : [])
+                : (Array.isArray(data.matches) ? data.matches : []).filter(p => /^[A-Za-z0-9_-]{3,80}$/.test(p.id || '')).map(p => ({ lat: p.lat, lon: p.lon, label: p.name, modes: p.modes }));
+            const valid = candidates.filter(p => JourneyGuidance.validJourneyCoordinates(p) && typeof p.label === 'string').slice(0, 8);
+            target.innerHTML = valid.map((p, i) => `<button type="button" data-origin-choice="${i}"><b>${this.escapeHtml(p.label)}</b><span>${this.escapeHtml(p.postcode ? 'Confirm this postcode centre' : (p.modes || []).join(' / '))}</span></button>`).join('');
+            target.querySelectorAll('[data-origin-choice]').forEach(b => b.addEventListener('click', () => this._selectJourneyOrigin(valid[+b.dataset.originChoice])));
+            this._originStatus(valid.length ? 'Select your exact starting point below.' : 'No matching starting point. Try a full postcode or a more specific station name.');
+        } catch (error) {
+            if (revision === this._originLookupRevision) this._originStatus(controller.signal.aborted ? 'Starting-point search timed out. Please retry.' : error.message);
+        } finally { clearTimeout(timer); }
     }
 
     toggleOrigin() {
@@ -3243,20 +3341,14 @@ class PengeDash {
         this.renderDestinationChips();
     }
 
-    appendJourneyParams(url) {
+    appendJourneyParams(url, now = Date.now()) {
         const sep = () => url.includes('?') ? '&' : '?';
-        if (this.journeyTimeOffset > 0) {
-            // TfL Journey API expects separate date=yyyyMMdd & time=HHmm (local), not ISO dateTime
-            const dt = new Date(Date.now() + this.journeyTimeOffset * 60000);
-            const pad = n => String(n).padStart(2, '0');
-            const date = `${dt.getFullYear()}${pad(dt.getMonth() + 1)}${pad(dt.getDate())}`;
-            const time = `${pad(dt.getHours())}${pad(dt.getMinutes())}`;
-            url += `${sep()}date=${date}&time=${time}&timeIs=Departing`;
-        }
+        const clock = JourneyGuidance.journeyDepartureClock(now, this.journeyTimeOffset);
+        url += `${sep()}date=${clock.date}&time=${clock.time}&timeIs=Departing`;
         if (this.journeyModes) url += `${sep()}mode=${this.journeyModes}`;
         // Bike routes: prefer quieter/safer roads (Easy proficiency avoids busy roads).
         if (this.journeyModes === 'cycle') url += `${sep()}bikeProficiency=Easy`;
-        if (this.journeyPref) url += `${sep()}journeyPreference=${this.journeyPref}`;
+        url += `${sep()}journeyPreference=${this.journeyPref || 'leasttime'}`;
         if (this.journeyStepFree) url += `${sep()}accessibilityPreference=stepFreeToVehicle`;
         return url;
     }
@@ -3275,6 +3367,12 @@ class PengeDash {
     }
 
     async planJourney(destination, opts = {}) {
+        this.hideAutocomplete();
+        const revision = this._journeySearchRevision = (this._journeySearchRevision || 0) + 1;
+        this._journeySearchController?.abort();
+        const controller = this._journeySearchController = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 25000);
+        const current = () => revision === this._journeySearchRevision;
         const resultsContainer = document.getElementById('journey-results');
         const updateTime = document.getElementById('journey-updated');
         this._hasSearched = true;
@@ -3309,7 +3407,13 @@ class PengeDash {
             if (opts.originPlace) {
                 // Explicit origin (commute boards): use its postcode or coordinates.
                 const o = opts.originPlace;
-                from = o.postcode ? o.postcode.replace(/\s/g, '') : `${o.lat},${o.lon}`;
+                if (!JourneyGuidance.validJourneyCoordinates(o)) throw new Error('Choose a valid starting point.');
+                from = `${o.lat},${o.lon}`;
+            } else if (this.journeyOrigin === 'place' && this.selectedOrigin) {
+                const o = this.selectedOrigin;
+                if (!JourneyGuidance.validJourneyCoordinates(o)) throw new Error('Choose a valid starting point.');
+                from = `${o.lat},${o.lon}`;
+                this._activeOriginLabel = o.label;
             } else {
                 // A GPS fix older than ~2 minutes is stale for routing — re-acquire
                 // before building the URL. The "Finding the best routes…" loading
@@ -3320,6 +3424,10 @@ class PengeDash {
                     const stale = !this.currentLocation || (Date.now() - (this._currentLocationAt || 0)) > 120000;
                     if (stale) await this.getCurrentLocation();
                 }
+                if (!current()) return;
+                if (controller.signal.aborted) throw new Error('Route search timed out. Please retry.');
+                if (!['here', 'home'].includes(this.journeyOrigin)) throw new Error('Select an exact starting point from the search results first.');
+                if (this.journeyOrigin === 'here' && !this.currentLocation) throw new Error('Phone location unavailable. Retry or explicitly choose Home, a station or a postcode.');
                 // Re-read journeyOrigin/currentLocation AFTER the await — the only
                 // safe point to decide what was actually routed from. This is the
                 // single source of truth for both `from` and the result label below,
@@ -3328,17 +3436,16 @@ class PengeDash {
                 if (usingHere) {
                     from = `${this.currentLocation.lat},${this.currentLocation.lon}`;
                 } else {
-                    // Home (either the active origin, or a GPS fallback because the
-                    // fix is denied/unavailable — from-text already says so, never
-                    // a silent swap).
+                    // Home is used only when explicitly selected, never as a GPS fallback.
                     const home = this.savedHome || this.home || CONFIG.LOCATION;
-                    from = home.postcode ? home.postcode.replace(/\s/g, '') : `${home.lat},${home.lon}`;
+                    if (!JourneyGuidance.validJourneyCoordinates(home)) throw new Error('Saved Home is invalid. Choose a station or postcode.');
+                    from = `${home.lat},${home.lon}`;
                 }
                 // Keep the result card's origin label honest against what was
                 // actually routed from, not the (possibly since-changed) flag.
                 const hereIsHome = usingHere && this.currentLocation &&
                     this._isNearHome(this.currentLocation.lat, this.currentLocation.lon);
-                this._activeOriginLabel = usingHere && !hereIsHome ? 'Here' : this.homeLabel();
+                this._activeOriginLabel = usingHere ? (hereIsHome ? 'Phone location near Home' : 'Phone location') : this.homeLabel();
             }
             // Explicit destination place (commute boards) → use coords/postcode, which
             // TfL resolves without disambiguation. Otherwise resolve the typed string.
@@ -3351,7 +3458,8 @@ class PengeDash {
             // station's name matches what was typed, route to its coordinates instead
             // of trusting that disambiguation at all.
             const knownStation = opts.destPlace ? null : this._resolveKnownLocalStation(destination);
-            const to = opts.destPlace
+            const selected = this._selectedDestination?.label === destination ? this._selectedDestination.id : null;
+            const to = opts.destParameter ? encodeURIComponent(opts.destParameter) : selected ? encodeURIComponent(selected) : opts.destPlace
                 ? (opts.destPlace.postcode ? opts.destPlace.postcode.replace(/\s/g, '') : `${opts.destPlace.lat},${opts.destPlace.lon}`)
                 : (knownStation ? `${knownStation.lat},${knownStation.lon}` : encodeURIComponent(destination));
 
@@ -3362,8 +3470,11 @@ class PengeDash {
 
             url = this.appendJourneyParams(url);
 
-            let response = await fetch(url);
+            let response = await fetch(url, { signal: controller.signal, cache: 'no-store' });
+            if (!response.ok && response.status !== 300) throw new Error('Journey provider unavailable. Please retry.');
             let data = await response.json();
+            if (!current()) return;
+            if (controller.signal.aborted) throw new Error('Route search timed out. Please retry.');
 
             // Handle disambiguation - TfL API returns this when destination is ambiguous
             // (e.g., "Victoria" could be multiple places)
@@ -3372,39 +3483,26 @@ class PengeDash {
                 data.toLocationDisambiguation.disambiguationOptions &&
                 data.toLocationDisambiguation.disambiguationOptions.length > 0) {
 
-                // Find the best match - prefer stations over general places
-                const options = data.toLocationDisambiguation.disambiguationOptions;
-                let bestOption = options[0]; // Default to first (highest match quality)
-
-                // Try to find a station match (StopPoint) for better results
-                // Prioritize rail/tube/overground/dlr stations over bus stops
-                const stationMatch = options.find(opt =>
-                    opt.place &&
-                    opt.place.placeType === 'StopPoint' &&
-                    opt.place.modes &&
-                    (opt.place.modes.includes('national-rail') ||
-                     opt.place.modes.includes('tube') ||
-                     opt.place.modes.includes('overground') ||
-                     opt.place.modes.includes('dlr') ||
-                     opt.place.modes.includes('elizabeth-line'))
-                );
-
-                if (stationMatch) {
-                    bestOption = stationMatch;
-                }
-
-                // Make a second request with the resolved destination
-                const resolvedTo = bestOption.parameterValue;
-                let resolvedUrl = `https://api.tfl.gov.uk/Journey/JourneyResults/${from}/to/${encodeURIComponent(resolvedTo)}`;
-                if (CONFIG.TFL_APP_KEY) {
-                    resolvedUrl += `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}`;
-                }
-                resolvedUrl = this.appendJourneyParams(resolvedUrl);
-
-                response = await fetch(resolvedUrl);
-                data = await response.json();
+                const stationScore = o => o.place?.placeType === 'StopPoint' && (o.place.modes || []).some(m => ['tube', 'national-rail', 'overground', 'dlr', 'elizabeth-line', 'tram'].includes(m)) ? 1 : 0;
+                const options = data.toLocationDisambiguation.disambiguationOptions.filter(o => typeof o.parameterValue === 'string' && o.parameterValue.length <= 200)
+                    .sort((a, b) => stationScore(b) - stationScore(a)).slice(0, 10);
+                resultsContainer.classList.remove('jp-loading-overlay');
+                resultsContainer.innerHTML = '<h3>Which destination?</h3><p class="origin-note">Choose the exact place. We will not guess the first match.</p><div class="origin-candidates">' + options.map((o, i) => `<button type="button" data-destination-choice="${i}">${this.escapeHtml(o.place?.commonName || o.parameterValue)}</button>`).join('') + '</div>';
+                resultsContainer.querySelectorAll('[data-destination-choice]').forEach(b => b.addEventListener('click', () => {
+                    const option = options[+b.dataset.destinationChoice];
+                    const label = option.place?.commonName || destination;
+                    document.getElementById('destination-input').value = label;
+                    this.planJourney(label, { ...opts, destParameter: option.parameterValue });
+                }));
+                updateTime.textContent = 'Destination needs confirmation';
+                return;
             }
 
+            if (Array.isArray(data.journeys)) data.journeys = data.journeys.slice(0, 100).filter(j => {
+                const departure = JourneyGuidance.tflJourneyInstant(j?.startDateTime);
+                const arrival = JourneyGuidance.tflJourneyInstant(j?.arrivalDateTime);
+                return Number.isFinite(departure) && departure >= Date.now() - 1000 && Number.isFinite(arrival) && arrival > departure;
+            });
             if (data.journeys && data.journeys.length > 0) {
                 this.displayRouteOptions(data.journeys, destination);
                 updateTime.textContent = this.getTimeAgo(new Date());
@@ -3425,6 +3523,7 @@ class PengeDash {
                 updateTime.textContent = 'No route found';
             }
         } catch (error) {
+            if (!current()) return;
             console.error('Journey planner error:', error);
             if (hadResults) {
                 resultsContainer.classList.remove('jp-loading-overlay');
@@ -3434,12 +3533,12 @@ class PengeDash {
             } else {
                 resultsContainer.innerHTML = `
                     <div class="journey-error">
-                        😵 Something went wrong. Try again?
+                        ${this.escapeHtml(controller.signal.aborted ? 'Route search timed out. Please retry.' : (error.message || 'Could not find routes. Please retry.'))}
                     </div>
                 `;
                 updateTime.textContent = 'Error';
             }
-        }
+        } finally { clearTimeout(timer); }
     }
 
     displayRouteOptions(journeys, destination, opts = {}) {
@@ -3456,7 +3555,7 @@ class PengeDash {
         this._resultSetId = opts.fromCache && Number.isInteger(opts.resultSetId)
             ? opts.resultSetId : (this._resultSetId || 0) + 1;
         if (!opts.fromCache) this.saveFavouriteJourney(destination);
-        this._persistJourneyState();
+        if (!opts.fromCache) this._persistJourneyState();
 
         // Tagging: fastest / cheapest / least-walking
         const durations = journeys.map(j => j.duration);
@@ -3809,54 +3908,79 @@ class PengeDash {
         const content = document.getElementById('journey-detail-content');
         if (!content) return;
         this._clearJourneyDetailRefresh();
+        this._detailMapObserver?.disconnect();
+        if (this._detailMap) { this._detailMap.remove(); this._detailMap = null; }
         this.drawJourneyRoute(journey, false);
 
         const atHome = this.journeyOrigin === 'here' && this.currentLocation &&
             this._isNearHome(this.currentLocation.lat, this.currentLocation.lon);
         const fromLabel = this._activeOriginLabel || (this.journeyOrigin === 'here' && !atHome ? 'Here' : (this.home.label || 'Home'));
-        const dep = new Date(journey.startDateTime);
-        const arr = new Date(journey.arrivalDateTime);
-        const arrStr = arr.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        const overview = JourneyGuidance.journeyOverview(journey);
+        const londonTime = value => Number.isFinite(value) ? new Date(value).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' }) : 'Unavailable';
+        const arrStr = londonTime(overview.arrival);
+        const travelDate = Number.isFinite(overview.departure) ? new Date(overview.departure).toLocaleDateString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short' }) : 'Date unavailable';
         const status = this.routeStatus(journey);
         const fare = (journey.fare && journey.fare.totalCost != null) ? `£${(journey.fare.totalCost / 100).toFixed(2)}` : '—';
         const legs = journey.legs || [];
-        const walkTotal = legs.filter(l => l.mode?.id === 'walking').reduce((s, l) => s + (l.duration || 0), 0);
-        const serviceCount = legs.filter(l => !['walking', 'cycle'].includes(l.mode?.id)).length;
+        const walkTotal = overview.walking;
+        const serviceCount = overview.services;
+        const distance = overview.walkingDistance === null ? 'Unavailable' : overview.walkingDistance >= 1000 ? `${(overview.walkingDistance / 1000).toFixed(1)} km` : `${Math.round(overview.walkingDistance)} m`;
 
         const guidance = this._buildJourneyGuidance(legs, destination);
         const steps = this._renderGuidedJourney(guidance, destination);
 
         const insights = [];
-        const haveLineData = Object.keys(this.lineStatusData || {}).length > 0;
         if (status.cls !== 'ok') insights.push(`<div class="jd-insight" style="background:var(--amber-soft);color:var(--amber)">⚠️ <span class="jd-i-body"><b>${status.label}</b> on part of this route.</span></div>`);
-        else if (haveLineData) insights.push(`<div class="jd-insight ok">🛡️ <span class="jd-i-body"><b>Low disruption</b> — no major issues on your route.</span></div>`);
         if (this.currentWeather && this.currentWeather.rainChance >= 50 && walkTotal >= 3) {
             insights.push(`<div class="jd-insight info">🌧️ <span class="jd-i-body"><b>Rain likely</b> — ${this.currentWeather.rainChance}% chance, allow extra time walking.</span></div>`);
         }
 
         content.innerHTML = `
             <div class="jd-summary">
+                <div class="jd-eyebrow">YOUR ROUTE <span>Planned itinerary</span></div>
                 <div class="jd-route">
                     <span class="jd-od">${this.escapeHtml(fromLabel)} → ${this.escapeHtml(destination)}</span>
-                    ${status.label ? `<span class="route-status ${status.cls}">${status.label}</span>` : ''}
+                    ${status.label ? `<span class="route-status ${status.cls}">${this.escapeHtml(status.label)}</span>` : ''}
                 </div>
                 <div class="jd-big">
-                    <span class="jd-total">${journey.duration}<span class="u"> min</span></span>
-                    <span class="jd-arrive">Arrive<b>${arrStr}</b></span>
+                    <span class="jd-total">${overview.duration ?? '—'}<span class="u"> min</span></span>
+                    <span class="jd-arrive">Planned arrival<b>${arrStr}</b></span>
+                    <span class="jd-arrive">Walk distance<b>${distance}</b></span>
                 </div>
                 <div class="jd-foot">
-                    <span>💷 ${fare}</span><span>🚶 ${walkTotal} min walk</span><span>🚉 ${serviceCount} service${serviceCount === 1 ? '' : 's'}</span>
+                    <span>${travelDate} · ${londonTime(overview.departure)} London time</span>
+                    <span>Fare ${fare}</span><span>${walkTotal === null ? 'Walking time unavailable' : `${walkTotal} min walk`}</span><span>${serviceCount} service${serviceCount === 1 ? '' : 's'}</span>
                 </div>
             </div>
+            ${insights.join('')}
+            <div class="jd-view-switch" aria-label="Journey view">
+                <button type="button" id="jd-view-journey" aria-pressed="true" aria-controls="jd-itinerary">Journey</button>
+                <button type="button" id="jd-view-map" aria-pressed="false" aria-controls="jd-map-panel">Route map</button>
+            </div>
+            <section id="jd-map-panel" class="jd-map-panel" hidden aria-label="Route map">
+                <div id="jd-map" class="jd-map" aria-label="Planned route and numbered stops"></div>
+                <div class="jd-map-footer"><button type="button" id="jd-map-fit">Fit whole route</button><span>Dashed lines: walking or approximate connections. Not vehicle tracking.</span></div>
+                <p id="jd-map-status" role="status" class="origin-note"></p>
+            </section>
+            <section id="jd-itinerary">
             <div class="section-head"><h3>Your journey</h3></div>
-            <p class="jd-flow-hint">Follow each instruction in order. Live departures only appear when they are useful for this journey.</p>
+            <p class="jd-flow-hint">Numbered steps show the planned order, not completed travel. Check the matched live departures below and station displays before boarding.</p>
             <div class="journey-live-announcement" id="journey-live-announcement" role="status" aria-live="polite" aria-atomic="true"></div>
             <div class="timeline journey-guidance">${steps}</div>
-            ${insights.join('')}
+            </section>
             <div class="jd-actions">
                 <button class="jd-act primary" id="jd-start-live">▶ Start journey</button>
                 <button class="jd-act" id="jd-save">★ Save route</button>
             </div>`;
+
+        for (const view of ['journey', 'map']) document.getElementById(`jd-view-${view}`)?.addEventListener('click', () => {
+            const mapView = view === 'map';
+            document.getElementById('jd-map-panel').hidden = !mapView;
+            document.getElementById('jd-itinerary').hidden = mapView;
+            document.getElementById('jd-view-journey').setAttribute('aria-pressed', String(!mapView));
+            document.getElementById('jd-view-map').setAttribute('aria-pressed', String(mapView));
+            if (mapView) this._showJourneyMap(journey);
+        });
 
         const saveBtn = document.getElementById('jd-save');
         if (saveBtn) saveBtn.addEventListener('click', () => {
@@ -3875,6 +3999,43 @@ class PengeDash {
         this._journeyLiveIndex = journeyIndex;   // remembered so "End journey" can rebuild the same Back state
         this.showScreen('journey', { state: { journeyIndex, resultSetId: this._resultSetId, destination } });
         this._activateJourneyDetail(guidance);
+    }
+
+    _showJourneyMap(journey) {
+        const status = document.getElementById('jd-map-status');
+        if (typeof L === 'undefined') { status.textContent = 'Map library unavailable. Your Journey tab still has the complete itinerary.'; return; }
+        if (this._detailMap) { this._detailMapFit?.(); return; }
+        const legs = JourneyGuidance.journeyMapLegs(journey);
+        const points = legs.flatMap(l => l.points);
+        if (!points.length) { status.textContent = 'No usable map geometry was supplied. Follow the Journey tab and station signs.'; return; }
+        const map = this._detailMap = L.map('jd-map', { scrollWheelZoom: false });
+        const tiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap contributors', maxZoom: 19 }).addTo(map);
+        tiles.on('tileerror', () => { if (this._detailMap === map) status.textContent = 'Some map tiles could not load. Route steps remain available in Journey.'; });
+        const bounds = L.latLngBounds(points).pad(0.12);
+        const fit = () => { map.invalidateSize(); map.fitBounds(bounds, { maxZoom: 16 }); };
+        this._detailMapFit = fit;
+        let stop = 0;
+        legs.forEach((leg, index) => {
+            if (!leg.points.length) return;
+            L.polyline(leg.points, { color: leg.mode === 'walking' ? '#638071' : '#1261ed', weight: 5, opacity: .9,
+                dashArray: leg.mode === 'walking' || leg.approximate ? '6 8' : null }).addTo(map);
+            if (!index) {
+                L.marker(leg.points[0], { icon: L.divIcon({ className: 'journey-map-pin start', html: '1', iconSize: [28, 28], iconAnchor: [14, 14] }) })
+                    .addTo(map).bindPopup(`Start: ${this.escapeHtml(this._activeOriginLabel || leg.from)}`);
+                stop = 1;
+            }
+            L.marker(leg.points.at(-1), { icon: L.divIcon({ className: `journey-map-pin${index === legs.length - 1 ? ' finish' : ''}`, html: String(++stop), iconSize: [28, 28], iconAnchor: [14, 14] }) })
+                .addTo(map).bindPopup(`${stop}. ${this.escapeHtml(index === legs.length - 1 ? this._lastDestination || leg.to : leg.to)}`);
+        });
+        status.textContent = legs.some(l => l.approximate) ? 'Some legs use approximate straight-line connections, not street-by-street directions.' : 'Provider route geometry. Walking is dashed. Tap numbered stops for names.';
+        document.getElementById('jd-map-fit').onclick = fit;
+        if (typeof ResizeObserver !== 'undefined') {
+            this._detailMapObserver = new ResizeObserver(() => {
+                if (this._detailMap === map && document.getElementById('jd-map')?.offsetWidth) fit();
+            });
+            this._detailMapObserver.observe(document.getElementById('jd-map'));
+        }
+        fit();
     }
 
     // Trim one journey to exactly what displayRouteOptions, showJourneyDetail,
@@ -3934,6 +4095,8 @@ class PengeDash {
                     resultSetId: this._resultSetId,
                     destination: this._lastDestination,
                     originLabel: this._activeOriginLabel,
+                    originChoice: this.journeyOrigin,
+                    homeSignature: this.savedHome ? this._coordSig(this.savedHome.lat, this.savedHome.lon) : null,
                     maxDuration: this.journeyMaxDuration || 0,
                     ts: Date.now()
                 });
@@ -3952,7 +4115,15 @@ class PengeDash {
             if (!raw) return;
             const data = JSON.parse(raw);
             if (!data || !Array.isArray(data.journeys) || !data.journeys.length) return;
-            if (Date.now() - (data.ts || 0) > 10 * 60000) return; // stale — older than 10 min
+            if (!Number.isFinite(data.ts) || data.ts > Date.now() || Date.now() - data.ts > 10 * 60000) return;
+            // A restored result must not sit under a different "From" selection.
+            // Phone/custom origins need fresh selection after reload, not replayed GPS.
+            if (this.journeyOrigin !== 'home' || data.originChoice !== 'home' || data.originLabel !== this.homeLabel() ||
+                !this.savedHome || data.homeSignature !== this._coordSig(this.savedHome.lat, this.savedHome.lon)) return;
+            if (data.journeys.some(j => {
+                const start = JourneyGuidance.tflJourneyInstant(j.startDateTime);
+                return !Number.isFinite(start) || start < Date.now();
+            })) return;
             this._lastDestination = data.destination;
             this._activeOriginLabel = data.originLabel || null;
             this._hasSearched = true;
@@ -4021,9 +4192,10 @@ class PengeDash {
 
     _departureClock(value) {
         if (/^\d{1,2}:\d{2}$/.test(String(value || ''))) return String(value).padStart(5, '0');
-        const date = value ? new Date(value) : null;
+        const timestamp = globalThis.JourneyGuidance?.tflJourneyInstant(value);
+        const date = Number.isFinite(timestamp) ? new Date(timestamp) : null;
         return date && !Number.isNaN(date.getTime())
-            ? date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : 'Scheduled time unavailable';
+            ? date.toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' }) : 'Scheduled time unavailable';
     }
 
     _renderGuidedJourney(guidance, destination) {
@@ -4066,7 +4238,7 @@ class PengeDash {
                 : `Get off at ${this.escapeHtml(stopName)}`;
             const offLetterSpan = segment.mode === 'bus'
                 ? ` <span class="guided-stop-letter" data-guidance-offletter="${index}"></span>` : '';
-            return `<div class="journey-connector alight${isFinal ? ' journey-final-alight' : ''}"><span class="connector-label">Get off</span><div><b>${headline}${offLetterSpan}</b><span>${isFinal ? 'You have arrived' : this.escapeHtml(time)}.</span></div></div>`;
+            return `<div class="journey-connector alight${isFinal ? ' journey-final-alight' : ''}"><span class="connector-label">Get off</span><div><b>${headline}${offLetterSpan}</b><span>${this.escapeHtml(time)}.</span></div></div>`;
         };
         return segments.map((segment, index) => {
             const transit = this._isTransitSegment(segment);
@@ -4075,7 +4247,8 @@ class PengeDash {
                 const metres = Number(segment.original?.distance);
                 const distance = Number.isFinite(metres) && metres > 0
                     ? ` · ${metres >= 1000 ? `${(metres / 1000).toFixed(1)} km` : `${Math.round(metres)} m`}` : '';
-                return `<div class="guided-step guided-step--walk"><div class="guided-kicker">${action}</div><b>${action} to ${this.escapeHtml(segment.toName || destination)}</b><span>${Math.round(segment.durationMinutes || 0)} min${this.escapeHtml(distance)}</span></div>`;
+                const duration = Number.isFinite(segment.original?.duration) ? `${Math.round(segment.original.duration)} min` : 'Time unavailable';
+                return `<div class="guided-step guided-step--walk"><div class="guided-kicker">${index + 1} · ${action}</div><b>${action} to ${this.escapeHtml(segment.toName || destination)}</b><span>${duration}${this.escapeHtml(distance)}</span></div>`;
             }
             const before = changeBefore(segment, index);
             const lines = (segment.lines || []).length ? segment.lines : [{ id: segment.mode, name: this._modeLabel(segment.mode) }];
@@ -4098,7 +4271,7 @@ class PengeDash {
             const duration = Number.isFinite(+segment.durationMinutes) && +segment.durationMinutes > 0 ? ` · ${Math.round(+segment.durationMinutes)} min` : '';
             return `${before}
                 <article class="guided-step guided-step--ride" data-guidance-index="${index}">
-                    <div class="guided-kicker">Take</div>
+                    <div class="guided-kicker">${index + 1} · Board service</div>
                     <h4>Take ${this.escapeHtml(route)}</h4>
                     <div class="guided-lines">${lineBadges}</div>
                     ${directionLine}
@@ -4689,11 +4862,16 @@ class PengeDash {
     // a missing/failed GPS fix falls back to Home for THIS session without
     // overwriting that persisted choice.
     setJourneyOrigin(origin) {
+        this._originLookupRevision = (this._originLookupRevision || 0) + 1;
+        this._originLookupController?.abort();
+        this._invalidateJourneySearch();
+        this.selectedOrigin = null;
         this.journeyOrigin = origin;
         try { localStorage.setItem('pengedash-journey-origin', origin); } catch (e) { /* ignore */ }
         const fromText = document.getElementById('from-text');
         if (origin === 'here') {
             if (fromText) fromText.textContent = 'Locating…';
+            this._originStatus('Getting a fresh phone location. We will not substitute Home if this fails.');
             this.getCurrentLocation();
         } else {
             // Invalidate the held fix so a stale-but-truthy currentLocation can't
@@ -4701,7 +4879,9 @@ class PengeDash {
             this.currentLocation = null;
             this._currentLocationAt = 0;
             if (fromText) fromText.textContent = this.homeLabel();
+            this._originStatus('Saved Home selected. Postcodes locate the postcode centre, not your doorway.');
         }
+        this._toggleOriginPicker(false);
     }
 
     // Shares ONE in-flight getCurrentPosition() call between the planner
@@ -4730,36 +4910,45 @@ class PengeDash {
     async _fetchCurrentLocation() {
         const fromText = document.getElementById('from-text');
         const setFrom = (t) => { if (fromText && this.journeyOrigin === 'here') fromText.textContent = t; };
+        this.currentLocation = null;
+        this._currentLocationAt = 0;
 
         if (!navigator.geolocation) {
             this._geoUnavailable = true;
-            setFrom(`${this.homeLabel()} — location off, tap to retry`);
+            setFrom('Phone location unavailable');
+            this._originStatus('Phone location unavailable. Choose Home, a station or a postcode.');
             return;
         }
         setFrom('Locating…');
 
         try {
             const position = await this._acquirePosition();
-            this.currentLocation = { lat: position.coords.latitude, lon: position.coords.longitude };
-            this._currentLocationAt = Date.now();
+            if (this.journeyOrigin !== 'here') return;
+            const fix = JourneyGuidance.journeyPhoneFix(position);
+            this.currentLocation = { lat: fix.lat, lon: fix.lon };
+            this._currentLocationAt = fix.timestamp;
             this._geoUnavailable = false;
+            setFrom('Phone location');
+            this._originStatus(`Phone fix accurate to approximately ${Math.ceil(fix.accuracy)} m. Refreshed before routing when older than 2 minutes. No background tracking.`);
             // Routing depends ONLY on the coordinates set above. The label below is
             // best-effort and resolved out of band so a hung TfL lookup can never
             // wedge callers (e.g. planJourney) awaiting this fix.
             if (this._isNearHome(this.currentLocation.lat, this.currentLocation.lon)) {
-                setFrom(`📍 ${this.homeLabel()}`);
+                setFrom(`Phone location near ${this.homeLabel()}`);
                 return;
             }
-            this.reverseGeocode(this.currentLocation)
-                .then(locationName => setFrom(`📍 ${locationName}`))
+            const location = this.currentLocation;
+            this.reverseGeocode(location)
+                .then(locationName => { if (this.currentLocation === location) setFrom(`Phone: ${locationName}`); })
                 .catch(() => { /* label stays as-is; coordinates already usable */ });
         } catch (error) {
             console.error('Geolocation error:', error);
-            // Fall back to Home for this session — never silent: the label says why,
-            // and tapping it (see setupJourneyPlanner's from-text handler) retries.
+            if (this.journeyOrigin !== 'here') return;
             this.currentLocation = null;
+            this._currentLocationAt = 0;
             this._geoUnavailable = true;
-            setFrom(`${this.homeLabel()} — location off, tap to retry`);
+            setFrom('Phone location unavailable');
+            this._originStatus(error.code === 1 ? 'Location permission denied. Enable it in your browser, or explicitly choose Home, a station or a postcode.' : (error.message || 'Location unavailable. Retry or choose a starting point.'));
         }
     }
 

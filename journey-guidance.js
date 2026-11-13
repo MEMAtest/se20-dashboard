@@ -686,14 +686,17 @@
         const url = new URL(`https://api.tfl.gov.uk/Journey/JourneyResults/${encodeURIComponent(from)}/to/${encodeURIComponent(to)}`);
         url.searchParams.set('journeyPreference', 'leasttime');
         url.searchParams.set('mode', tubeOnly ? 'tube,walking' : 'tube,bus,national-rail,overground,dlr,elizabeth-line,tram,walking');
-        const nextMinute = new Date(Math.ceil((now + 1) / 60000) * 60000);
+        const departureClock = journeyDepartureClock(now);
+        for (const [key, value] of Object.entries(departureClock)) url.searchParams.set(key, value);
+        return url.href;
+    }
+
+    function journeyDepartureClock(now = Date.now(), offset = 0) {
+        const nextMinute = new Date(Math.ceil((now + 1) / 60000) * 60000 + Math.max(0, Number(offset) || 0) * 60000);
         const clock = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London',
             year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
             .formatToParts(nextMinute).map(p => [p.type, p.value]));
-        url.searchParams.set('date', `${clock.year}${clock.month}${clock.day}`);
-        url.searchParams.set('time', `${clock.hour}${clock.minute}`);
-        url.searchParams.set('timeIs', 'Departing');
-        return url.href;
+        return { date: `${clock.year}${clock.month}${clock.day}`, time: `${clock.hour}${clock.minute}`, timeIs: 'Departing' };
     }
 
     function rankTubeConnections(data, now = Date.now(), tubeOnly = false) {
@@ -732,7 +735,55 @@
         }).slice(0, 3);
     }
 
+    function validJourneyCoordinates(point) {
+        return !!point && Number.isFinite(point.lat) && Number.isFinite(point.lon) &&
+            point.lat >= -90 && point.lat <= 90 && point.lon >= -180 && point.lon <= 180;
+    }
+
+    function journeyPhoneFix(position, now = Date.now()) {
+        const point = { lat: position?.coords?.latitude, lon: position?.coords?.longitude };
+        const accuracy = position?.coords?.accuracy;
+        const timestamp = position?.timestamp;
+        if (!validJourneyCoordinates(point) || !Number.isFinite(timestamp) || now - timestamp > 120000 || timestamp - now > 10000)
+            throw new Error('Phone location is stale or invalid. Retry, or choose a station or postcode.');
+        if (!Number.isFinite(accuracy) || accuracy < 0 || accuracy > 500)
+            throw new Error('Phone location is too approximate for routing. Retry outside, or choose a station or postcode.');
+        return { ...point, accuracy, timestamp };
+    }
+
+    function journeyOverview(journey) {
+        const legs = Array.isArray(journey?.legs) ? journey.legs : [];
+        const walking = legs.filter(l => l.mode?.id === 'walking');
+        return {
+            // Transit-leg distance values are not reliable enough to sum into a
+            // total. Only show the explicitly labelled walking distance.
+            walkingDistance: walking.length && walking.every(l => Number.isFinite(l.distance) && l.distance >= 0) ? walking.reduce((sum, l) => sum + l.distance, 0) : null,
+            walking: walking.every(l => Number.isFinite(l.duration) && l.duration >= 0) ? walking.reduce((sum, l) => sum + l.duration, 0) : null,
+            arrival: tflJourneyInstant(journey?.arrivalDateTime),
+            departure: tflJourneyInstant(journey?.startDateTime),
+            duration: Number.isFinite(journey?.duration) && journey.duration >= 0 ? journey.duration : null,
+            services: legs.filter(l => !['walking', 'cycle'].includes(l.mode?.id)).length
+        };
+    }
+
+    function journeyMapLegs(journey) {
+        return (Array.isArray(journey?.legs) ? journey.legs : []).slice(0, 100).map(leg => {
+            let points = [];
+            try { points = JSON.parse(leg.path?.lineString || '[]'); } catch (e) { /* use labelled approximate endpoints */ }
+            const valid = p => Array.isArray(p) && p.length === 2 && validJourneyCoordinates({ lat: p[0], lon: p[1] });
+            const approximate = !Array.isArray(points) || points.length < 2 || points.length > 20000 || !points.every(valid);
+            if (approximate) points = [leg.departurePoint, leg.arrivalPoint].filter(validJourneyCoordinates).map(p => [p.lat, p.lon]);
+            return { points: points.length >= 2 ? points : [], approximate, mode: leg.mode?.id || 'unknown',
+                from: leg.departurePoint?.commonName || 'Start', to: leg.arrivalPoint?.commonName || 'Stop' };
+        });
+    }
+
     return Object.freeze({
+        validJourneyCoordinates,
+        journeyPhoneFix,
+        journeyDepartureClock,
+        journeyOverview,
+        journeyMapLegs,
         tflJourneyInstant,
         tubeConnectionUrl,
         rankTubeConnections,

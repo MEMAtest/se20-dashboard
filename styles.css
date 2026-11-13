@@ -177,6 +177,7 @@ input { font-family: inherit; }
 .ri-dot { width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; }
 .ri-dot.from { background: var(--blue); }
 .ri-dot.to { background: var(--red); }
+.ri-caption { color: var(--muted); font-size: 11px; font-weight: 700; flex-shrink: 0; }
 .ri-divider { height: 1px; background: var(--line-strong); margin-left: 21px; }
 .ri-from {
     background: none; border: none; text-align: left; flex: 1;
@@ -205,6 +206,23 @@ input { font-family: inherit; }
 }
 .go-btn:active { transform: scale(0.985); }
 
+[hidden] { display: none !important; }
+.origin-picker { margin-top: 12px; padding: 14px; background: var(--blue-soft); border: 1px solid var(--line); border-radius: 14px; }
+.origin-picker h3 { font-size: 16px; margin-bottom: 10px; }
+.origin-presets { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 10px; }
+.origin-presets button, .origin-search-row button { min-height: 44px; border: 1px solid var(--line-strong); border-radius: 10px; padding: 8px 11px; background: var(--card); color: var(--blue); font: inherit; font-size: 13px; font-weight: 700; }
+.origin-picker label { display: block; font-size: 12px; font-weight: 700; margin: 12px 0 6px; }
+.origin-search-row { display: flex; gap: 6px; }
+.origin-search-row input { min-width: 0; width: 100%; min-height: 44px; border: 1px solid var(--line-strong); border-radius: 10px; padding: 10px; background: var(--card); color: var(--text); font: inherit; font-size: 16px; }
+.origin-candidates { display: grid; gap: 7px; margin-top: 10px; }
+.origin-candidates button { min-height: 48px; text-align: left; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; color: var(--text); background: var(--card); font: inherit; font-size: 14px; overflow-wrap: anywhere; }
+.origin-candidates span { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
+.origin-note, .origin-status { font-size: 12px; line-height: 1.5; color: var(--text-2); margin: 10px 0 0; overflow-wrap: anywhere; }
+.origin-status { border-left: 3px solid var(--blue); padding-left: 10px; }
+.ri-from { min-height: 44px; overflow-wrap: anywhere; }
+.ri-from::after { content: ' ▾'; color: var(--blue); }
+.origin-picker button:focus-visible, .ri-from:focus-visible, .jd-view-switch button:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
+
 /* Autocomplete */
 .autocomplete-dropdown {
     display: none; position: absolute; left: 0; right: 0; top: calc(100% + 6px);
@@ -217,6 +235,7 @@ input { font-family: inherit; }
     padding: 12px 14px; border-bottom: 1px solid var(--line); cursor: pointer;
 }
 .autocomplete-item:last-child { border-bottom: none; }
+.autocomplete-item { width: 100%; background: var(--card); color: var(--text); border-top: 0; border-left: 0; border-right: 0; text-align: left; font: inherit; min-height: 44px; }
 .autocomplete-item:hover { background: var(--card-alt); }
 .ac-name { font-size: 14px; font-weight: 600; }
 .ac-modes { font-size: 13px; }
@@ -583,6 +602,39 @@ input { font-family: inherit; }
 .jd-actions { display: flex; gap: 8px; margin-top: 16px; }
 .jd-act { flex: 1; border: 1px solid var(--line); background: var(--card); border-radius: 12px; padding: 12px; font-weight: 700; font-size: 13px; display: flex; align-items: center; justify-content: center; gap: 6px; }
 .jd-act.primary { background: var(--blue); color: #fff; border-color: var(--blue); }
+
+.jd-summary { background: linear-gradient(125deg, #103969, #075be6); color: #fff; border: 0; padding: 20px; }
+.jd-eyebrow { display: flex; gap: 8px; align-items: center; justify-content: space-between; font-size: 10px; letter-spacing: .12em; font-weight: 800; margin-bottom: 14px; }
+.jd-eyebrow span { letter-spacing: 0; font-weight: 500; padding: 4px 8px; border: 1px solid #ffffff55; border-radius: 20px; }
+.jd-route { gap: 10px; flex-wrap: wrap; }
+.jd-od { font-size: 19px; line-height: 1.35; overflow-wrap: anywhere; }
+.jd-big { display: grid; grid-template-columns: 1.1fr 1fr 1fr; gap: 12px; margin: 18px 0 0; align-items: end; }
+.jd-total { font-size: 42px; line-height: 1; }
+.jd-summary .jd-total .u, .jd-summary .jd-arrive, .jd-summary .jd-foot { color: #dceaff; }
+.jd-summary .jd-arrive b { color: #fff; font-size: 18px; overflow-wrap: anywhere; }
+.jd-summary .jd-foot { gap: 8px 14px; border-color: #ffffff33; }
+.jd-summary .route-status { background: #ffffff1f; color: #fff; border: 1px solid #ffffff44; }
+.jd-view-switch { display: flex; gap: 5px; background: var(--card-alt); border: 1px solid var(--line); padding: 5px; border-radius: 14px; margin: 16px 0; }
+.jd-view-switch button { flex: 1; min-height: 44px; border: 0; border-radius: 10px; background: transparent; color: var(--text-2); font: inherit; font-size: 14px; font-weight: 700; }
+.jd-view-switch button[aria-pressed="true"] { background: var(--blue); color: white; box-shadow: var(--shadow); }
+.jd-map-panel { background: var(--card); border: 1px solid var(--line); border-radius: 18px; overflow: hidden; }
+.jd-map { height: clamp(280px, 48vh, 460px); background: var(--card-alt); z-index: 0; }
+.jd-map-footer { display: flex; align-items: center; gap: 10px; padding: 12px; }
+.jd-map-footer button { flex-shrink: 0; min-height: 44px; border: 1px solid var(--line); border-radius: 10px; background: var(--card-alt); color: var(--blue); padding: 8px; font-weight: 700; }
+.jd-map-footer span { font-size: 11px; line-height: 1.5; color: var(--text-2); }
+.jd-map-panel .origin-note { padding: 0 12px 12px; margin-top: 0; }
+.journey-map-pin { background: #1261ed; border: 3px solid white; border-radius: 50%; color: white; display: flex; justify-content: center; align-items: center; font-weight: 800; box-shadow: 0 2px 6px #0005; }
+.journey-map-pin.start { background: #147e55; }
+.journey-map-pin.finish { background: #d63438; }
+.jd-actions { position: sticky; bottom: calc(82px + env(safe-area-inset-bottom, 0px)); z-index: 2; padding: 10px 0; background: var(--bg); }
+.jd-act { min-height: 50px; }
+@media (max-width: 370px) {
+    .jd-summary { padding: 15px; }
+    .jd-big { gap: 8px; }
+    .jd-total { font-size: 34px; }
+    .jd-arrive { font-size: 11px; }
+    .jd-summary .jd-arrive b { font-size: 15px; }
+}
 
 /* ---------- Journey detail: instruction-led travel flow ---------- */
 .jd-flow-hint { margin: -4px 2px 12px; color: var(--muted); font-size: 12.5px; }
