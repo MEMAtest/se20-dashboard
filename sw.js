@@ -1,23 +1,30 @@
 // Penge Dash SE20 - Service Worker
-const CACHE_VERSION = 'v49';
-importScripts('/transit-data.js?v=20261113a');
+const CACHE_VERSION = 'v50';
+importScripts('/transit-data.js?v=20261113b');
 const TILE_CACHE = 'penge-dash-tiles-v1';
 const MAX_TILES = 300;
 const CACHE_NAME = `penge-dash-${CACHE_VERSION}`;
 const STATIC_ASSETS = [
     '/',
     '/index.html',
-    '/styles.css?v=20261113a',
-    '/app.js?v=20261113a',
-    '/journey-guidance.js?v=20261113a',
-    '/transit-data.js?v=20261113a',
-    '/network-map.js?v=20261113a',
-    '/config.js?v=20261113a',
+    '/styles.css?v=20261113b',
+    '/app.js?v=20261113b',
+    '/journey-guidance.js?v=20261113b',
+    '/transit-data.js?v=20261113b',
+    '/network-map.js?v=20261113b',
+    '/config.js?v=20261113b',
     '/manifest.json',
     '/icon-192.png',
     '/icon-512.png',
     '/icon.svg'
 ];
+
+// A cached no-CORS response cannot satisfy a later CORS/SRI request for
+// Leaflet or a font. Cache keys alone do not distinguish those request modes.
+async function compatibleCacheMatch(request) {
+    const cached = await caches.match(request);
+    return cached?.type === 'opaque' && request.mode !== 'no-cors' ? null : cached;
+}
 
 // Install - cache static assets
 self.addEventListener('install', event => {
@@ -58,7 +65,7 @@ self.addEventListener('fetch', event => {
         event.respondWith(
             caches.open(TILE_CACHE).then(async cache => {
                 const cached = await cache.match(event.request);
-                if (cached) return cached;
+                if (cached && (cached.type !== 'opaque' || event.request.mode === 'no-cors')) return cached;
                 try {
                     const response = await fetch(event.request);
                     cache.put(event.request, response.clone());
@@ -78,7 +85,7 @@ self.addEventListener('fetch', event => {
     // Leaflet from unpkg — cache-first (versioned, immutable)
     if (url.hostname.includes('unpkg.com')) {
         event.respondWith(
-            caches.match(event.request).then(cached => {
+            compatibleCacheMatch(event.request).then(cached => {
                 if (cached) return cached;
                 return fetch(event.request).then(response => {
                     const clone = response.clone();
@@ -117,7 +124,7 @@ self.addEventListener('fetch', event => {
                 })
                 .catch(async () => {
                     // Network failed, try cache
-                    const cached = await caches.match(event.request);
+                    const cached = await compatibleCacheMatch(event.request);
                     if (cached) {
                         console.log('[SW] Serving cached API response:', event.request.url);
                         return cached;
@@ -140,7 +147,7 @@ self.addEventListener('fetch', event => {
     if (url.hostname.includes('fonts.googleapis.com') ||
         url.hostname.includes('fonts.gstatic.com')) {
         event.respondWith(
-            caches.match(event.request).then(cached => {
+            compatibleCacheMatch(event.request).then(cached => {
                 const fetching = fetch(event.request).then(response => {
                     const clone = response.clone();
                     caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
@@ -155,7 +162,7 @@ self.addEventListener('fetch', event => {
 
     // For static assets, use cache-first with network fallback
     event.respondWith(
-        caches.match(event.request)
+        compatibleCacheMatch(event.request)
             .then(cached => {
                 if (cached) {
                     // Return cached, but also fetch in background to update
