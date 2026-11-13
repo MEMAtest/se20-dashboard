@@ -16,7 +16,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
           integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
-    <link rel="stylesheet" href="styles.css?v=20261111d">
+    <link rel="stylesheet" href="styles.css?v=20261113a">
 </head>
 <body>
     <div class="app" id="app">
@@ -143,6 +143,10 @@
                     <div class="empty-hint">Search a destination to see the fastest routes, fares and live times.</div>
                 </div>
 
+                <button class="link-card" id="plan-tube-link">
+                    <span class="lc-text"><strong>Quickest Tube connection</strong><br><span class="muted">From here, Home or another station. Includes walking and changes.</span></span>
+                    <span class="lc-chevron">&#8250;</span>
+                </button>
                 <button class="link-card" id="plan-alerts-link">
                     <span class="lc-icon green">🕐</span>
                     <span class="lc-text"><strong>Live updates</strong><br><span class="muted">Real-time delays & disruptions</span></span>
@@ -231,6 +235,21 @@
                 </div>
                 <div id="network-map-panel" role="tabpanel" aria-labelledby="network-map-tab" hidden>
                     <h2>London Tube map</h2>
+                    <form id="tube-route-form" class="tube-route-form" aria-label="Quickest Tube connection">
+                        <h3>Quickest Tube connection</h3>
+                        <div class="tube-route-fields">
+                            <label for="tube-route-from">From</label>
+                            <select id="tube-route-from" disabled><option value="here">Phone location</option><option value="home">Saved Home</option></select>
+                            <label for="tube-route-to">To Tube station</label>
+                            <select id="tube-route-to" disabled><option value="">Loading stations...</option></select>
+                        </div>
+                        <label class="tube-route-option"><input id="tube-route-tube-only" type="checkbox"> Tube + walking only</label>
+                        <p class="map-source">Unticked: allow bus, tram and rail connections into the Tube. Times include walking, changes and the wait before departure. Phone coordinates are sent to TfL only for this search; no location history is saved.</p>
+                        <button id="tube-route-submit" type="submit" disabled>Find quickest connection</button>
+                        <p id="tube-route-status" class="map-source" role="status" aria-live="polite">Choose your origin and destination, then find the quickest connection.</p>
+                        <a href="https://tfl.gov.uk/plan-a-journey/" target="_blank" rel="noopener noreferrer">Check with TfL Journey Planner</a>
+                    </form>
+                    <div id="tube-route-results" aria-label="Tube connection options"></div>
                     <p class="map-source">Zoom and pan the geographic Tube network; tap a station for arrivals. This is a network reference, not live service status. For the familiar schematic, open TfL's official PDF below.</p>
                     <div class="map-links">
                         <a href="https://content.tfl.gov.uk/standard-tube-map.pdf" target="_blank" rel="noopener noreferrer">Open full-size Tube map (PDF)</a>
@@ -357,10 +376,10 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
             integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-    <script src="config.js?v=20261111d"></script>
-    <script src="journey-guidance.js?v=20261111d"></script>
-    <script src="transit-data.js?v=20261111d"></script>
-    <script src="network-map.js?v=20261111d"></script>
-    <script src="app.js?v=20261111d"></script>
+    <script src="config.js?v=20261113a"></script>
+    <script src="journey-guidance.js?v=20261113a"></script>
+    <script src="transit-data.js?v=20261113a"></script>
+    <script src="network-map.js?v=20261113a"></script>
+    <script src="app.js?v=20261113a"></script>
 </body>
 </html>

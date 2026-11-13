@@ -32,7 +32,7 @@
         }
         return paths;
     }
-    async function mount({ element, status, stationSelect, leaflet, onStation }) {
+    async function mount({ element, status, stationSelect, routeFromSelect, routeToSelect, onStations, onRouteTarget, leaflet, onStation }) {
         if (!leaflet) { status.textContent = 'The map library is unavailable. Open the official Tube map above.'; return null; }
         const map = leaflet.map(element).setView([51.51, -0.12], 11);
         leaflet.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -63,8 +63,29 @@
             const button = document.createElement('button'); button.type = 'button'; button.textContent = 'Show live arrivals';
             button.addEventListener('click', () => onStation(station));
             content.append(label, document.createElement('br'), button);
+            if (onRouteTarget) {
+                const route = document.createElement('button'); route.type = 'button'; route.textContent = 'Quickest route here';
+                route.addEventListener('click', () => onRouteTarget(station));
+                content.append(document.createElement('br'), route);
+            }
             leaflet.circleMarker([station.lat, station.lon], { radius: 4, color: '#17233b', weight: 1, fillColor: '#fff', fillOpacity: 1 }).addTo(map).bindPopup(content);
         }
+        const sortedStations = [...stations.values()].sort((a, b) => a.name.localeCompare(b.name));
+        for (const select of [routeFromSelect, routeToSelect]) {
+            if (!select) continue;
+            select.replaceChildren();
+            const seeds = select === routeFromSelect
+                ? [['here', 'Phone location'], ['home', 'Saved Home']]
+                : [['', 'Choose destination station']];
+            for (const [value, text] of seeds) {
+                const option = document.createElement('option'); option.value = value; option.textContent = text; select.append(option);
+            }
+            for (const station of sortedStations) {
+                const option = document.createElement('option'); option.value = station.id; option.textContent = station.name; select.append(option);
+            }
+            select.disabled = stations.size === 0;
+        }
+        if (onStations) onStations(sortedStations);
         if (stationSelect) {
             stationSelect.replaceChildren();
             const prompt = document.createElement('option'); prompt.value = ''; prompt.textContent = 'Choose a station for live arrivals';
