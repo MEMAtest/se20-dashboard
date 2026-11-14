@@ -27,6 +27,24 @@ test('Home/phone endpoints use exact coordinates and mixed-mode access by defaul
     for (const mode of ['bus', 'tram', 'national-rail', 'tube', 'walking']) assert.ok(url.searchParams.get('mode').split(',').includes(mode));
 });
 
+test('parent hubs use their verified child routing IDs rather than ambiguous HUB text', () => {
+    const from = { ...station('HUBLBG'), routingId: '940GZZLULNB' };
+    const to = { ...station('HUBVIC'), routingId: '940GZZLUVIC' };
+    const url = new URL(G.tubeConnectionUrl(from, to, true, now));
+    assert.match(url.pathname, /940GZZLULNB\/to\/940GZZLUVIC$/); assert.doesNotMatch(url.pathname, /HUB/);
+});
+
+test('a hub without a verified child uses selected coordinates, never guessed disambiguation', () => {
+    const url = new URL(G.tubeConnectionUrl({ ...station('HUBLBG'), lat: 51.505, lon: -.087 }, station('940GZZLUVIC'), true, now));
+    assert.match(decodeURIComponent(url.pathname), /51\.505,-0\.087\/to\/940GZZLUVIC$/);
+    assert.throws(() => G.tubeConnectionUrl({ id: 'HUBLBG' }, station('940GZZLUVIC')), /valid origin/);
+});
+
+test('an exact rail origin is allowed for a Tube connection with feeder legs', () => {
+    const url = new URL(G.tubeConnectionUrl({ ...station('910GANERLEY'), modes: ['overground', 'national-rail'] }, station('940GZZLUVIC'), false, now));
+    assert.match(url.pathname, /910GANERLEY\/to\/940GZZLUVIC$/);
+});
+
 test('invalid/same station and invalid coordinates do not create a provider request', () => {
     const dest = station('940GZZLUOXC');
     for (const origin of [dest, { id: 'https://evil.example' }, { lat: NaN, lon: 0 }, { lat: 100, lon: 0 }, null]) {
@@ -79,12 +97,14 @@ function appHarness(fetcher) {
     const nodes = {};
     for (const id of ['tube-route-form', 'tube-route-status', 'tube-route-results', 'tube-route-submit', 'tube-route-from', 'tube-route-to', 'tube-route-tube-only']) {
         nodes[id] = { value: '', checked: false, disabled: false, textContent: '', innerHTML: '', events: {},
+            children: [], querySelector: () => null, append(node) { this.children.push(node); },
+            dispatchEvent(event) { this.events[event.type]?.(event); },
             replaceChildren() { this.innerHTML = ''; }, setAttribute(k, v) { this[k] = v; }, addEventListener(k, fn) { this.events[k] = fn; } };
     }
     const timers = new Map(); let count = 0;
-    const context = { console, Date, Map, URL, AbortController, JourneyGuidance: G, CONFIG: {}, navigator: {},
+    const context = { console, Date, Map, URL, AbortController, Event, JourneyGuidance: G, CONFIG: {}, navigator: {},
         setTimeout: fn => { const id = ++count; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id),
-        document: { addEventListener() {}, getElementById: id => nodes[id] }, fetch: fetcher };
+        document: { addEventListener() {}, getElementById: id => nodes[id], createElement: () => ({}) }, fetch: fetcher };
     vm.runInNewContext(fs.readFileSync(require.resolve('../app.js'), 'utf8') + '\nthis.App = PengeDash;', context);
     const app = Object.create(context.App.prototype);
     app._tubeStations = new Map([['940GZZLUOXC', station('940GZZLUOXC')], ['940GZZLUKSX', station('940GZZLUKSX')]]);
@@ -114,6 +134,33 @@ test('controller reports provider errors without reusing old route cards', async
     const { app, nodes } = appHarness(async () => ({ ok: false }));
     nodes['tube-route-results'].innerHTML = 'old route'; await app.findTubeConnection();
     assert.equal(nodes['tube-route-results'].innerHTML, ''); assert.match(nodes['tube-route-status'].textContent, /unavailable/);
+});
+
+test('a provider HTTP 300 stays an explicit endpoint error and never auto-selects a suggested place', async () => {
+    const { app, nodes } = appHarness(async () => ({ ok: false, status: 300 }));
+    await app.findTubeConnection();
+    assert.match(nodes['tube-route-status'].textContent, /no suggested place has been substituted/);
+    assert.equal(nodes['tube-route-results'].innerHTML, '');
+});
+
+test('Plan handoff preserves an explicit Anerley origin and exact Victoria destination after network loading', () => {
+    const { app, nodes } = appHarness();
+    const selection = { originChoice: 'place', origin: { lat: 51.412153, lon: -.065886, label: 'Anerley Rail Station' }, destination: { id: '1000248', label: 'Victoria' } };
+    app._tubePrefill = selection; app._applyTubePrefill(); assert.equal(app._tubePrefill, selection);
+    app._tubeOrigins = new Map([['910GANERLEY', { ...station('910GANERLEY'), name: 'Anerley' }]]);
+    app._tubeStations = new Map([['HUBVIC', { ...station('HUBVIC'), routingId: '940GZZLUVIC', icsId: '1000248' }]]);
+    nodes['tube-route-results'].innerHTML = 'old results'; app._applyTubePrefill();
+    assert.equal(nodes['tube-route-from'].value, 'selected-origin'); assert.equal(nodes['tube-route-to'].value, 'HUBVIC');
+    assert.equal(app._tubeCustomOrigin.name, 'Anerley Rail Station'); assert.equal(app._tubeCustomOrigin.lat, 51.412153);
+    assert.equal(nodes['tube-route-results'].innerHTML, ''); assert.equal(app._tubePrefill, null);
+});
+
+test('rail-origin controller uses the chosen rail station instead of substituting phone or Home', async () => {
+    let requested;
+    const { app, nodes } = appHarness(async url => { requested = url; return { ok: true, json: async () => ({ journeys: [] }) }; });
+    app._tubeOrigins = new Map([['910GANERLEY', { ...station('910GANERLEY'), name: 'Anerley' }]]);
+    nodes['tube-route-from'].value = '910GANERLEY'; await app.findTubeConnection();
+    assert.match(new URL(requested).pathname, /910GANERLEY\/to\/940GZZLUKSX$/);
 });
 
 test('controller renders a fresh route safely and expires it instead of replaying it later', async () => {
