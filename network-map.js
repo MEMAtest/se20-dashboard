@@ -29,6 +29,8 @@
         const served = Array.isArray(station.modes) ? [...new Set(station.modes.filter(m => modes[m]))] : [];
         if (!served.some(m => m !== 'bus')) return null;
         return { id: station.id, name: station.name || station.commonName, lat: station.lat, lon: station.lon, modes: served,
+            routingId: /^(?:940G|910G)[A-Za-z0-9]+$/.test(station.routingId || station.id) ? station.routingId || station.id : null,
+            icsId: /^\d{1,12}$/.test(String(station.icsId || '')) ? String(station.icsId) : null,
             lineIds: (Array.isArray(station.lines) ? station.lines : []).map(l => l.id).filter(safeId).slice(0, 60) };
     }
     function lineMode(line) {
@@ -191,7 +193,9 @@
                 const prior = stations.get(id);
                 if (!prior && stations.size >= 1500) throw new Error('Schematic station limit exceeded.');
                 stations.set(id, { ...valid, id, lat: prior?.lat ?? valid.lat, lon: prior?.lon ?? valid.lon,
+                    icsId: prior?.icsId || valid.icsId,
                     name: prior?.name || valid.name.replace(/ (Underground|Rail|DLR) Station$| Tram Stop$/i, '').replace(' & St Pancras International', ' St Pancras'),
+                    routingId: /^940G/.test(valid.routingId || '') && !/^940G/.test(prior?.routingId || '') ? valid.routingId : prior?.routingId || valid.routingId,
                     modes: [...new Set([...(prior?.modes || []), ...valid.modes])],
                     lineIds: [...new Set([...(prior?.lineIds || []), lineId])] });
             }
@@ -316,7 +320,7 @@
             for (const [value, text] of seeds) {
                 const option = document.createElement('option'); option.value = value; option.textContent = text; select.append(option);
             }
-            for (const station of tubeStations) {
+            for (const station of select === routeFromSelect ? sortedStations : tubeStations) {
                 const option = document.createElement('option'); option.value = station.id; option.textContent = station.name; select.append(option);
             }
             select.disabled = tubeStations.length === 0;

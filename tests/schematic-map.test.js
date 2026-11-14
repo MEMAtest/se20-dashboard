@@ -22,6 +22,7 @@ test('child station IDs resolve to the actual TfL parent without dropping interc
     const scene = N.schematicLayout([dataset(), dataset('northern', [aChild.id, c.id])]);
     assert.equal(scene.stations.has(aChild.id), false);
     assert.deepEqual(scene.stations.get(a.id).lineIds, ['central', 'northern']);
+    assert.equal(scene.stations.get(a.id).routingId, aChild.id);
     assert.equal(scene.edges.filter(e => e.a.id === a.id).length, 2);
 });
 

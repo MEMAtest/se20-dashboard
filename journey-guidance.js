@@ -675,12 +675,14 @@
 
     function tubeConnectionUrl(origin, destination, tubeOnly = false, now = Date.now()) {
         const endpoint = place => {
-            if (place && /^(?:940G|HUB)[A-Za-z0-9]+$/.test(place.id || '')) return place.id;
+            if (place && /^(?:940G|910G)[A-Za-z0-9]+$/.test(place.routingId || '')) return place.routingId;
+            if (place && /^(?:940G|910G)[A-Za-z0-9]+$/.test(place.id || '')) return place.id;
             if (place && Number.isFinite(place.lat) && Number.isFinite(place.lon)
                 && Math.abs(place.lat) <= 90 && Math.abs(place.lon) <= 180) return `${place.lat},${place.lon}`;
             throw new Error('Select a valid origin and destination.');
         };
         if (!destination || !/^(?:940G|HUB)[A-Za-z0-9]+$/.test(destination.id || '')) throw new Error('Choose a Tube destination.');
+        if (origin?.id && origin.id === destination.id) throw new Error('You have selected the same station. Choose another destination.');
         const from = endpoint(origin), to = endpoint(destination);
         if (from === to) throw new Error('You have selected the same station. Choose another destination.');
         const url = new URL(`https://api.tfl.gov.uk/Journey/JourneyResults/${encodeURIComponent(from)}/to/${encodeURIComponent(to)}`);

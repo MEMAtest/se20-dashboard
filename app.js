@@ -263,9 +263,15 @@ class PengeDash {
         go('location-chip', 'saved');
         go('plan-alerts-link', 'alerts');
         document.getElementById('plan-tube-link')?.addEventListener('click', () => {
+            this._tubePrefill = {
+                originChoice: this.journeyOrigin,
+                origin: this.selectedOrigin ? { ...this.selectedOrigin } : null,
+                destination: this._selectedDestination?.label === document.getElementById('destination-input').value ? { ...this._selectedDestination } : null
+            };
             this.showScreen('lines');
             document.getElementById('network-map-tab')?.click();
             const details = document.getElementById('tube-planner-details'); if (details) details.open = true;
+            this._applyTubePrefill();
             document.getElementById('tube-route-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
         go('nearby-alerts-link', 'alerts');
@@ -851,6 +857,7 @@ class PengeDash {
                         multiMode: true,
                         onNetworkStations: stations => {
                             this._stationHubRefs = this._stationHubRefs || new Map();
+                            this._tubeOrigins = new Map(stations.map(station => [station.id, station]));
                             stations.forEach(station => this._stationHubRefs.set(station.id, station));
                         },
                         routeFromSelect: document.getElementById('tube-route-from'),
@@ -870,7 +877,7 @@ class PengeDash {
                         status: document.getElementById('tube-map-status'), leaflet: window.L,
                         onStation: station => this.openStationHub(station),
                         onPlanTarget: station => this._planToNetworkStation(station)
-                    }).then(map => { this._tubeMap = map; this._applyNetworkMapFilter(); }).catch(() => {
+                    }).then(map => { this._tubeMap = map; this._applyNetworkMapFilter(); this._applyTubePrefill(); }).catch(() => {
                         document.getElementById('tube-map-status').textContent = 'Map unavailable. Open the official Tube map above.';
                     });
                 } else this._tubeMap?.invalidateSize();
@@ -1078,6 +1085,29 @@ class PengeDash {
         form.addEventListener('submit', event => { event.preventDefault(); this.findTubeConnection(); });
     }
 
+    _applyTubePrefill() {
+        const selection = this._tubePrefill;
+        if (!selection) return;
+        if (!this._tubeStations?.size || !this._tubeOrigins?.size) {
+            const status = document.getElementById('tube-route-status');
+            if (status) status.textContent = `Loading station connections for ${selection.origin?.label || (selection.originChoice === 'home' ? 'Saved Home' : 'selected starting point')} to ${selection.destination?.label || 'selected destination'}...`;
+            return;
+        }
+        const from = document.getElementById('tube-route-from'), to = document.getElementById('tube-route-to');
+        from.querySelector('[value="selected-origin"]')?.remove();
+        this._tubeCustomOrigin = null;
+        if (selection.originChoice === 'place' && JourneyGuidance.validJourneyCoordinates(selection.origin)) {
+            this._tubeCustomOrigin = { ...selection.origin, name: selection.origin.label || 'Selected starting point' };
+            const option = document.createElement('option'); option.value = 'selected-origin'; option.textContent = this._tubeCustomOrigin.name;
+            from.append(option); from.value = option.value;
+        } else from.value = ['here', 'home'].includes(selection.originChoice) ? selection.originChoice : '';
+        const destination = selection.destination;
+        const chosen = destination && [...this._tubeStations.values()].find(s => s.id === destination.id || s.routingId === destination.id || s.icsId === destination.id);
+        to.value = chosen?.id || '';
+        document.getElementById('tube-route-form').dispatchEvent(new Event('change'));
+        this._tubePrefill = null;
+    }
+
     async findTubeConnection() {
         const status = document.getElementById('tube-route-status');
         const results = document.getElementById('tube-route-results');
@@ -1105,7 +1135,8 @@ class PengeDash {
             } else if (selected === 'home') {
                 origin = this.savedHome || CONFIG.DEFAULT_HOME; originLabel = this.homeLabel();
             } else {
-                origin = this._tubeStations?.get(selected); originLabel = origin?.name;
+                origin = selected === 'selected-origin' ? this._tubeCustomOrigin : this._tubeOrigins?.get(selected) || this._tubeStations?.get(selected);
+                originLabel = origin?.name;
             }
             if (generation !== this._tubeRouteGeneration) return;
             if (controller.signal.aborted) throw new Error('Route request timed out.');
@@ -1113,6 +1144,7 @@ class PengeDash {
             const url = JourneyGuidance.tubeConnectionUrl(origin, destination, tubeOnly);
             status.textContent = 'Checking TfL route estimates...';
             const response = await fetch(url, { cache: 'no-store', signal: controller.signal });
+            if (response.status === 300) throw new Error('TfL could not identify the selected endpoints exactly. Choose the exact stations again; no suggested place has been substituted.');
             if (!response.ok) throw new Error('TfL routing is unavailable. Please retry or use TfL Journey Planner.');
             const data = await response.json();
             const checkedAt = Date.now();
