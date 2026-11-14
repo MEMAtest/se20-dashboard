@@ -93,7 +93,7 @@ test('Tube map is a separate labelled panel with an official external fallback',
     const html = fs.readFileSync(require.resolve('../index.html'), 'utf8');
     assert.match(html, /role="tab"[^>]+aria-controls="network-map-panel"/);
     assert.match(html, /id="network-map-panel"[^>]+hidden/);
-    assert.match(html, /aria-label="Zoomable TfL rail network map"/);
+    assert.match(html, /aria-label="Zoomable schematic Tube and rail map"/);
     assert.match(html, /https:\/\/content.tfl.gov.uk\/standard-tube-map.pdf/);
     assert.match(html, /not live service status/);
 });
@@ -111,11 +111,11 @@ test('network map mounts once, preserves the list, and opens the selected statio
             getAttribute(k) { return k === 'aria-controls' ? this.id.replace('-tab', '-panel') : this.attributes[k]; },
             addEventListener(k, v) { this.events[k] = v; }, focus() {} };
     }
-    let params, centre; let mounts = 0;
+    let params; let mounts = 0;
     const context = {
         document: { addEventListener() {}, querySelectorAll: () => [], getElementById: id => nodes[id] }, window: { L: {} }, navigator: {},
         CONFIG: { DEFAULT_HOME: { lat: 51.41, lon: -.05 } },
-        JourneyNetworkMap: { tubeLineIds: ['victoria'], mount(options) { mounts++; params = options; return Promise.resolve({ invalidateSize() {}, setView(point) { centre = point; } }); } }
+        JourneyNetworkMap: { tubeLineIds: ['victoria'], mount(options) { mounts++; params = options; return Promise.resolve({ invalidateSize() {} }); } }
     };
     vm.runInNewContext(fs.readFileSync(require.resolve('../app.js'), 'utf8') + '\nthis.Dashboard = PengeDash;', context);
     const app = Object.create(context.Dashboard.prototype);
@@ -125,7 +125,7 @@ test('network map mounts once, preserves the list, and opens the selected statio
     app.setupNetworkMaps();
     nodes['network-map-tab'].events.click(); nodes['network-map-tab'].events.click();
     await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(Array.from(centre), [51.41, -.05]);
+    assert.equal(app.networkMode, 'tube');
     assert.equal(mounts, 1); assert.equal(nodes['network-status-panel'].hidden, true);
     assert.equal(nodes['network-map-panel'].hidden, false);
     await params.onStation({ id: '940GZZLUBXN', name: 'Brixton', lat: 51.46, lon: -.11 });

@@ -17,7 +17,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css?journey=20261113b"
           integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
-    <link rel="stylesheet" href="styles.css?v=20261114a">
+    <link rel="stylesheet" href="styles.css?v=20261114b">
 </head>
 <body>
     <div class="app" id="app">
@@ -240,8 +240,8 @@
             <section class="screen" id="screen-lines">
                 <div class="network-heading"><h2>Lines &amp; network</h2><p>Explore services, stations and connections.</p></div>
                 <div id="network-mode-filters" class="network-mode-filters" role="group" aria-label="Transport modes">
-                    <button data-network-mode="all" aria-pressed="true">All modes</button>
-                    <button data-network-mode="tube" aria-pressed="false">Underground</button>
+                    <button data-network-mode="all" aria-pressed="false">All modes</button>
+                    <button data-network-mode="tube" aria-pressed="true">Underground</button>
                     <button data-network-mode="overground" aria-pressed="false">Overground</button>
                     <button data-network-mode="dlr" aria-pressed="false">DLR</button>
                     <button data-network-mode="elizabeth-line" aria-pressed="false">Elizabeth</button>
@@ -251,7 +251,7 @@
                 </div>
                 <div class="network-tabs" role="tablist" aria-label="Network information">
                     <button id="network-status-tab" role="tab" aria-selected="true" aria-controls="network-status-panel">List</button>
-                    <button id="network-map-tab" role="tab" aria-selected="false" aria-controls="network-map-panel" tabindex="-1">Network map</button>
+                    <button id="network-map-tab" role="tab" aria-selected="false" aria-controls="network-map-panel" tabindex="-1">Tube map</button>
                 </div>
                 <div id="network-status-panel" role="tabpanel" aria-labelledby="network-status-tab">
                 <div id="network-alert-summary" class="network-alert-summary" role="status"></div>
@@ -264,7 +264,7 @@
                 <div class="lines-list" id="line-statuses"><div class="loading">Loading…</div></div>
                 </div>
                 <div id="network-map-panel" role="tabpanel" aria-labelledby="network-map-tab" hidden>
-                    <h2 class="network-visually-hidden">London network map</h2>
+                    <h2 class="network-visually-hidden">Schematic Tube and rail map</h2>
                     <div class="network-map-tools">
                     <div class="area-controls" role="group" aria-label="Centre network map">
                         <button id="tube-map-here" type="button">Near me</button>
@@ -273,13 +273,14 @@
                     <div class="network-station-lookup"><label for="tube-map-station" class="network-visually-hidden">Find a station hub</label>
                     <select id="tube-map-station" disabled><option value="">Loading stations…</option></select>
                     </div></div>
-                    <p id="tube-location-status" class="map-source" role="status"></p>
+                    <p id="tube-location-status" class="map-source" role="status">Schematic · drag to explore, pinch or use + / − to zoom. Tap a station for its hub.</p>
                     <div class="network-map-canvas">
-                    <div id="tube-map-frame" role="region" aria-label="Zoomable TfL rail network map"></div>
+                    <div id="tube-map-frame" role="region" aria-label="Zoomable schematic Tube and rail map"></div>
                     <button type="button" id="network-map-fit">Fit selected routes</button>
+                    <button type="button" id="network-map-expand" aria-pressed="false">Expand map</button>
                     </div>
-                    <p id="tube-map-status" class="map-source" role="status">Select Network map to load the routes.</p>
-                    <details class="network-map-info"><summary>Map coverage &amp; sources</summary><p class="map-source">A geographic network reference, not live service status or a schematic. National Rail geometry covers selected London-area operators, not the entire UK.</p>
+                    <p id="tube-map-status" class="map-source" role="status">Select Tube map to load the schematic.</p>
+                    <details class="network-map-info"><summary>Map coverage &amp; sources</summary><p class="map-source">Journey schematic, drawn from TfL's ordered station connections. Not to scale, not the official TfL artwork and not live service status. National Rail covers selected London-area operators, not the entire UK.</p>
                     <details class="network-colour-key"><summary>Line colour key</summary><div id="network-legend"></div></details>
                     <div class="map-links">
                         <a href="https://content.tfl.gov.uk/standard-tube-map.pdf" target="_blank" rel="noopener noreferrer">Open official schematic Tube map (PDF)</a>
@@ -424,10 +425,10 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js?journey=20261113b"
             integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-    <script src="config.js?v=20261114a"></script>
-    <script src="journey-guidance.js?v=20261114a"></script>
-    <script src="transit-data.js?v=20261114a"></script>
-    <script src="network-map.js?v=20261114a"></script>
-    <script src="app.js?v=20261114a"></script>
+    <script src="config.js?v=20261114b"></script>
+    <script src="journey-guidance.js?v=20261114b"></script>
+    <script src="transit-data.js?v=20261114b"></script>
+    <script src="network-map.js?v=20261114b"></script>
+    <script src="app.js?v=20261114b"></script>
 </body>
 </html>

@@ -159,19 +159,21 @@ test('multimode map filters layers and hub choices without contaminating Tube-on
     const context = { Map, Set, AbortSignal, document: { createElement: node }, fetch: async url => {
         const id = /Line\/([^/]+)/.exec(url)[1], definition = N.networkLines.find(d => d[0] === id);
         const mode = definition[2];
-        return response({ lineId: id === 'southern' ? 'wrong-line' : id, lineStrings: ['[[[-0.1,51.4],[-0.12,51.5]]]'],
-            stations: [{ id: (mode === 'tube' ? '940G' : '910G') + id.replace(/-/g, ''), name: id, modes: [mode], lat: 51.5, lon: -.12 }] });
+        const stopId = (mode === 'tube' ? '940G' : '910G') + id.replace(/-/g, '');
+        return response({ lineId: id === 'southern' ? 'wrong-line' : id,
+            orderedLineRoutes: [{ naptanIds: [stopId, stopId + 'END'] }],
+            stations: [{ id: stopId, name: id, modes: [mode], lat: 51.5, lon: -.12 }, { id: stopId + 'END', name: id + ' end', modes: [mode], lat: 51.52, lon: -.13 }] });
     } };
     vm.runInNewContext(fs.readFileSync(require.resolve('../network-map.js'), 'utf8'), context);
     const status = node(), stations = node(), from = node(), to = node(); let tube, all;
     const mounted = await context.JourneyNetworkMap.mount({ element: node(), status, stationSelect: stations, routeFromSelect: from, routeToSelect: to, multiMode: true,
         leaflet: { map: () => map, tileLayer: layer, layerGroup: layer, polyline: layer, circleMarker: layer },
         onStation() {}, onStations: s => { tube = s; }, onNetworkStations: s => { all = s; } });
-    assert.equal(tube.length, 11); assert.equal(all.length, 22); assert.equal(to.children.length, 12);
-    mounted.setMode('dlr'); assert.equal(stations.children.length, 2); assert.match(stations.children[1].textContent, /dlr/);
-    assert.match(status.textContent, /1 of 1/); assert.equal(to.children.length, 12);
-    mounted.setMode('national-rail'); assert.match(status.textContent, /2 of 3/); assert.match(status.textContent, /no available map geometry/);
-    mounted.setMode('favourites', ['avanti-west-coast']); assert.match(status.textContent, /no available map geometry/);
+    assert.equal(tube.length, 22); assert.equal(all.length, 44); assert.equal(to.children.length, 23);
+    mounted.setMode('dlr'); assert.equal(stations.children.length, 3); assert.match(stations.children[1].textContent, /dlr/);
+    assert.match(status.textContent, /1 of 1/); assert.equal(to.children.length, 23);
+    mounted.setMode('national-rail'); assert.match(status.textContent, /2 of 3/); assert.match(status.textContent, /no verified schematic/);
+    mounted.setMode('favourites', ['avanti-west-coast']); assert.match(status.textContent, /no verified schematic/);
 });
 
 test('short bus line IDs survive station connection normalization', () => {

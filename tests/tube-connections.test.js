@@ -147,17 +147,18 @@ test('network loading populates both route selectors with verified stations and 
     const layer = () => ({ addTo() { return this; }, bindPopup() { return this; } });
     const context = { Map, AbortSignal, document: { createElement() { const el = node(); created.push(el); return el; } },
         fetch: async url => ({ ok: true, json: async () => ({ lineId: /Line\/([^/]+)/.exec(url)[1],
-            lineStrings: ['[[[-0.11,51.46],[-0.12,51.47]]]'],
+            orderedLineRoutes: [{ naptanIds: ['HUBBRX', '940GZZLUSKW'] }],
             stations: [{ id: 'HUBBRX', name: 'Brixton', lat: 51.46, lon: -.11, modes: ['tube'] },
+                { id: '940GZZLUSKW', name: 'Stockwell', lat: 51.47, lon: -.12, modes: ['tube'] },
                 { id: 'invalid', name: 'Not Tube', lat: 51.46, lon: -.11, modes: ['bus'] }] }) }) };
     vm.runInNewContext(fs.readFileSync(require.resolve('../network-map.js'), 'utf8'), context);
     const from = node(), to = node(); let stations, target;
     await context.JourneyNetworkMap.mount({ element: node(), status: node(), routeFromSelect: from, routeToSelect: to,
         leaflet: { map: () => map, tileLayer: layer, polyline: layer, circleMarker: layer },
         onStations: value => { stations = value; }, onRouteTarget: value => { target = value; } });
-    assert.deepEqual(from.children.map(option => option.value), ['here', 'home', 'HUBBRX']);
-    assert.deepEqual(to.children.map(option => option.value), ['', 'HUBBRX']);
-    assert.equal(stations.length, 1); assert.equal(from.disabled, false); assert.equal(to.disabled, false);
+    assert.deepEqual(from.children.map(option => option.value), ['here', 'home', 'HUBBRX', '940GZZLUSKW']);
+    assert.deepEqual(to.children.map(option => option.value), ['', 'HUBBRX', '940GZZLUSKW']);
+    assert.equal(stations.length, 2); assert.equal(from.disabled, false); assert.equal(to.disabled, false);
     created.find(el => el.textContent === 'Quickest route here').events.click();
     assert.equal(target.id, 'HUBBRX');
 });
