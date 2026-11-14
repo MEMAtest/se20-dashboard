@@ -65,6 +65,7 @@
         return /\/Arrivals(?:\/|$)/i.test(url.pathname)
             || /\/api\/(?:board|service|journey|train)(?:\/|$)/i.test(url.pathname)
             || /\/Line\/.*\/(?:Status|Disruption)(?:\/|$)/i.test(url.pathname)
+            || /\/StopPoint\/[^/]+\/Disruption(?:\/|$)/i.test(url.pathname)
             || /\/Journey\//i.test(url.pathname) || /\/crowding\//i.test(url.pathname);
     }
     return { loadBoard, freshBoard, isLiveUrl, MAX_BOARD_AGE };
