@@ -158,7 +158,11 @@ class PengeDash {
             // separately-maintained validation path.
             const isJourneyFlow = state.screen === 'journey' || state.screen === 'journey-live';
             const journey = isJourneyFlow ? this._resolveJourneyFromHistory(state) : null;
-            if (journey) {
+            if (state.screen === 'line' && this.lineDetails?.[state.lineId]) {
+                this.openLineDetail(state.lineId);
+            } else if (state.screen === 'station' && this._stationHubRefs?.has(state.stationId)) {
+                this.openStationHub(this._stationHubRefs.get(state.stationId));
+            } else if (journey) {
                 // Restore the detail view from the journeys already in memory — no re-fetch.
                 this.showJourneyDetail(journey, state.destination);
                 if (state.screen === 'journey-live') this.startLiveJourney();
@@ -167,7 +171,7 @@ class PengeDash {
                 // show a blank journey screen. Fall back to results/plan, and repair
                 // this history slot in place so landing on it again (native Forward,
                 // or another Back) replays the same safe fallback instead of a blank one.
-                const fallback = isJourneyFlow ? 'plan' : (state.screen || 'plan');
+                const fallback = isJourneyFlow ? 'plan' : ['line', 'station'].includes(state.screen) ? 'lines' : (state.screen || 'plan');
                 this.showScreen(fallback);
                 try { history.replaceState({ screen: fallback }, ''); } catch (err) { /* ignore */ }
             }
@@ -192,6 +196,11 @@ class PengeDash {
 
     showScreen(name, extra = {}) {
         if (!name) return;
+        if (this.currentScreen === 'station' && name !== 'station') {
+            this._hubRevision = (this._hubRevision || 0) + 1;
+            clearTimeout(this._hubExpiry);
+        }
+        if (this.currentScreen === 'line' && name !== 'line') this._lineRevision = (this._lineRevision || 0) + 1;
         if (this._busTrackTimer) this.closeBusTracker();   // don't leave the tracker polling over a new screen
         // Journey-detail arrivals are deliberately short lived. Do not keep polling
         // once the person has gone back to results (or another part of the app).
@@ -252,6 +261,7 @@ class PengeDash {
         document.getElementById('plan-tube-link')?.addEventListener('click', () => {
             this.showScreen('lines');
             document.getElementById('network-map-tab')?.click();
+            const details = document.getElementById('tube-planner-details'); if (details) details.open = true;
             document.getElementById('tube-route-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
         go('nearby-alerts-link', 'alerts');
@@ -799,9 +809,18 @@ class PengeDash {
     }
 
     setupNetworkMaps() {
+        this.setupNetworkUI();
         this.setupTubeConnections();
-        document.getElementById('tube-map-home')?.addEventListener('click', () => this.centerOnHome({ network: true }));
-        document.getElementById('tube-map-here')?.addEventListener('click', () => this.locateMe({ network: true }));
+        document.getElementById('network-map-fit')?.addEventListener('click', () => this._tubeMap?.fitRoutes?.());
+        document.getElementById('tube-map-home')?.addEventListener('click', () => {
+            this._networkLineFocus = null;
+            this._networkFocusStation = { ...(this.savedHome || this.home), name: this.homeLabel() };
+            this.centerOnHome({ network: true });
+        });
+        document.getElementById('tube-map-here')?.addEventListener('click', () => {
+            this._networkFocusStation = null; this._networkLineFocus = null;
+            this.locateMe({ network: true });
+        });
         const tabs = ['network-status-tab', 'network-map-tab'].map(id => document.getElementById(id));
         const select = selected => {
             tabs.forEach(tab => {
@@ -813,8 +832,16 @@ class PengeDash {
             if (selected.id === 'network-map-tab') {
                 if (!this._tubeMapStarted) {
                     this._tubeMapStarted = true;
+                    if (!this._networkFocusStation && !this._networkLineFocus) this._networkFocusStation = {
+                        ...(this.savedHome || this.home || CONFIG.DEFAULT_HOME), name: this.homeLabel()
+                    };
                     JourneyNetworkMap.mount({ element: document.getElementById('tube-map-frame'),
                         stationSelect: document.getElementById('tube-map-station'),
+                        multiMode: true,
+                        onNetworkStations: stations => {
+                            this._stationHubRefs = this._stationHubRefs || new Map();
+                            stations.forEach(station => this._stationHubRefs.set(station.id, station));
+                        },
                         routeFromSelect: document.getElementById('tube-route-from'),
                         routeToSelect: document.getElementById('tube-route-to'),
                         onStations: stations => {
@@ -825,22 +852,14 @@ class PengeDash {
                         onRouteTarget: station => {
                             const target = document.getElementById('tube-route-to');
                             if (target) { target.value = station.id; target.dispatchEvent(new Event('change')); }
+                            const details = document.getElementById('tube-planner-details'); if (details) details.open = true;
                             document.getElementById('tube-route-submit')?.focus();
                             document.getElementById('tube-route-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
                         },
                         status: document.getElementById('tube-map-status'), leaflet: window.L,
-                        onStation: async station => {
-                            this.stationData[station.id] = [];
-                            this._currentModalStop = { id: station.id, name: station.name, modes: ['tube'], lat: station.lat, lon: station.lon };
-                            this.openStopModal(station.id, station.name, false);
-                            document.getElementById('modal-departures').textContent = 'Loading live TfL arrivals…';
-                            const rows = (await this._fetchStopArrivals(station.id)).filter(row => JourneyNetworkMap.tubeLineIds.includes(row.lineId));
-                            if (this._currentModalStop?.id !== station.id) return;
-                            this.stationData[station.id] = rows;
-                            this.openStopModal(station.id, station.name, false);
-                            if (!rows.length) document.getElementById('modal-departures').textContent = 'No live TfL predictions were received. Check Line status before travelling.';
-                        }
-                    }).then(map => { this._tubeMap = map; }).catch(() => {
+                        onStation: station => this.openStationHub(station),
+                        onPlanTarget: station => this._planToNetworkStation(station)
+                    }).then(map => { this._tubeMap = map; this._applyNetworkMapFilter(); }).catch(() => {
                         document.getElementById('tube-map-status').textContent = 'Map unavailable. Open the official Tube map above.';
                     });
                 } else this._tubeMap?.invalidateSize();
@@ -855,6 +874,178 @@ class PengeDash {
                 select(next); next.focus();
             });
         });
+    }
+
+    setupNetworkUI() {
+        this.networkMode = 'all';
+        try {
+            const saved = JSON.parse(localStorage.getItem('pengedash-fav-lines') || '[]');
+            this._favLineIds = Array.isArray(saved) ? saved.filter(id => /^[a-z0-9-]{1,80}$/.test(id)).slice(0, 60) : [];
+        } catch (e) { this._favLineIds = []; }
+        document.querySelectorAll('[data-network-mode]').forEach(button => button.addEventListener('click', () => {
+            this.networkMode = button.dataset.networkMode;
+            this._networkLineFocus = null;
+            document.querySelectorAll('[data-network-mode]').forEach(b => b.setAttribute('aria-pressed', String(b === button)));
+            this._renderNetworkLines(); this._applyNetworkMapFilter();
+            if (this._tubeMap) {
+                this._tubeMap.fitRoutes?.();
+                const status = document.getElementById('tube-location-status');
+                if (status) status.textContent = `Showing ${JourneyNetworkMap.modes[this.networkMode] || (this.networkMode === 'favourites' ? 'saved' : 'all available')} routes. Home and Near me choose a local centre.`;
+            }
+        }));
+        for (const [id, screen] of [['line-back', 'line'], ['station-back', 'station']]) document.getElementById(id)?.addEventListener('click', () => {
+            if (history.state?.screen === screen) history.back(); else this.showScreen('lines');
+        });
+        const legend = document.getElementById('network-legend');
+        if (legend && JourneyNetworkMap.networkLines) legend.innerHTML = JourneyNetworkMap.networkLines.map(([id, colour]) => `<span><i style="background:${colour}"></i>${this.escapeHtml(LINE_META[id]?.name || id.replace(/-/g, ' '))}</span>`).join('');
+    }
+
+    _applyNetworkMapFilter() {
+        this._tubeMap?.setMode?.(this.networkMode || 'all', this._favLineIds || []);
+        if (this._networkLineFocus) this._tubeMap?.focusLine?.(this._networkLineFocus);
+        if (this._networkFocusStation && this._tubeMap) {
+            this._tubeMap.setView([this._networkFocusStation.lat, this._networkFocusStation.lon], 14);
+            const status = document.getElementById('tube-location-status');
+            if (status) status.textContent = `Viewing ${this._networkFocusStation.name || 'selected place'}. Home and Near me change the map centre, not your saved Home.`;
+            this._networkFocusStation = null;
+        }
+    }
+
+    _toggleLineFavourite(lineId) {
+        const saved = this._favLineIds || [];
+        this._favLineIds = saved.includes(lineId) ? saved.filter(id => id !== lineId) : [...saved, lineId].slice(-60);
+        try { localStorage.setItem('pengedash-fav-lines', JSON.stringify(this._favLineIds)); } catch (e) { /* preferences unavailable */ }
+        this._renderNetworkLines();
+    }
+
+    _renderNetworkLines() {
+        const target = document.getElementById('line-statuses');
+        if (!target) return;
+        const all = this._networkLines || [];
+        const mode = this.networkMode || 'all';
+        const selected = all.filter(line => mode === 'all' || (mode === 'favourites' ? (this._favLineIds || []).includes(line.id) : JourneyNetworkMap.lineMode(line) === mode));
+        const issues = selected.filter(line => ['bad', 'warn'].includes(JourneyNetworkMap.statusSummary(line).tone));
+        const unknown = selected.filter(line => JourneyNetworkMap.statusSummary(line).tone === 'unknown').length;
+        const summary = document.getElementById('network-alert-summary');
+        if (summary) summary.innerHTML = selected.length ? `<b>${issues.length ? `${issues.length} service${issues.length === 1 ? '' : 's'} with reported changes` : unknown ? 'Some service statuses are unavailable' : 'No disruption reported in this selection'}</b><span>${unknown ? `${unknown} unknown status${unknown === 1 ? '' : 'es'}. ` : ''}${this._networkStatusSource === 'live' ? 'Latest TfL status response; check your exact service before travelling.' : 'Cached or unavailable status. This is not a fresh service check.'}</span>` : '';
+        const source = document.getElementById('network-source-status');
+        if (source) source.textContent = this._networkStatusSource === 'live'
+            ? `TfL status checked ${this._departureClock(new Date(this._networkStatusAt).toISOString())} London time. Status is network-wide, not a promise about your train.`
+            : 'Cached status, not a current check. Refresh before relying on it.';
+        const saved = document.getElementById('network-saved');
+        if (saved) {
+            const stations = (this.favStations || []).filter(s => !s.isBus).slice(0, 8);
+            saved.innerHTML = `<h3>Saved lines &amp; stations</h3><div class="network-saved-pills">${(this._favLineIds || []).map(id => `<button data-saved-line="${this.escapeAttr(id)}">${this.escapeHtml(this.lineDetails?.[id]?.name || id)}</button>`).join('')}${stations.map((s, i) => `<button data-saved-station="${i}">${this.escapeHtml(s.name)}</button>`).join('') || ''}</div>${!stations.length && !(this._favLineIds || []).length ? '<p>Save a line or station using its star.</p>' : ''}`;
+            saved.querySelectorAll('[data-saved-line]').forEach(b => b.addEventListener('click', () => this.openLineDetail(b.dataset.savedLine)));
+            saved.querySelectorAll('[data-saved-station]').forEach(b => b.addEventListener('click', () => this.openStationHub(stations[+b.dataset.savedStation])));
+        }
+        target.innerHTML = Object.entries(JourneyNetworkMap.modes).filter(([key]) => key !== 'bus').map(([key, title]) => {
+            const group = selected.filter(line => JourneyNetworkMap.lineMode(line) === key);
+            if (!group.length) return '';
+            return `<section class="network-line-group"><h3>${title}<span>${group.length} service${group.length === 1 ? '' : 's'}</span></h3>${group.map(line => {
+                const state = JourneyNetworkMap.statusSummary(line);
+                const gloss = this._statusGloss(state.text);
+                const colour = JourneyNetworkMap.networkLines.find(([id]) => id === line.id)?.[1] || '#556778';
+                return `<button type="button" class="network-line-row" data-line-id="${this.escapeAttr(line.id)}" style="--service-colour:${colour}"><span><b>${this.escapeHtml(LINE_META[line.id]?.name || line.name)}</b><small>${this.escapeHtml(gloss || (state.text === 'Good Service' ? 'No disruption reported by TfL' : 'Check service details'))}</small></span><span class="network-status ${state.tone}">${this.escapeHtml(state.text)}</span><span aria-hidden="true">›</span></button>`;
+            }).join('')}</section>`;
+        }).join('') || '<p class="empty-hint">No services in this selection. Save a line first, or select another mode.</p>';
+        target.querySelectorAll('[data-line-id]').forEach(button => button.addEventListener('click', () => this.openLineDetail(button.dataset.lineId)));
+    }
+
+    async _networkJson(path, live = false) {
+        const response = await fetch(`https://api.tfl.gov.uk/${path}`, { cache: live ? 'no-store' : 'default', signal: AbortSignal.timeout(12000) });
+        if (!response.ok || (live && response.headers?.get('X-Journey-Cached') === 'true')) throw new Error('TfL source unavailable.');
+        return response.json();
+    }
+
+    _planToNetworkStation(station) {
+        const ref = JourneyNetworkMap.networkStationReference(station);
+        if (!ref) return;
+        this._invalidateJourneySearch();
+        document.getElementById('destination-input').value = ref.name;
+        this._selectedDestination = { label: ref.name, id: ref.id };
+        this.showScreen('plan');
+        document.getElementById('from-text')?.focus();
+    }
+
+    async openStationHub(station, { refresh = false } = {}) {
+        const ref = JourneyNetworkMap.networkStationReference(station);
+        if (!ref) { if (station?.id) this.openStopModal(station.id, station.name, false); return; }
+        this._stationHubRefs = this._stationHubRefs || new Map(); this._stationHubRefs.set(ref.id, ref);
+        if (!refresh) this.showScreen('station', { state: { stationId: ref.id } });
+        const revision = this._hubRevision = (this._hubRevision || 0) + 1;
+        clearTimeout(this._hubExpiry);
+        const target = document.getElementById('station-hub-content');
+        target.innerHTML = `<div class="network-detail-head"><div><p>Station hub</p><h2>${this.escapeHtml(ref.name)}</h2></div></div><p role="status">Loading verified station information...</p>`;
+        try {
+            const raw = await this._networkJson(`StopPoint/${encodeURIComponent(ref.id)}`);
+            const profile = JourneyNetworkMap.stationProfile(raw, ref);
+            if (revision !== this._hubRevision || this.currentScreen !== 'station') return;
+            const knownRail = [...(CONFIG.LIVE_NOW_STATIONS || []), ...(this.nearbyStations || [])].find(s => /^[A-Z]{3}$/.test(s.crs || '') && (s.id === ref.id || profile.arrivalsIds.includes(s.id)));
+            const rail = knownRail && profile.modes.includes('national-rail') ? TransitData.loadBoard(knownRail, {
+                railBase: CONFIG.DARWIN_API_URL,
+                fetcher: async (url, options) => {
+                    const response = await fetch(url, options);
+                    if (url.startsWith(CONFIG.DARWIN_API_URL + '/api/board')) {
+                        const data = await response.clone().json();
+                        if (data.station?.crs !== knownRail.crs) throw new Error('Wrong station board');
+                    }
+                    return response;
+                }
+            }).catch(() => null) : Promise.resolve(null);
+            const [responses, disruptions, railBoard] = await Promise.all([
+                Promise.all(profile.arrivalsIds.map(id => this._networkJson(`StopPoint/${encodeURIComponent(id)}/Arrivals`, true).catch(() => null))),
+                this._networkJson(`StopPoint/${encodeURIComponent(ref.id)}/Disruption`, true).catch(() => null), rail
+            ]);
+            if (revision !== this._hubRevision || this.currentScreen !== 'station') return;
+            const predictions = JourneyNetworkMap.verifiedArrivals(responses.filter(Array.isArray).flat(), profile.arrivalsIds);
+            const warnings = Array.isArray(disruptions) ? disruptions.map(d => d.description).filter(s => typeof s === 'string').slice(0, 12) : null;
+            const railRows = railBoard && TransitData.freshBoard(railBoard) && railBoard.source === 'National Rail' ? railBoard.deps : [];
+            const checked = new Date().toISOString();
+            const partial = !responses.length || responses.some(r => !Array.isArray(r)) || (profile.modes.includes('national-rail') && !railRows.length);
+            const favourite = this.isFavStation(ref.id);
+            const badges = profile.modes.map(m => `<span class="network-mode-badge" data-service-mode="${m}">${this.escapeHtml(JourneyNetworkMap.modes[m])}</span>`).join('');
+            const arrivalRows = predictions.map(a => `<article class="hub-departure"><div><b>${this.escapeHtml(a.lineName || a.lineId || JourneyNetworkMap.modes[a.modeName])}</b><span>${this.escapeHtml(a.destinationName)}</span>${a.platformName && !/unknown/i.test(a.platformName) ? `<small>${this.escapeHtml(a.platformName)}</small>` : ''}</div><div><b>${Math.max(0, Math.ceil((Date.parse(a.expectedArrival) - Date.now()) / 60000))} min</b><small>${this._departureClock(a.expectedArrival)}</small></div></article>`).join('');
+            const nationalRows = railRows.slice(0, 8).map(a => `<article class="hub-departure"><div><b>National Rail${a.line ? ` · ${this.escapeHtml(a.line)}` : ''}</b><span>${this.escapeHtml(a.dest)}</span>${a.plat ? `<small>Platform ${this.escapeHtml(a.plat)}</small>` : ''}</div><div><b>${a.cancelled ? 'Cancelled' : Number.isFinite(a.mins) ? `${Math.max(0, a.mins)} min` : this.escapeHtml(a.exp || a.sched || 'Check station board')}</b></div></article>`).join('');
+            target.innerHTML = `<div class="network-detail-head"><div><p>Station hub${profile.zone ? ` · Zone ${this.escapeHtml(profile.zone)}` : ''}</p><h2>${profile.modes.includes('tube') ? this._routeRoundel('tube') : ''}<span>${this.escapeHtml(profile.name)}</span></h2></div><button id="hub-star" class="network-star" aria-pressed="${favourite}" aria-label="${favourite ? 'Unsave' : 'Save'} station">${favourite ? '★' : '☆'}</button></div>
+                <div class="network-mode-badges">${badges}</div>
+                <div class="hub-tabs" role="group" aria-label="Station sections">${['Departures', 'Station', 'Accessibility', 'Connections'].map((label, i) => `<button data-hub-tab="${i}" aria-pressed="${!i}" aria-controls="hub-panel-${i}">${label}</button>`).join('')}</div>
+                <section id="hub-panel-0"><div class="section-head"><h3>Next departures</h3><button id="hub-refresh" class="hub-refresh">Refresh</button></div><p id="hub-freshness" class="map-source" role="status">Checked ${this._departureClock(checked)} London time${partial ? ' · partial coverage' : ''}. Rail predictions only, grouped by source. TfL${railRows.length ? ' and National Rail' : ''} may not represent every service. Bus services are listed in Connections.</p><div id="hub-live-rows">${arrivalRows ? `<h4 class="hub-source-title">TfL predictions</h4>${arrivalRows}` : ''}${nationalRows ? `<h4 class="hub-source-title">National Rail board</h4>${nationalRows}` : ''}${!arrivalRows && !nationalRows ? '<p class="empty-hint">No verified upcoming predictions were received. This does not mean no trains are running.</p>' : ''}</div>${profile.modes.includes('national-rail') && !railRows.length ? '<p class="map-source">A verified National Rail board is not available here. TfL predictions may omit National Rail services.</p>' : ''}${profile.modes.includes('national-rail') ? '<a class="hub-external" href="https://www.nationalrail.co.uk/live-trains/departures/" target="_blank" rel="noopener noreferrer">Check National Rail live departures</a>' : '<a class="hub-external" href="https://tfl.gov.uk/status-updates/" target="_blank" rel="noopener noreferrer">Check TfL service updates</a>'}</section>
+                <section id="hub-panel-1" hidden class="network-status-card"><h3>Station information</h3><p>${this.escapeHtml(profile.address || 'Address not provided by TfL.')}</p><p class="map-source">Registered station information, not a live staffing or facilities check.</p><button id="hub-on-map">Show on network map</button></section>
+                <section id="hub-panel-2" hidden><div class="hub-facilities"><article><b>Lifts</b><span>${this.escapeHtml(profile.properties.Lifts || 'Not reported')}</span></article><article><b>Step-free route</b><span>Check official station guidance</span></article><article><b>Toilets</b><span>${this.escapeHtml(profile.properties.Toilets || 'Not reported')}</span></article></div><p class="map-source">A registered lift count does not confirm it is operating, serves every platform, or provides step-free access to your train.</p><div class="network-status-card"><h3>Station updates</h3>${warnings === null ? '<p>Current station disruption source unavailable.</p>' : warnings.length ? warnings.map(w => `<p>${this.escapeHtml(w)}</p>`).join('') : '<p>No station disruption was returned by TfL. This is not a guarantee that every lift or route is available.</p>'}</div><a class="hub-external" href="https://tfl.gov.uk/transport-accessibility/" target="_blank" rel="noopener noreferrer">Check TfL accessibility guidance</a></section>
+                <section id="hub-panel-3" hidden class="network-status-card"><h3>Services at this station</h3><p class="map-source">TfL-reported services, not estimated walking links or confirmation that a connection is running.</p>${profile.services.map(s => `<div class="hub-service"><b>${this.escapeHtml(s.name)}</b><span>${this.escapeHtml(JourneyNetworkMap.modes[s.mode] || 'Mode not reported')}</span></div>`).join('') || '<p>Service connections were not supplied.</p>'}</section>
+                <div class="network-detail-actions"><button id="hub-plan">Plan a journey here</button><button id="hub-map">On the network</button></div>`;
+            document.querySelectorAll('[data-hub-tab]').forEach(button => button.addEventListener('click', () => {
+                document.querySelectorAll('[data-hub-tab]').forEach(b => {
+                    const active = b === button; b.setAttribute('aria-pressed', String(active));
+                    document.getElementById(`hub-panel-${b.dataset.hubTab}`).hidden = !active;
+                });
+            }));
+            document.getElementById('hub-refresh').onclick = () => this.openStationHub(ref, { refresh: true });
+            document.getElementById('hub-plan').onclick = () => this._planToNetworkStation(profile);
+            const onMap = () => {
+                this._networkFocusStation = profile; this._networkLineFocus = null;
+                this.showScreen('lines'); document.getElementById('network-map-tab').click(); this._applyNetworkMapFilter();
+            };
+            document.getElementById('hub-map').onclick = onMap; document.getElementById('hub-on-map').onclick = onMap;
+            document.getElementById('hub-star').onclick = () => {
+                this.toggleFavStation({ ...ref, modes: profile.modes, isBus: false });
+                const button = document.getElementById('hub-star'), saved = this.isFavStation(ref.id);
+                button.textContent = saved ? '★' : '☆'; button.setAttribute('aria-pressed', String(saved)); button.setAttribute('aria-label', `${saved ? 'Unsave' : 'Save'} station`);
+                this._renderNetworkLines();
+            };
+            const maxAge = Math.min(90000, ...predictions.map(a => 90000 - (Date.now() - Date.parse(a.timestamp))),
+                railRows.length ? 90000 - (Date.now() - railBoard.at) : 90000);
+            this._hubExpiry = setTimeout(() => {
+                if (revision !== this._hubRevision || this.currentScreen !== 'station') return;
+                document.getElementById('hub-live-rows').textContent = 'These departure predictions have expired. Refresh for a current check.';
+                document.getElementById('hub-freshness').textContent = 'Departure check expired. Station information is separate.';
+            }, Math.max(1000, maxAge));
+        } catch (error) {
+            if (revision !== this._hubRevision || this.currentScreen !== 'station') return;
+            target.innerHTML = `<div class="network-detail-head"><h2>${this.escapeHtml(ref.name)}</h2></div><p role="status">Station data could not be verified. No saved departure times are being reused.</p><button id="hub-retry" class="go-btn">Retry station check</button>`;
+            document.getElementById('hub-retry').onclick = () => this.openStationHub(ref, { refresh: true });
+        }
     }
 
     setupTubeConnections() {
@@ -1402,6 +1593,7 @@ class PengeDash {
         this._tickTimer = setInterval(() => {
             if (document.hidden) return;   // don't sweep the DOM while backgrounded (battery)
             const now = Date.now();
+            this._ageRouteOptions(now);
             document.querySelectorAll('[data-due]').forEach(el => {
                 const due = +el.dataset.due;
                 if (!due) return;
@@ -1413,6 +1605,22 @@ class PengeDash {
                 el.classList.toggle('urgent', m <= 3);
             });
         }, 1000);
+    }
+
+    _ageRouteOptions(now = Date.now()) {
+        if (this.currentScreen !== 'plan' || !this._lastJourneys?.length) return;
+        const results = document.getElementById('journey-results');
+        if (results?.classList.contains?.('jp-loading-overlay')) return;
+        const upcoming = this._lastJourneys.map(j => JourneyGuidance.tflJourneyInstant(j.startDateTime) >= now);
+        if (!upcoming.some(Boolean)) {
+            this._invalidateJourneySearch();
+            if (results) results.innerHTML = '<p class="empty-hint">These departure times have passed. Find routes again for current options.</p>';
+            const updated = document.getElementById('journey-updated'); if (updated) updated.textContent = 'Route options expired';
+            return;
+        }
+        results?.querySelectorAll('.route-card').forEach(card => { card.hidden = !upcoming[+card.dataset.index]; });
+        const updated = document.getElementById('journey-updated');
+        if (updated && Number.isFinite(this._journeyResultsCheckedAt)) updated.textContent = `${this.getTimeAgo(new Date(this._journeyResultsCheckedAt))} · estimates`;
     }
 
     // Per-coach loading strip: a coloured dot per coach + the quietest coach to aim for.
@@ -2587,15 +2795,17 @@ class PengeDash {
 
         try {
             // Fetch status for relevant lines (location-aware)
-            const lines = this.getRelevantLineIds();
-            let url = `https://api.tfl.gov.uk/Line/${lines.join(',')}/Status`;
+            let url = 'https://api.tfl.gov.uk/Line/Mode/tube,dlr,overground,elizabeth-line,tram,national-rail/Status';
 
             if (CONFIG.TFL_APP_KEY) {
                 url += `?app_id=${CONFIG.TFL_APP_ID}&app_key=${CONFIG.TFL_APP_KEY}`;
             }
 
-            const response = await fetch(url);
+            const response = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(12000) });
+            if (!response.ok) throw new Error('Line status unavailable');
             const data = await response.json();
+            if (!Array.isArray(data) || !data.length) throw new Error('No line statuses returned');
+            this._networkStatusSource = 'live'; this._networkStatusAt = Date.now();
 
             // Cache line status
             this.cacheData('lines', data);
@@ -2605,6 +2815,7 @@ class PengeDash {
             document.getElementById('lines-updated').textContent = this.getTimeAgo(new Date());
         } catch (error) {
             console.error('Line status fetch error:', error);
+            this._networkStatusSource = 'cached';
             // Try cached data first
             const cachedLines = this.getCachedData('lines');
             if (cachedLines) {
@@ -2669,48 +2880,32 @@ class PengeDash {
     }
 
     displayLineStatus(lines) {
-        lines = this._sortLinesForSE20(lines);
-        const container = document.getElementById('line-statuses');
+        lines = this._sortLinesForSE20((Array.isArray(lines) ? lines : []).filter(l => /^[a-z0-9-]{1,80}$/.test(l?.id || '') && typeof l.name === 'string'));
+        this._networkLines = lines;
 
         // Store line status data for smart journey insights (string map, used elsewhere)
         this.lineStatusData = {};
         // Store full details for the tappable alert modal
         this.lineDetails = {};
         lines.forEach(line => {
-            const ls = line.lineStatuses && line.lineStatuses[0];
-            const status = (ls && ls.statusSeverityDescription) || 'Unknown';
+            const summary = JourneyNetworkMap.statusSummary(line);
+            const ls = summary.statuses.find(s => s.statusSeverityDescription === summary.text);
+            const status = summary.text;
             this.lineStatusData[line.id] = status;
             if (line.name) this.lineStatusData[line.name.toLowerCase()] = status;
             this.lineDetails[line.id] = {
                 name: (LINE_META[line.id] && LINE_META[line.id].name) || line.name,
                 status,
                 reason: (ls && ls.reason) || '',
-                disruption: (ls && ls.disruption && ls.disruption.description) || ''
+                disruption: (ls && ls.disruption && ls.disruption.description) || '',
+                raw: line, mode: JourneyNetworkMap.lineMode(line)
             };
         });
 
-        if (!container) return;
-        container.innerHTML = lines.map(line => {
-            const meta = LINE_META[line.id] || { name: line.name, class: '' };
-            const ls = line.lineStatuses && line.lineStatuses[0];
-            const statusText = (ls && ls.statusSeverityDescription) || 'Unknown';
-            const statusClass = statusText.toLowerCase().replace(/\s+/g, '-');
-            const gloss = this._statusGloss(statusText);
-
-            return `
-                <button class="line-status ${meta.class}" data-line-id="${this.escapeAttr(line.id)}">
-                    <span class="line-name">${this.escapeHtml(meta.name)}</span>
-                    <span class="line-status-wrap">
-                        <span class="line-status-badge ${statusClass}">${this.escapeHtml(statusText)}</span>
-                        ${gloss ? `<span class="line-status-gloss">${this.escapeHtml(gloss)}</span>` : ''}
-                    </span>
-                </button>`;
-        }).join('');
-        container.querySelectorAll('.line-status').forEach(el =>
-            el.addEventListener('click', () => this.openLineDetail(el.dataset.lineId)));
+        this._renderNetworkLines();
     }
 
-    openLineDetail(lineId) {
+    async openLineDetail(lineId) {
         const d = (this.lineDetails || {})[lineId];
         if (!d) return;
         // TfL's own reason/disruption text wins when it gave one; otherwise fall
@@ -2718,21 +2913,67 @@ class PengeDash {
         // dead-end "no detail" message for opaque wording like "Special Service".
         const detail = d.reason || d.disruption || this._statusGloss(d.status) ||
             (d.status === 'Good Service' ? 'Good service on the whole line.' : 'No further detail provided by TfL.');
-        this.openDetailModal(`${d.name} · ${d.status}`,
-            `<div class="alert-detail-item ${d.status !== 'Good Service' ? 'bad' : ''}">
-                <div class="alert-detail-reason">${this.escapeHtml(detail)}</div>
-             </div>`);
+        this.showScreen('line', { state: { lineId } });
+        const revision = this._lineRevision = (this._lineRevision || 0) + 1;
+        const target = document.getElementById('line-detail-content');
+        const state = JourneyNetworkMap.statusSummary(d.raw);
+        const saved = (this._favLineIds || []).includes(lineId);
+        target.innerHTML = `<div class="network-detail-head"><div><p>${this.escapeHtml(JourneyNetworkMap.modes[d.mode] || 'Service')}</p><h2>${this.escapeHtml(d.name)}</h2></div><button id="line-star" class="network-star" aria-pressed="${saved}" aria-label="${saved ? 'Unsave' : 'Save'} ${this.escapeAttr(d.name)}">${saved ? '★' : '☆'}</button></div>
+            <div class="network-detail-actions"><button id="line-view-map">View on map</button><button id="line-plan">Plan using this mode</button></div>
+            <section class="network-status-card"><p>Line status · ${this._networkStatusSource === 'live' ? `TfL check at ${this._departureClock(new Date(this._networkStatusAt).toISOString())} London time` : 'cached, not a fresh check'}</p><span class="network-status ${state.tone}">${this.escapeHtml(d.status)}</span><p>${this.escapeHtml(detail)}</p>
+            ${state.statuses.filter(s => s.statusSeverityDescription !== state.text).map(s => `<p>${this.escapeHtml(s.statusSeverityDescription || 'Additional status')}: ${this.escapeHtml(s.reason || s.disruption?.description || 'No further detail provided.')}</p>`).join('')}
+            <p class="map-source">Check the exact service before travelling. No unreported end time or affected segment is assumed.</p></section>
+            <section class="network-status-card"><h3>Departures by station</h3><p>Choose a served station for its current board.</p><label for="line-station-select">Station</label><select id="line-station-select" disabled><option>Loading stations...</option></select></section>
+            <section class="network-status-card"><h3>Stations served</h3><p class="map-source">Alphabetical list, not stop order or a claim of a direct connection.</p><label for="line-station-query">Filter stations</label><input type="search" id="line-station-query" placeholder="Station name" maxlength="100"><div id="line-station-list"><p>Loading TfL station directory...</p></div></section>`;
+        document.getElementById('line-star').onclick = () => {
+            this._toggleLineFavourite(lineId);
+            const active = this._favLineIds.includes(lineId), button = document.getElementById('line-star');
+            button.textContent = active ? '★' : '☆'; button.setAttribute('aria-pressed', String(active)); button.setAttribute('aria-label', `${active ? 'Unsave' : 'Save'} ${d.name}`);
+        };
+        document.getElementById('line-view-map').onclick = () => {
+            this._networkLineFocus = lineId; this.showScreen('lines'); document.getElementById('network-map-tab').click(); this._applyNetworkMapFilter();
+        };
+        document.getElementById('line-plan').onclick = () => {
+            this._invalidateJourneySearch(); this._hasSearched = false;
+            this.journeyModes = d.mode;
+            document.querySelectorAll('#journey-mode-row .pill').forEach(p => p.classList.toggle('active', p.dataset.mode === d.mode));
+            this._updateOptionsSummary();
+            this.showScreen('plan');
+            this._toast?.('Choose a destination. The mode filter does not guarantee a particular operator.');
+        };
+        try {
+            const data = await this._networkJson(`Line/${encodeURIComponent(lineId)}/StopPoints`);
+            if (revision !== this._lineRevision || this.currentScreen !== 'line') return;
+            if (!Array.isArray(data)) throw new Error('Station directory unavailable.');
+            const stations = data.map(JourneyNetworkMap.networkStationReference).filter(Boolean).slice(0, 500).sort((a, b) => a.name.localeCompare(b.name));
+            this._stationHubRefs = this._stationHubRefs || new Map(); stations.forEach(s => this._stationHubRefs.set(s.id, s));
+            const select = document.getElementById('line-station-select');
+            select.innerHTML = '<option value="">Choose a station</option>' + stations.map((s, i) => `<option value="${i}">${this.escapeHtml(s.name)}</option>`).join('');
+            select.disabled = !stations.length; select.onchange = () => { if (select.value !== '') this.openStationHub(stations[+select.value]); };
+            const render = () => {
+                const query = document.getElementById('line-station-query').value.trim().toLowerCase();
+                const matches = stations.filter(s => s.name.toLowerCase().includes(query));
+                const list = document.getElementById('line-station-list');
+                list.innerHTML = `<p class="map-source">${matches.length} stations${matches.length > 30 ? ' · first 30 shown; filter to narrow the list' : ''}</p>` + matches.slice(0, 30).map(s => `<button class="network-station-row" data-station-id="${this.escapeAttr(s.id)}"><b>${this.escapeHtml(s.name)}</b><span>${s.modes.filter(m => m !== 'bus').map(m => JourneyNetworkMap.modes[m]).join(' / ')} ›</span></button>`).join('');
+                list.querySelectorAll('[data-station-id]').forEach(b => b.addEventListener('click', () => this.openStationHub(this._stationHubRefs.get(b.dataset.stationId))));
+            };
+            document.getElementById('line-station-query').oninput = render; render();
+        } catch (error) {
+            if (revision !== this._lineRevision || this.currentScreen !== 'line') return;
+            document.getElementById('line-station-list').textContent = 'Station directory unavailable. Try another service or refresh Lines.';
+            document.getElementById('line-station-select').innerHTML = '<option>Station directory unavailable</option>';
+        }
     }
 
     checkServiceAlerts(lines) {
         lines = this._sortLinesForSE20(lines);
         // Lines with issues (not "Good Service")
         const issues = lines.filter(line => {
-            const ls = line.lineStatuses && line.lineStatuses[0];
-            return ls && ls.statusSeverityDescription !== 'Good Service';
+            return ['bad', 'warn'].includes(JourneyNetworkMap.statusSummary(line).tone);
         });
         this._alertIssues = issues.map(line => {
-            const ls = line.lineStatuses[0];
+            const summary = JourneyNetworkMap.statusSummary(line);
+            const ls = summary.statuses.find(s => s.statusSeverityDescription === summary.text) || {};
             return {
                 name: (LINE_META[line.id] && LINE_META[line.id].name) || line.name,
                 status: ls.statusSeverityDescription,
@@ -2753,7 +2994,8 @@ class PengeDash {
         const upd = document.getElementById('alerts-updated');
         if (upd) upd.textContent = this.getTimeAgo(new Date());
         if (issues.length === 0) {
-            list.innerHTML = `<div class="all-good"><span class="ag-emoji">✅</span>All services running normally right now.</div>`;
+            const unknown = lines.some(line => JourneyNetworkMap.statusSummary(line).tone === 'unknown');
+            list.innerHTML = `<div class="all-good">${unknown ? 'Some service statuses are unknown. Check the exact service before travelling.' : this._networkStatusSource === 'live' && (this._networkLines || []).length ? 'No disruption reported in the returned line statuses. Check your exact service before travelling.' : 'No fresh status check is available. Refresh before travelling.'}</div>`;
             return;
         }
         list.innerHTML = issues.map(i => {
@@ -3038,7 +3280,7 @@ class PengeDash {
         const pref = document.querySelector('#journey-pref-row .pill.active:not([data-stepfree])');
         const mode = document.querySelector('#journey-mode-row .pill.active');
         const time = document.querySelector('#journey-time-row .pill.active');
-        const parts = [pref ? pref.textContent.trim() : '⚡ Fastest', mode ? mode.textContent.trim() : 'Any mode', time ? time.textContent.trim() : 'Now'];
+        const parts = [pref ? pref.textContent.trim() : '⚡ Fastest', mode ? mode.textContent.trim() : this.journeyModes ? this._modeLabel(this.journeyModes) : 'Any mode', time ? time.textContent.trim() : 'Now'];
         if (this.journeyStepFree) parts.push('♿ Step-free');
         el.textContent = parts.join(' · ');
     }
@@ -3542,6 +3784,7 @@ class PengeDash {
     }
 
     displayRouteOptions(journeys, destination, opts = {}) {
+        this._journeyResultsCheckedAt = opts.fromCache ? opts.checkedAt : Date.now();
         const container = document.getElementById('journey-results');
         const updatingIndicator = document.getElementById('journey-updating-indicator');
         if (updatingIndicator) updatingIndicator.remove();
@@ -4140,6 +4383,7 @@ class PengeDash {
             }
             this.displayRouteOptions(data.journeys, data.destination, {
                 fromCache: true,
+                checkedAt: data.ts,
                 resultSetId: Number.isInteger(data.resultSetId) ? data.resultSetId : undefined
             });
             const updateTime = document.getElementById('journey-updated');

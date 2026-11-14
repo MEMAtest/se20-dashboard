@@ -1104,6 +1104,96 @@ input { font-family: inherit; }
 .network-tabs { display: flex; gap: 8px; margin: 4px 0 20px; }
 .network-tabs button { flex: 1; padding: 12px 10px; border: 1px solid var(--blue, #335cff); border-radius: 12px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
 .network-tabs button[aria-selected="true"] { background: var(--blue, #335cff); color: white; }
+.network-heading h2 { font-size: 27px; letter-spacing: -.04em; }
+.network-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.network-map-tools { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+.network-map-tools .area-controls { flex-shrink: 0; margin: 0; }
+.network-map-tools .area-controls button { font-size: 12px; padding: 10px; min-height: 44px; }
+.network-station-lookup { flex: 1; min-width: 0; }
+.network-station-lookup #tube-map-station { font-size: 12px; padding: 10px 6px; margin: 0; }
+.network-map-canvas { position: relative; margin-top: 10px; }
+.network-map-canvas #tube-map-frame { height: clamp(350px, 59vh, 620px); }
+#network-map-fit { position: absolute; right: 10px; top: 10px; z-index: 800; border: 1px solid var(--line); border-radius: 9px; padding: 10px; min-height: 42px; background: var(--card); color: var(--blue); font-size: 11px; font-weight: 700; box-shadow: var(--shadow); }
+.network-map-info { margin: 12px 0; padding: 10px; font-size: 12px; color: var(--text-2); }
+.network-heading p { font-size: 13px; color: var(--text-2); margin: 4px 0 14px; }
+.network-mode-filters { display: flex; flex-wrap: wrap; gap: 7px; margin: 12px 0; }
+.network-mode-filters button { border: 1px solid var(--line); background: var(--card); color: var(--text-2); border-radius: 22px; padding: 9px 11px; min-height: 42px; font: inherit; font-size: 12px; font-weight: 600; }
+.network-mode-filters button[aria-pressed="true"] { color: #fff; background: var(--blue); border-color: var(--blue); }
+.network-tabs { padding: 5px; gap: 4px; background: var(--card-alt); border: 1px solid var(--line); border-radius: 15px; margin-bottom: 14px; }
+.network-tabs button { border: 0; min-height: 44px; font-weight: 700; font-size: 14px; }
+.network-alert-summary, .network-saved, .network-line-group, .network-status-card { padding: 16px; border: 1px solid var(--line); border-radius: 17px; background: var(--card); box-shadow: var(--shadow); margin-bottom: 14px; }
+.network-alert-summary { background: linear-gradient(110deg, var(--blue-soft), var(--card)); }
+.network-alert-summary:empty { display: none; }
+.network-alert-summary b, .network-alert-summary span { display: block; }
+.network-alert-summary b { font-size: 16px; }
+.network-alert-summary span, .network-saved p { color: var(--text-2); font-size: 12px; line-height: 1.5; margin-top: 5px; }
+.network-saved h3, .network-line-group h3 { font-size: 15px; margin: 0 0 10px; }
+.network-line-group h3 { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.network-line-group h3 > span { color: var(--muted); font-size: 11px; font-weight: 500; }
+.network-line-row { width: 100%; display: flex; align-items: center; gap: 8px; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; padding: 12px 0; border-top: 1px solid var(--line); }
+.network-line-row::before { content: ''; width: 6px; min-height: 34px; align-self: stretch; background: var(--service-colour); border-radius: 6px; flex-shrink: 0; }
+.network-line-row > span:first-of-type { flex: 1; min-width: 0; }
+.network-line-row b { display: block; font-size: 14px; }
+.network-line-row small { display: block; color: var(--text-2); font-size: 11px; margin-top: 3px; line-height: 1.45; }
+.network-status { display: inline-block; border-radius: 8px; padding: 5px 7px; font-size: 10px; font-weight: 700; background: var(--card-alt); color: var(--text-2); max-width: 125px; overflow-wrap: anywhere; }
+.network-status.good { background: var(--green-soft); color: var(--green); }
+.network-status.warn { background: var(--amber-soft); color: var(--amber); }
+.network-status.bad { background: var(--red-soft); color: var(--red); }
+.network-saved-pills, .network-mode-badges { display: flex; flex-wrap: wrap; gap: 7px; }
+.network-saved-pills button, .network-mode-badge { border: 1px solid var(--line); border-radius: 20px; padding: 8px 10px; color: var(--text-2); background: var(--card-alt); font: inherit; font-size: 12px; }
+.network-saved-pills button { min-height: 42px; }
+.network-detail-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 0 16px; }
+.network-detail-head h2 { font-size: 28px; letter-spacing: -.04em; line-height: 1.15; overflow-wrap: anywhere; }
+.network-detail-head h2 { display: flex; align-items: center; gap: 10px; }
+.network-detail-head h2 .roundel { flex-shrink: 0; transform: scale(1.35); margin: 0 4px; }
+.network-mode-badge { display: inline-flex; gap: 6px; align-items: center; }
+.network-mode-badge::before { content: ''; width: 7px; height: 7px; background: var(--muted); border-radius: 50%; }
+.network-mode-badge[data-service-mode="tube"]::before { background: #dc241f; }
+.network-mode-badge[data-service-mode="overground"]::before { background: #ee7c0e; }
+.network-mode-badge[data-service-mode="dlr"]::before { background: #00afad; }
+.network-mode-badge[data-service-mode="elizabeth-line"]::before { background: #6950a1; }
+.network-mode-badge[data-service-mode="tram"]::before { background: #70af19; }
+.network-detail-head p { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.network-star { background: var(--card); border: 1px solid var(--line); color: var(--text); border-radius: 50%; min-width: 46px; min-height: 46px; font-size: 25px; }
+.network-star[aria-pressed="true"] { color: #b77900; }
+.network-status-card p { font-size: 13px; line-height: 1.6; margin: 9px 0; overflow-wrap: anywhere; }
+.network-status-card h3 { font-size: 16px; }
+.network-status-card .network-status { font-size: 14px; max-width: 100%; }
+.network-status-card input, #line-station-select, #tube-map-station { width: 100%; border: 1px solid var(--line-strong); color: var(--text); background: var(--card-alt); font: inherit; font-size: 16px; padding: 12px; min-height: 46px; border-radius: 10px; margin: 7px 0; }
+.network-status-card label { display: block; font-size: 12px; color: var(--text-2); margin-top: 12px; }
+.network-station-row { background: transparent; border: 0; border-top: 1px solid var(--line); padding: 13px 0; width: 100%; text-align: left; color: var(--text); font: inherit; }
+.network-station-row b, .network-station-row span { display: block; }
+.network-station-row b { font-size: 14px; }
+.network-station-row span { color: var(--muted); font-size: 11px; margin-top: 4px; }
+.network-detail-actions { display: flex; gap: 8px; margin: 12px 0 18px; }
+.network-detail-actions button, #hub-on-map, .hub-refresh { min-height: 44px; border: 1px solid var(--line); background: var(--card); color: var(--blue); border-radius: 12px; padding: 10px 12px; font: inherit; font-size: 13px; font-weight: 700; }
+.network-detail-actions button { flex: 1; }
+.network-detail-actions button:first-child { background: var(--blue); color: #fff; border-color: var(--blue); }
+.hub-tabs { display: flex; overflow-x: auto; border: 1px solid var(--line); padding: 4px; background: var(--card); border-radius: 14px; margin: 17px 0; gap: 3px; }
+.hub-tabs button { flex: 1; min-height: 44px; border: 0; border-radius: 10px; background: transparent; color: var(--text-2); font: inherit; font-size: 11px; padding: 6px; }
+.hub-tabs button[aria-pressed="true"] { background: var(--blue); color: white; }
+.hub-departure { display: flex; gap: 12px; justify-content: space-between; align-items: center; padding: 14px; background: var(--card); border: 1px solid var(--line); border-bottom: 0; }
+.hub-departure:first-child { border-radius: 14px 14px 0 0; }
+.hub-departure:last-child { border-bottom: 1px solid var(--line); border-radius: 0 0 14px 14px; }
+.hub-departure > div:last-child { text-align: right; flex-shrink: 0; }
+.hub-departure b { font-size: 14px; }
+.hub-departure span, .hub-departure small { display: block; color: var(--text-2); font-size: 12px; margin-top: 4px; }
+.hub-facilities { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.hub-facilities article { padding: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+.hub-facilities b, .hub-facilities span { display: block; font-size: 12px; }
+.hub-facilities span { color: var(--text-2); margin-top: 8px; line-height: 1.5; }
+.hub-service { display: flex; gap: 10px; justify-content: space-between; border-top: 1px solid var(--line); padding: 12px 0; font-size: 13px; }
+.hub-service span { color: var(--muted); }
+.hub-external { display: inline-block; color: var(--blue); font-size: 13px; padding: 15px 0; }
+.hub-source-title { margin: 14px 0 8px; font-size: 12px; color: var(--muted); }
+.hub-source-title + .hub-departure { border-radius: 14px 14px 0 0; }
+.network-colour-key, .network-planner-details { border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: var(--card); margin: 12px 0; }
+.network-colour-key summary, .network-planner-details summary { cursor: pointer; font-size: 14px; font-weight: 700; }
+#network-legend { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-top: 10px; }
+#network-legend span { font-size: 11px; display: flex; align-items: center; gap: 5px; text-transform: capitalize; }
+#network-legend i { width: 16px; height: 4px; border-radius: 4px; }
+@media (max-width: 370px) { .network-line-group { padding: 12px; } .network-status { max-width: 95px; font-size: 9px; } .hub-facilities { grid-template-columns: 1fr; } }
+@media (max-width: 420px) { .network-mode-filters button { font-size: 11px; padding: 8px 9px; min-height: 40px; } }
 #network-map-panel[hidden], #network-status-panel[hidden] { display: none; }
 #tube-map-frame { width: 100%; height: min(70dvh, 760px); min-height: 340px; border: 1px solid #9aa6b5; border-radius: 12px; background: white; margin: 16px 0; }
 .map-links { display: flex; flex-wrap: wrap; gap: 12px 20px; margin-top: 12px; }
