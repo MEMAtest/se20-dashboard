@@ -196,6 +196,10 @@ class PengeDash {
 
     showScreen(name, extra = {}) {
         if (!name) return;
+        if (name !== 'lines') {
+            const expand = document.getElementById('network-map-expand');
+            if (expand?.getAttribute?.('aria-pressed') === 'true') expand.click();
+        }
         if (this.currentScreen === 'station' && name !== 'station') {
             this._hubRevision = (this._hubRevision || 0) + 1;
             clearTimeout(this._hubExpiry);
@@ -812,6 +816,15 @@ class PengeDash {
         this.setupNetworkUI();
         this.setupTubeConnections();
         document.getElementById('network-map-fit')?.addEventListener('click', () => this._tubeMap?.fitRoutes?.());
+        const expand = document.getElementById('network-map-expand');
+        const setExpanded = active => {
+            document.querySelector('.network-map-canvas')?.classList.toggle('expanded', active);
+            expand?.setAttribute('aria-pressed', String(active));
+            if (expand) expand.textContent = active ? 'Close map' : 'Expand map';
+            this._tubeMap?.invalidateSize();
+        };
+        expand?.addEventListener('click', () => setExpanded(expand.getAttribute('aria-pressed') !== 'true'));
+        document.addEventListener('keydown', event => { if (event.key === 'Escape') setExpanded(false); });
         document.getElementById('tube-map-home')?.addEventListener('click', () => {
             this._networkLineFocus = null;
             this._networkFocusStation = { ...(this.savedHome || this.home), name: this.homeLabel() };
@@ -830,11 +843,9 @@ class PengeDash {
                 document.getElementById(tab.getAttribute('aria-controls')).hidden = !active;
             });
             if (selected.id === 'network-map-tab') {
+                if (!this._tubeMapStarted) document.getElementById('tube-location-status').textContent = 'Schematic · drag to explore, pinch or use + / − to zoom. Tap a station for its hub.';
                 if (!this._tubeMapStarted) {
                     this._tubeMapStarted = true;
-                    if (!this._networkFocusStation && !this._networkLineFocus) this._networkFocusStation = {
-                        ...(this.savedHome || this.home || CONFIG.DEFAULT_HOME), name: this.homeLabel()
-                    };
                     JourneyNetworkMap.mount({ element: document.getElementById('tube-map-frame'),
                         stationSelect: document.getElementById('tube-map-station'),
                         multiMode: true,
@@ -877,7 +888,7 @@ class PengeDash {
     }
 
     setupNetworkUI() {
-        this.networkMode = 'all';
+        this.networkMode = 'tube';
         try {
             const saved = JSON.parse(localStorage.getItem('pengedash-fav-lines') || '[]');
             this._favLineIds = Array.isArray(saved) ? saved.filter(id => /^[a-z0-9-]{1,80}$/.test(id)).slice(0, 60) : [];
@@ -906,7 +917,7 @@ class PengeDash {
         if (this._networkFocusStation && this._tubeMap) {
             this._tubeMap.setView([this._networkFocusStation.lat, this._networkFocusStation.lon], 14);
             const status = document.getElementById('tube-location-status');
-            if (status) status.textContent = `Viewing ${this._networkFocusStation.name || 'selected place'}. Home and Near me change the map centre, not your saved Home.`;
+            if (status) status.textContent = `Schematic focus: ${this._tubeMap.focusedStation || this._networkFocusStation.name || 'selected station'}. Diagram distances are not walking distances.`;
             this._networkFocusStation = null;
         }
     }
@@ -1025,6 +1036,8 @@ class PengeDash {
             document.getElementById('hub-plan').onclick = () => this._planToNetworkStation(profile);
             const onMap = () => {
                 this._networkFocusStation = profile; this._networkLineFocus = null;
+                if (!profile.modes.includes(this.networkMode)) this.networkMode = profile.modes.find(m => m !== 'bus') || 'all';
+                document.querySelectorAll('[data-network-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.networkMode === this.networkMode)));
                 this.showScreen('lines'); document.getElementById('network-map-tab').click(); this._applyNetworkMapFilter();
             };
             document.getElementById('hub-map').onclick = onMap; document.getElementById('hub-on-map').onclick = onMap;
@@ -2931,6 +2944,8 @@ class PengeDash {
             button.textContent = active ? '★' : '☆'; button.setAttribute('aria-pressed', String(active)); button.setAttribute('aria-label', `${active ? 'Unsave' : 'Save'} ${d.name}`);
         };
         document.getElementById('line-view-map').onclick = () => {
+            this.networkMode = d.mode;
+            document.querySelectorAll('[data-network-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.networkMode === d.mode)));
             this._networkLineFocus = lineId; this.showScreen('lines'); document.getElementById('network-map-tab').click(); this._applyNetworkMapFilter();
         };
         document.getElementById('line-plan').onclick = () => {
@@ -5336,7 +5351,7 @@ class PengeDash {
             ? `Near your phone - fixed at ${new Date(this._nearbyPositionAt || Date.now()).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}.${accuracy} Refresh Near me after moving.`
             : `Around ${this.home?.label || this.homeLabel()}. Tap Near me to use this phone's location.`)
             + (this._nearbyPartial ? ' Some nearby transport sources are unavailable.' : '');
-        for (const id of ['nearby-location-status', 'tube-location-status']) {
+        for (const id of ['nearby-location-status']) {
             const node = document.getElementById(id); if (node) node.textContent = text;
         }
     }
@@ -5351,7 +5366,11 @@ class PengeDash {
             const area = await this.resolveLocation(home, { persist: false, savePlace: false });
             if (!area) return;
             this.userLayer?.clearLayers();
-            if (network) this._tubeMap?.setView([home.lat, home.lon], 14);
+            if (network) {
+                this._tubeMap?.setView([home.lat, home.lon], 14);
+                const status = document.getElementById('tube-location-status');
+                if (status) status.textContent = `Schematic station nearest Home: ${this._tubeMap?.focusedStation || 'not available'}. Not a walking-distance map.`;
+            }
             else this.showScreen('nearby');
         } catch (error) { this.updateNearbyLocationUI(error.message); }
     }
@@ -5476,15 +5495,22 @@ class PengeDash {
     // AND recentre the whole app (Nearby list + map + journey) on it — not just a
     // temporary map pan. Fast, low-accuracy fix; visible error if it fails.
     async locateMe({ navigate = true, network = false } = {}) {
+        const report = message => {
+            this.updateNearbyLocationUI(message);
+            if (network) {
+                const status = document.getElementById('tube-location-status');
+                if (status) status.textContent = message || `Schematic station nearest phone: ${this._tubeMap?.focusedStation || 'not available'}. Not a walking-distance map.`;
+            }
+        };
         if (!navigator.geolocation) {
-            this.updateNearbyLocationUI('Phone location is unavailable. Use Home or search a station instead.');
+            report('Phone location is unavailable. Use Home or search a station instead.');
             return;
         }
         const selection = this._geoSelection = (this._geoSelection || 0) + 1;
         this._userPickedLocation = true;
         if (navigate && !network) this.showScreen('nearby');
         this._setLocateBusy(true);
-        this.updateNearbyLocationUI('Finding your phone location...');
+        report('Finding your phone location...');
         try {
             const pos = await this._acquirePosition();
             if (selection !== this._geoSelection) return;
@@ -5506,10 +5532,10 @@ class PengeDash {
                     .addTo(this.userLayer).bindPopup('You are here');
             }
             if (network) this._tubeMap?.setView(here, 14);
-            this.updateNearbyLocationUI();
+            report();
         } catch (error) {
             if (selection !== this._geoSelection) return;
-            this.updateNearbyLocationUI(error.code === 1
+            report(error.code === 1
                 ? 'Location permission denied. Allow location in browser settings, or use Home / station search. Your previous area is unchanged.'
                 : error.message || 'Could not get your location. Your previous area is unchanged; tap Near me to retry.');
         } finally { if (selection === this._geoSelection) this._setLocateBusy(false); }

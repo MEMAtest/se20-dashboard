@@ -1113,7 +1113,16 @@ input { font-family: inherit; }
 .network-station-lookup #tube-map-station { font-size: 12px; padding: 10px 6px; margin: 0; }
 .network-map-canvas { position: relative; margin-top: 10px; }
 .network-map-canvas #tube-map-frame { height: clamp(350px, 59vh, 620px); }
+#tube-map-frame.leaflet-container { background: #fbfcff !important; color: #162544; }
+#tube-map-frame .schematic-label { color: #162544; background: rgba(251,252,255,.94); border: 0; box-shadow: none; border-radius: 2px; padding: 1px 3px; font-family: inherit; font-size: 12px; line-height: 1.15; font-weight: 650; white-space: normal; max-width: 90px; }
+#tube-map-frame .schematic-label::before { display: none; }
+#tube-map-frame .leaflet-popup-content { color: #162544; }
+#tube-map-frame .leaflet-popup-content button { display: block; margin: 8px 0; min-height: 40px; padding: 8px 12px; border: 1px solid #b9c7dc; border-radius: 8px; background: #edf3ff; color: #1046ad; font: inherit; }
 #network-map-fit { position: absolute; right: 10px; top: 10px; z-index: 800; border: 1px solid var(--line); border-radius: 9px; padding: 10px; min-height: 42px; background: var(--card); color: var(--blue); font-size: 11px; font-weight: 700; box-shadow: var(--shadow); }
+#network-map-expand { position: absolute; right: 10px; top: 64px; z-index: 800; border: 1px solid #c5d1e2; border-radius: 9px; padding: 10px; min-height: 44px; background: #fff; color: #164baf; font: inherit; font-size: 12px; font-weight: 700; box-shadow: var(--shadow); }
+.network-map-canvas.expanded { position: fixed; inset: 12px; margin: 0; z-index: 2100; background: #fbfcff; border-radius: 14px; box-shadow: 0 0 0 30px rgba(16,29,50,.45); }
+.network-map-canvas.expanded #tube-map-frame { height: 100%; margin: 0; }
+.network-map-canvas.expanded #network-map-expand { top: 10px; bottom: auto; right: 150px; }
 .network-map-info { margin: 12px 0; padding: 10px; font-size: 12px; color: var(--text-2); }
 .network-heading p { font-size: 13px; color: var(--text-2); margin: 4px 0 14px; }
 .network-mode-filters { display: flex; flex-wrap: wrap; gap: 7px; margin: 12px 0; }
