@@ -8,6 +8,9 @@
 !transit-data.js
 !network-map.js
 !tube-network.js
+!tube-map.js
+!familiar-tube.svg
+!TUBE-MAP-LICENCE.txt
 !sw.js
 !manifest.json
 !icon.svg

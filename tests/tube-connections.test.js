@@ -104,7 +104,7 @@ function appHarness(fetcher) {
     const timers = new Map(); let count = 0;
     const context = { console, Date, Map, URL, AbortController, Event, JourneyGuidance: G, JourneyNetworkMap: require('../network-map.js'), LINE_META: {}, CONFIG: {}, navigator: {},
         setTimeout: fn => { const id = ++count; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id),
-        document: { addEventListener() {}, getElementById: id => nodes[id], createElement: () => ({ children: [], events: {}, append(node) { this.children.push(node); }, addEventListener(k, fn) { this.events[k] = fn; } }) }, fetch: fetcher };
+        document: { addEventListener() {}, querySelectorAll: () => [], getElementById: id => nodes[id], createElement: () => ({ children: [], events: {}, append(node) { this.children.push(node); }, addEventListener(k, fn) { this.events[k] = fn; } }) }, fetch: fetcher };
     vm.runInNewContext(fs.readFileSync(require.resolve('../app.js'), 'utf8') + '\nthis.App = PengeDash;', context);
     const app = Object.create(context.App.prototype);
     app._tubeStations = new Map([['940GZZLUOXC', station('940GZZLUOXC')], ['940GZZLUKSX', station('940GZZLUKSX')]]);
@@ -184,6 +184,17 @@ test('routing form is labelled and is discoverable from Plan and map markers', (
     assert.match(html, /id="plan-tube-link"/); assert.match(html, /aria-label="Quickest Tube connection"/);
     for (const id of ['tube-route-from', 'tube-route-to', 'tube-route-tube-only', 'tube-route-submit', 'tube-route-status']) assert.ok(html.includes(`id="${id}"`));
     assert.match(fs.readFileSync(require.resolve('../network-map.js'), 'utf8'), /Quickest route here/);
+});
+
+test('selected map overlay is cleared on an endpoint change and on route estimate expiry', async () => {
+    const start = new Date(Date.now() + 60000).toISOString(), arrival = new Date(Date.now() + 600000).toISOString();
+    const { app, nodes, timers } = appHarness(async () => ({ ok: true, json: async () => ({ journeys: [{ startDateTime: start, arrivalDateTime: arrival, duration: 9, legs: [tubeLeg()] }] }) }));
+    let cleared=0, painted=0;
+    app._quickTubeMap = { clearRoute() { cleared++; }, showJourney() { painted++; return {complete:true,drawn:1}; } };
+    await app.findTubeConnection(); assert.equal(painted,1); assert.equal(app._tubeRouteOptions.length,1);
+    nodes['tube-route-form'].events.change(); assert.ok(cleared>=2); assert.equal(app._tubeRouteOptions.length,0);
+    await app.findTubeConnection(); assert.equal(painted,2);
+    const before=cleared; [...timers.values()][0](); assert.equal(cleared,before+1); assert.equal(app._tubeRouteOptions.length,0);
 });
 
 test('real-shaped route updates are escaped, with exact origin departures and relevant Tube status actions', async () => {

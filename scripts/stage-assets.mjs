@@ -6,7 +6,7 @@ import path from 'node:path';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const directory = path.join(root, '.deploy-assets');
 const files = ['index.html', 'styles.css', 'app.js', 'config.js', 'journey-guidance.js',
-    'transit-data.js', 'network-map.js', 'tube-network.js', 'sw.js', 'manifest.json', 'icon.svg', 'icon-192.png', 'icon-512.png', '_headers'];
+    'transit-data.js', 'network-map.js', 'tube-network.js', 'tube-map.js', 'familiar-tube.svg', 'TUBE-MAP-LICENCE.txt', 'sw.js', 'manifest.json', 'icon.svg', 'icon-192.png', 'icon-512.png', '_headers'];
 await mkdir(directory, { recursive: true });
 for (const name of await readdir(directory)) {
     if (!files.includes(name)) throw new Error('Unexpected staging file: ' + name);
