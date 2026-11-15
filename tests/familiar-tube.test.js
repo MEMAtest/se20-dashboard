@@ -62,6 +62,17 @@ test('SVG projection follows the exact continuous branch, supports reverse trave
     assert.equal(T.projectedSegment(paths,[[400,200]],[[20,10]]),null);
 });
 
+test('route callouts avoid the highlighted line for horizontal, reverse and vertical travel', () => {
+    const route = Array.from({length:41},(_,i)=>({x:90+i*5,y:i<5?435-i*3:420}));
+    const keys = [{id:'start',role:'from',x:300,y:420},{id:'change',role:'change',x:110,y:420},{id:'end',role:'to',x:90,y:435}];
+    const forward = T.labelDirections(keys,route,390,844);
+    assert.equal(forward.get('start'),'top'); assert.equal(forward.get('end'),'bottom');
+    const reverse = T.labelDirections([{...keys[2],role:'from'}, {...keys[1]}, {...keys[0],role:'to'}],route,390,844);
+    assert.equal(reverse.get('end'),'bottom');
+    const vertical = T.labelDirections([{id:'middle',role:'change',x:195,y:400}],Array.from({length:50},(_,i)=>({x:195,y:250+i*6})),390,844);
+    assert.ok(['left','right'].includes(vertical.get('middle')));
+});
+
 test('new map, adapted artwork and attribution are cached and explicitly staged, with no raw vendor publication', () => {
     for (const path of ['../sw.js','../scripts/stage-assets.mjs','../.assetsignore']) {
         const source=fs.readFileSync(require.resolve(path),'utf8');
