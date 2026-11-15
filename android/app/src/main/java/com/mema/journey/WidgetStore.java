@@ -15,11 +15,22 @@ final class WidgetStore {
         try { return Station.fromJson(read(id, "config").getJSONObject(key)); } catch (Exception e) { return null; }
     }
     void configure(int id, Station station, Station destination) {
+        configure(id, WidgetKind.BOARD, station, destination, false, "");
+    }
+    void configure(int id, WidgetKind kind, Station station, Station destination, boolean phone, String lineId) {
+        if (kind == WidgetKind.LINE ? WidgetData.line(lineId) == null : kind == WidgetKind.HOME ? destination == null || (!phone && station == null) : station == null || (kind == WidgetKind.ROUTE && destination == null)) throw new IllegalArgumentException("Choose the required widget settings");
         try {
-            JSONObject config = new JSONObject().put("station", station.json());
+            JSONObject config = new JSONObject().put("kind", kind.name()).put("phone", kind == WidgetKind.HOME && phone).put("lineId", lineId);
+            if (station != null) config.put("station", station.json());
             if (destination != null) config.put("destination", destination.json());
             prefs.edit().putString(id + ":config", config.toString()).remove(id + ":snapshot").remove(id + ":error").remove(id + ":attempt").apply();
         } catch (Exception e) { throw new IllegalArgumentException("Invalid configuration", e); }
+    }
+    boolean configured(int id, WidgetKind kind) {
+        JSONObject config = read(id, "config");
+        if (kind == WidgetKind.LINE) return WidgetData.line(config.optString("lineId")) != null;
+        if (kind == WidgetKind.HOME) return station(id, "destination") != null && (config.optBoolean("phone") || station(id, "station") != null);
+        return station(id, "station") != null && (kind != WidgetKind.ROUTE || station(id, "destination") != null);
     }
     void remove(int id) {
         SharedPreferences.Editor edit = prefs.edit();

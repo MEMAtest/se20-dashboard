@@ -607,6 +607,7 @@ class PengeDash {
     // called after the first paint so the UI upgrades in place when GPS resolves.
     initGeolocation() {
         this.updateNearbyLocationUI();
+        if (new URLSearchParams(window.location.search).get('widget') === '1') return;
         // Only auto-follow an already granted permission; a fresh permission is
         // requested by the explicit Near me control, not on every launch.
         navigator.permissions?.query({ name: 'geolocation' })?.then(permission => {
@@ -935,6 +936,14 @@ class PengeDash {
         this._favLineIds = saved.includes(lineId) ? saved.filter(id => id !== lineId) : [...saved, lineId].slice(-60);
         try { localStorage.setItem('pengedash-fav-lines', JSON.stringify(this._favLineIds)); } catch (e) { /* preferences unavailable */ }
         this._renderNetworkLines();
+        this._openPendingWidgetLine();
+    }
+
+    _openPendingWidgetLine() {
+        const id = this._pendingWidgetLine;
+        if (!id || !this.lineDetails?.[id]) return;
+        this._pendingWidgetLine = null;
+        this.openLineDetail(id);
     }
 
     _renderNetworkLines() {
@@ -2949,6 +2958,7 @@ class PengeDash {
         });
 
         this._renderNetworkLines();
+        this._openPendingWidgetLine();
     }
 
     async openLineDetail(lineId) {
@@ -3042,7 +3052,7 @@ class PengeDash {
         const upd = document.getElementById('alerts-updated');
         if (upd) upd.textContent = this.getTimeAgo(new Date());
         if (issues.length === 0) {
-            const unknown = lines.some(line => JourneyNetworkMap.statusSummary(line).tone === 'unknown');
+            const unknown = (this._networkLines || []).some(line => JourneyNetworkMap.statusSummary(line).tone === 'unknown');
             list.innerHTML = `<div class="all-good">${unknown ? 'Some service statuses are unknown. Check the exact service before travelling.' : this._networkStatusSource === 'live' && (this._networkLines || []).length ? 'No disruption reported in the returned line statuses. Check your exact service before travelling.' : 'No fresh status check is available. Refresh before travelling.'}</div>`;
             return;
         }
@@ -3221,7 +3231,7 @@ class PengeDash {
         if (this.journeyOrigin === 'here') {
             if (fromBtn) fromBtn.textContent = 'Phone location';
             navigator.permissions?.query({ name: 'geolocation' })?.then(permission => {
-                if (permission.state === 'granted' && this.journeyOrigin === 'here') this.getCurrentLocation();
+                if (permission.state === 'granted' && this.journeyOrigin === 'here' && new URLSearchParams(window.location.search).get('widget') !== '1') this.getCurrentLocation();
             }).catch(() => {});
         }
 
@@ -3549,13 +3559,21 @@ class PengeDash {
         try {
             const selection = JourneyGuidance.widgetJourneySelection(search);
             if (!selection) return;
+            if (selection.kind === 'line') {
+                this._pendingWidgetLine = selection.lineId;
+                this.showScreen('lines'); this._openPendingWidgetLine(); return;
+            }
             this.showScreen('plan');
-            this._selectJourneyOrigin(selection.origin);
+            if (selection.kind === 'phone') {
+                this._invalidateJourneySearch(); this.journeyOrigin = 'here'; this.selectedOrigin = null;
+                this.currentLocation = null; this._currentLocationAt = 0;
+                document.getElementById('from-text').textContent = 'Phone location';
+            } else this._selectJourneyOrigin(selection.origin);
             const input = document.getElementById('destination-input');
             input.value = selection.destination?.label || '';
             this._selectedDestination = selection.destination;
             document.getElementById('destination-clear').style.display = selection.destination ? 'flex' : 'none';
-            this._originStatus('Widget station loaded. Check your destination, then find routes. Saved Home is unchanged.');
+            this._originStatus(selection.kind === 'phone' ? 'Home station loaded. Tap Find route to use your phone location. Saved Home is unchanged.' : 'Widget station loaded. Check your destination, then find routes. Saved Home is unchanged.');
         } catch (error) {
             this._invalidateJourneySearch();
             this.journeyOrigin = 'search'; this.selectedOrigin = null; this._selectedDestination = null;

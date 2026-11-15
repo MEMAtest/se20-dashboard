@@ -29,11 +29,15 @@ run(path.join(root, 'android', 'gradlew'), ['--no-daemon', '--console=plain', ':
 const output = process.env.JOURNEY_OUTPUT_DIR;
 if (!output || !path.isAbsolute(output)) throw new Error('Set JOURNEY_OUTPUT_DIR to the canonical absolute release-artifact folder.');
 await mkdir(output, { recursive: true });
-const apk = path.join(output, 'Journey-Android-0.1.0.apk');
+const gradle = await readFile(path.join(root, 'android/app/build.gradle'), 'utf8');
+const version = gradle.match(/versionName '([0-9.]+)'/)?.[1], versionCode = Number(gradle.match(/versionCode (\d+)/)?.[1]);
+if (!version || !versionCode) throw new Error('Missing release version');
+const apk = path.join(output, `Journey-Android-${version}.apk`);
+const bytes = await readFile(path.join(root, 'android/app/build/outputs/apk/release/app-release.apk')), sha256 = createHash('sha256').update(bytes).digest('hex');
+if (await exists(apk) && createHash('sha256').update(await readFile(apk)).digest('hex') !== sha256) throw new Error('Refusing to overwrite a different accepted APK. Use a new evidence folder.');
 await copyFile(path.join(root, 'android/app/build/outputs/apk/release/app-release.apk'), apk);
-const bytes = await readFile(apk), sha256 = createHash('sha256').update(bytes).digest('hex');
 const source = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim();
 const dirty = spawnSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).stdout.trim().length > 0;
-const manifest = { package: 'com.mema.journey', version: '0.1.0', versionCode: 1, apk: path.basename(apk), bytes: bytes.length, sha256, source, dirty, builtAt: new Date().toISOString(), signingKey: '~/.android/journey-signing/journey-release.p12', acceptance: 'See ANDROID-ACCEPTANCE.md; a successful build alone is not physical-phone acceptance.' };
+const manifest = { package: 'com.mema.journey', version, versionCode, apk: path.basename(apk), bytes: bytes.length, sha256, source, dirty, builtAt: new Date().toISOString(), signingKey: '~/.android/journey-signing/journey-release.p12', acceptance: 'See ANDROID-ACCEPTANCE.md; a successful build alone is not physical-phone acceptance.' };
 await writeFile(path.join(output, 'release-manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 console.log(JSON.stringify({ apk, sha256, bytes: bytes.length, source, dirty }));

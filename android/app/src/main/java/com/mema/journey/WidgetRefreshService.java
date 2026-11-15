@@ -19,7 +19,8 @@ public final class WidgetRefreshService extends JobService {
     private final Map<Integer, Future<?>> work = new ConcurrentHashMap<>();
     static int jobId(int widget, boolean immediate) { return 1000 + widget * 2 + (immediate ? 1 : 0); }
     static void schedule(Context c, int id, boolean immediate) {
-        if (new WidgetStore(c).station(id, "station") == null || !DeparturesWidget.owns(c, id)) return;
+        WidgetKind kind = DeparturesWidget.kind(c,id);
+        if (!kind.refreshes || !new WidgetStore(c).configured(id,kind) || !DeparturesWidget.owns(c, id)) return;
         PersistableBundle extras = new PersistableBundle(); extras.putInt("widget", id);
         JobInfo.Builder builder = new JobInfo.Builder(jobId(id, immediate), new ComponentName(c, WidgetRefreshService.class))
                 .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).setExtras(extras);
@@ -33,15 +34,16 @@ public final class WidgetRefreshService extends JobService {
     @Override public boolean onStartJob(JobParameters params) {
         int id = params.getExtras().getInt("widget", -1);
         if (!DeparturesWidget.owns(this, id)) return false;
-        WidgetStore store = new WidgetStore(this); Station station = store.station(id, "station");
-        if (station == null) return false;
+        WidgetStore store = new WidgetStore(this); WidgetKind kind = DeparturesWidget.kind(this,id); Station station = store.station(id, "station");
+        if (!kind.refreshes || !store.configured(id,kind)) return false;
         long now = System.currentTimeMillis(), attempt = store.prefs.getLong(id + ":attempt", 0);
         if (now >= attempt && now - attempt < 30_000) { DeparturesWidget.render(this, id); return false; }
         String config = store.read(id, "config").toString();
         store.prefs.edit().putLong(id + ":attempt", now).apply();
         FutureTask<Void> task = new FutureTask<>(() -> {
             try {
-                String snapshot = new TflClient().snapshot(station).toString();
+                TflClient client = new TflClient();
+                String snapshot = (kind == WidgetKind.LINE ? client.lineStatus(store.read(id,"config").optString("lineId")) : kind == WidgetKind.ROUTE ? client.journey(station,store.station(id,"destination")) : client.snapshot(station)).toString();
                 if (!Thread.currentThread().isInterrupted() && DeparturesWidget.owns(this, id) && store.read(id, "config").toString().equals(config))
                     store.prefs.edit().putString(id + ":snapshot", snapshot).remove(id + ":error").apply();
             } catch (Exception e) {

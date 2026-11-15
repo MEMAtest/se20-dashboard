@@ -1,0 +1,18 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@id/compact_root" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="12dp" android:background="@drawable/widget_soft_background">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="36dp" android:gravity="center_vertical">
+        <TextView android:id="@id/compact_title" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="MY JOURNEY" android:textSize="14sp" android:textStyle="bold" android:textColor="#10253F" android:maxLines="1" android:ellipsize="end"/>
+        <ImageView android:id="@id/compact_refresh" android:layout_width="44dp" android:layout_height="match_parent" android:padding="8dp" android:src="@drawable/ic_refresh" android:contentDescription="Refresh journey estimate"/>
+    </LinearLayout>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:gravity="center_vertical">
+        <LinearLayout android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:orientation="vertical">
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="LEAVE AT" android:textSize="10sp" android:textStyle="bold" android:textColor="#52657D"/>
+            <TextView android:id="@+id/route_departure" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="--:--" android:textSize="29sp" android:fontFamily="sans-serif-condensed" android:textStyle="bold" android:textColor="#073BC6" android:maxLines="1"/>
+        </LinearLayout>
+        <LinearLayout android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:orientation="vertical">
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="ARRIVE AT" android:textSize="10sp" android:textStyle="bold" android:textColor="#52657D"/>
+            <TextView android:id="@+id/route_arrival" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="--:--" android:textSize="29sp" android:fontFamily="sans-serif-condensed" android:textStyle="bold" android:textColor="#10253F" android:maxLines="1"/>
+        </LinearLayout>
+    </LinearLayout>
+    <TextView android:id="@id/compact_subtitle" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Tap refresh for a route estimate" android:textSize="12sp" android:textColor="#244268" android:maxLines="2" android:ellipsize="end"/>
+    <TextView android:id="@id/compact_meta" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Snapshot, not a live countdown" android:textSize="10sp" android:textColor="#52657D" android:maxLines="1" android:ellipsize="end" android:paddingTop="4dp"/>
+</LinearLayout>

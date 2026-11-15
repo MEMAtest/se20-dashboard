@@ -1,0 +1,8 @@
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@id/compact_root" android:layout_width="match_parent" android:layout_height="match_parent" android:padding="12dp" android:background="@drawable/widget_home_background">
+    <ImageView android:id="@+id/home_arrow" android:layout_width="28dp" android:layout_height="match_parent" android:layout_alignParentEnd="true" android:src="@drawable/ic_arrow_white" android:contentDescription="Open home journey"/>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:layout_toStartOf="@id/home_arrow" android:orientation="vertical" android:gravity="center_vertical">
+        <TextView android:id="@id/compact_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="GO HOME" android:textSize="10sp" android:textColor="#C9DBFF" android:textStyle="bold" android:maxLines="1"/>
+        <TextView android:id="@id/compact_value" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Home station" android:textSize="18sp" android:textColor="#FFFFFF" android:textStyle="bold" android:maxLines="1" android:ellipsize="end"/>
+        <TextView android:id="@id/compact_subtitle" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="From phone, on tap" android:textSize="11sp" android:textColor="#DFE9FF" android:maxLines="1" android:ellipsize="end"/>
+    </LinearLayout>
+</RelativeLayout>

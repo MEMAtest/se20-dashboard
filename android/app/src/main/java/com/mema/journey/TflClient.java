@@ -21,7 +21,7 @@ final class TflClient {
         if (Thread.currentThread().isInterrupted()) throw new SourceException("CANCELLED");
         HttpURLConnection c = (HttpURLConnection) new URL("https://api.tfl.gov.uk/" + path).openConnection();
         c.setConnectTimeout(3500); c.setReadTimeout(3500); c.setInstanceFollowRedirects(false);
-        c.setRequestProperty("Accept", "application/json"); c.setRequestProperty("User-Agent", "Journey-Android/0.1");
+        c.setRequestProperty("Accept", "application/json"); c.setRequestProperty("User-Agent", "Journey-Android/0.2");
         try {
             int status = c.getResponseCode();
             if (status != 200) throw new SourceException(status == 429 ? "RATE_LIMITED" : "SOURCE_UNAVAILABLE");
@@ -77,6 +77,18 @@ final class TflClient {
         if (!statusVerified && alert.startsWith("TfL")) alert = "Service alerts unverified; TfL predictions only";
         if (failedBoards > 0) alert = "Partial departures: " + failedBoards + " board(s) unavailable. " + alert;
         return new JSONObject().put("checkedAt", System.currentTimeMillis()).put("arrivals", arrivals).put("ids", new JSONArray(ids)).put("alert", alert);
+    }
+    JSONObject journey(Station origin, Station destination) throws Exception {
+        if (origin == null || destination == null) throw new SourceException("CHOOSE_STATIONS");
+        String from = WidgetData.encode(origin.lat + "," + origin.lon), to = WidgetData.encode(destination.lat + "," + destination.lon);
+        java.time.ZonedDateTime when = java.time.Instant.ofEpochMilli(System.currentTimeMillis() + 60_000).atZone(java.time.ZoneId.of("Europe/London"));
+        String date = when.format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd")), time = when.format(java.time.format.DateTimeFormatter.ofPattern("HHmm"));
+        JSONObject response = (JSONObject)get("Journey/JourneyResults/" + from + "/to/" + to + "?date=" + date + "&time=" + time + "&timeIs=Departing&journeyPreference=LeastTime&mode=tube,overground,dlr,elizabeth-line,tram,national-rail,bus,walking");
+        return WidgetData.routeSnapshot(response, System.currentTimeMillis());
+    }
+    JSONObject lineStatus(String lineId) throws Exception {
+        if (WidgetData.line(lineId) == null) throw new SourceException("CHOOSE_LINE");
+        return WidgetData.lineSnapshot((JSONArray)get("Line/" + lineId + "/Status"), lineId, System.currentTimeMillis());
     }
     static void collect(JSONObject stop, Set<String> ids, Set<String> lines, int depth) {
         if (depth > 2) return;
