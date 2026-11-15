@@ -1,0 +1,31 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.mema.journey'
+    compileSdk 36
+    defaultConfig {
+        applicationId 'com.mema.journey'
+        minSdk 26
+        targetSdk 36
+        versionCode 1
+        versionName '0.1.0'
+        testInstrumentationRunner 'com.mema.journey.DeviceChecks'
+    }
+    signingConfigs {
+        release {
+            if (System.getenv('JOURNEY_KEYSTORE_PATH')) {
+                storeFile file(System.getenv('JOURNEY_KEYSTORE_PATH'))
+                storePassword System.getenv('JOURNEY_KEYSTORE_PASSWORD')
+                keyAlias 'journey'
+                keyPassword System.getenv('JOURNEY_KEYSTORE_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        release { minifyEnabled false; signingConfig signingConfigs.release }
+        debug { applicationIdSuffix '.debug'; versionNameSuffix '-debug' }
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    testOptions { unitTests.returnDefaultValues = true }
+}
+dependencies { testImplementation 'junit:junit:4.13.2'; testImplementation 'org.json:json:20250517' }

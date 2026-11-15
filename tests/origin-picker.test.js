@@ -14,7 +14,7 @@ function harness(fetcher = async () => ({ ok: true, json: async () => ({ journey
         return nodes.get(id);
     };
     const store = new Map(); const timers = new Map(); let timerId = 0;
-    const context = { console: { log() {}, error() {} }, Date, AbortController, JourneyGuidance: G, navigator: { geolocation: {} },
+    const context = { console: { log() {}, error() {} }, Date, AbortController, URLSearchParams, JourneyGuidance: G, navigator: { geolocation: {} },
         CONFIG: { GEOCODE_URL: 'https://api.postcodes.io' },
         document: { addEventListener() {}, getElementById: element, querySelectorAll: () => [], createElement: () => ({
             set textContent(value) { this.innerHTML = String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -38,6 +38,30 @@ test('origin label opens a picker without secretly toggling Home and phone', () 
     element('from-text').events.click();
     assert.equal(element('origin-picker').hidden, false);
     assert.equal(element('from-text')['aria-expanded'], 'true'); assert.equal(app.journeyOrigin, 'home');
+});
+
+test('widget handoff loads exact station selection without a provider request or Home mutation', () => {
+    let calls = 0; const { app, element } = harness(() => { calls++; throw Error('unexpected request'); });
+    const home = JSON.stringify(app.savedHome);
+    app._applyWidgetLink('?widget=1&fromLat=51.412153&fromLon=-0.065886&fromName=Anerley&to=Victoria&toId=1000248');
+    assert.equal(calls, 0); assert.equal(app.selectedOrigin.label, 'Anerley'); assert.equal(app.journeyOrigin, 'place');
+    assert.equal(app._selectedDestination.id, '1000248'); assert.equal(element('destination-input').value, 'Victoria');
+    assert.equal(JSON.stringify(app.savedHome), home); assert.match(element('origin-status').textContent, /Check your destination/);
+});
+
+test('invalid widget links clear old endpoints instead of falling back to Home or GPS', () => {
+    const { app, element } = harness();
+    app._applyWidgetLink('?widget=1&fromLat=&fromLon=-.1&fromName=London&to=Victoria&toId=1000248');
+    assert.equal(app.journeyOrigin, 'search'); assert.equal(app.selectedOrigin, null); assert.equal(app._selectedDestination, null);
+    assert.equal(element('destination-input').value, ''); assert.match(element('origin-status').textContent, /invalid/);
+});
+
+test('widget selection validation rejects malformed coordinates, markup, IDs and missing destination fields', () => {
+    const base = '?widget=1&fromLat=51.5&fromLon=-.1&fromName=London';
+    assert.equal(G.widgetJourneySelection('?to=Victoria'), null);
+    assert.equal(G.widgetJourneySelection(base).destination, null);
+    for (const query of [base.replace('51.5', 'Infinity'), base.replace('-.1', '181'), base.replace('London', '%3Cscript%3E'), base + '&to=Victoria', base + '&toId=1000248', base + '&to=Victoria&toId=https://bad.test'])
+        assert.throws(() => G.widgetJourneySelection(query));
 });
 
 test('GPS validation refuses stale, future, out-of-range and imprecise positions', () => {

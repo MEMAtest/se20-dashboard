@@ -106,6 +106,7 @@ class PengeDash {
 
         // Reflect saved home in the journey "from" label
         this.applyHomeToJourney();
+        this._applyWidgetLink(window.location.search);
 
         // Nearby placeholder until detection completes
         this.renderNearbyNow(this.nearbyStations.length === 0);
@@ -3542,6 +3543,26 @@ class PengeDash {
         document.getElementById('from-text').textContent = this.selectedOrigin.label;
         this._originStatus(place.postcode ? 'Postcode centre selected, not an exact street address.' : 'Selected starting point. Saved Home is unchanged.');
         this._toggleOriginPicker(false);
+    }
+
+    _applyWidgetLink(search) {
+        try {
+            const selection = JourneyGuidance.widgetJourneySelection(search);
+            if (!selection) return;
+            this.showScreen('plan');
+            this._selectJourneyOrigin(selection.origin);
+            const input = document.getElementById('destination-input');
+            input.value = selection.destination?.label || '';
+            this._selectedDestination = selection.destination;
+            document.getElementById('destination-clear').style.display = selection.destination ? 'flex' : 'none';
+            this._originStatus('Widget station loaded. Check your destination, then find routes. Saved Home is unchanged.');
+        } catch (error) {
+            this._invalidateJourneySearch();
+            this.journeyOrigin = 'search'; this.selectedOrigin = null; this._selectedDestination = null;
+            document.getElementById('from-text').textContent = 'Choose a starting point';
+            document.getElementById('destination-input').value = '';
+            this._originStatus(error.message);
+        }
     }
 
     async searchJourneyOrigins() {
