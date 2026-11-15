@@ -22,6 +22,8 @@ test('authored SVG has all 270 verified stations and labels, not coordinate-gene
     assert.ok(positions[canonical('940GZZLUVIC')].some(([x,y])=>x===1176&&y===786));
     assert.match(xml, /Sameboat/); assert.match(xml, /CC BY-SA 4.0/);
     assert.match(xml, /#journey-authored-map text/);
+    const covent = [...ref.stations.values()].find(s=>s.name==='Covent Garden').id;
+    assert.match(xml, new RegExp(`<g data-label="${covent}"[^>]*class="[^"]*end`), 'Authored text alignment must survive flattening');
     assert.doesNotMatch(xml, /<(?:script|animate|set|foreignObject|image|a)[\s>]|\son\w+=|(?:href|src)="(?!#)/i);
     assert.equal((xml.match(/xmlns:xlink=/g)||[]).length,1);
     assert.equal(createHash('sha256').update(fs.readFileSync(require.resolve('../vendor/tube-map-source.svg'))).digest('hex'),'25bfec37cc74a1073505f6de2d70e5b5d511f04c57503f5ac0997319cfd25615');

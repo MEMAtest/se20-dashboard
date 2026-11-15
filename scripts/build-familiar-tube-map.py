@@ -146,6 +146,14 @@ for candidates in label_candidates.values():
     for _, point, node, station in candidates:
         if math.hypot(point[0]-best[1][0],point[1]-best[1][1]) > 1: continue
         wrap = ET.SubElement(labels, tag('g'), {'data-label':station['id'], 'transform':'matrix(' + ' '.join(map(str,ancestors_transform(node))) + ')'})
+        ancestors = []; parent = parents.get(node)
+        while parent is not None:
+            ancestors.append(parent); parent = parents.get(parent)
+        inherited_classes = list(dict.fromkeys(c for p in reversed(ancestors) for c in p.get('class','').split()))
+        if inherited_classes: wrap.set('class',' '.join(inherited_classes))
+        for p in reversed(ancestors):
+            for attr in ['text-anchor','font-size','font-weight','font-style','fill']:
+                if p.get(attr) is not None: wrap.set(attr,p.get(attr))
         label = copy.deepcopy(node); label.attrib.pop('id', None)
         if any('b' in p.get('class','').split() for p in [parents.get(node), parents.get(parents.get(node))] if p is not None): label.set('font-weight','bold')
         wrap.append(label)
