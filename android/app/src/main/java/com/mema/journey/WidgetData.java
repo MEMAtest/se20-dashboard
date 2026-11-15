@@ -12,6 +12,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -23,8 +24,12 @@ final class WidgetData {
     static final DateTimeFormatter SHORT_CHECKED = DateTimeFormatter.ofPattern("d MMM HH:mm", Locale.UK).withZone(ZoneId.of("Europe/London"));
     static final String[][] LINES = {{"windrush","Windrush","#E4572E"},{"victoria","Victoria","#0098D4"},{"jubilee","Jubilee","#6D7780"},{"northern","Northern","#202A35"},{"elizabeth","Elizabeth","#6950A1"},{"bakerloo","Bakerloo","#B36305"},{"central","Central","#E32017"},{"circle","Circle","#B38F00"},{"district","District","#00782A"},{"hammersmith-city","Hammersmith & City","#BA6883"},{"metropolitan","Metropolitan","#9B0056"},{"piccadilly","Piccadilly","#003688"},{"waterloo-city","Waterloo & City","#009D8F"},{"dlr","DLR","#008A85"},{"tram","Tram","#568A24"},{"liberty","Liberty","#61686B"},{"lioness","Lioness","#A68500"},{"mildmay","Mildmay","#006EAE"},{"suffragette","Suffragette","#49852B"},{"weaver","Weaver","#9A3161"}};
     static String[] line(String id) { for (String[] line : LINES) if (line[0].equals(id)) return line; return null; }
-    record Departure(String line, String destination, String platform, long at) { }
+    record Departure(String line, String destination, String platform, long at, String mode, String lineId) { }
     static List<Departure> departures(JSONArray rows, Set<String> allowedStops, long now) {
+        List<Departure> all = allDepartures(rows,allowedStops,now);
+        return new ArrayList<>(all.subList(0,Math.min(3,all.size())));
+    }
+    static List<Departure> allDepartures(JSONArray rows, Set<String> allowedStops, long now) {
         List<Departure> result = new ArrayList<>(); Set<String> seen = new HashSet<>();
         for (int i = 0; i < rows.length(); i++) {
             try {
@@ -34,18 +39,31 @@ final class WidgetData {
                 if (!allowedStops.contains(o.optString("naptanId")) || at < now || at > now + 90 * 60_000L || source < now - 3 * 60_000L || source > now + 30_000) continue;
                 String dest = clean(o.optString("destinationName")), line = clean(o.optString("lineName"));
                 if (dest.isEmpty() || line.isEmpty()) continue;
-                String key = o.optString("vehicleId") + ":" + dest + ":" + at;
-                if (seen.add(key)) result.add(new Departure(line, dest, clean(o.optString("platformName")), at));
+                String key = o.optString("vehicleId") + ":" + line + ":" + dest + ":" + at;
+                if (seen.add(key)) result.add(new Departure(line, dest, clean(o.optString("platformName")), at, clean(o.optString("modeName")), clean(o.optString("lineId"))));
             } catch (Exception ignored) { }
         }
         result.sort(Comparator.comparingLong(Departure::at));
-        return new ArrayList<>(result.subList(0, Math.min(3, result.size())));
+        return new ArrayList<>(result.subList(0, Math.min(30, result.size())));
     }
     static String clean(String s) { String value = s.replaceAll("[\\p{Cntrl}]", " ").trim(); return value.substring(0, Math.min(120, value.length())); }
     static String clock(long time) { return CLOCK.format(Instant.ofEpochMilli(time)); }
     static String checked(long time) { return CHECKED.format(Instant.ofEpochMilli(time)); }
     static String shortChecked(long time) { return SHORT_CHECKED.format(Instant.ofEpochMilli(time)); }
-    static boolean fresh(JSONObject snapshot, long now) { long at = snapshot.optLong("checkedAt"); return at > 0 && at <= now + 30_000 && now - at <= 180_000; }
+    static boolean fresh(JSONObject snapshot, long now) { long at = snapshot.optLong("checkedAt"); return at > 0 && at <= now + 30_000 && now - at < 180_000; }
+    static long expiresAt(JSONObject snapshot) { return snapshot.optLong("checkedAt") + 180_000; }
+    static int minutes(long millis) { return (int)Math.max(0,(millis + 59_999)/60_000); }
+    static boolean validPhoneFix(double lat,double lon,float accuracy,long ageMillis) {
+        return Double.isFinite(lat) && Double.isFinite(lon) && Math.abs(lat)<=90 && Math.abs(lon)<=180 && Float.isFinite(accuracy) && accuracy>=0 && accuracy<=500 && ageMillis>=0 && ageMillis<=120_000;
+    }
+    static String modeLabel(String mode) {
+        return mode.equals("walking") ? "Walk" : mode.equals("bus") ? "Bus" : mode.equals("tube") ? "Tube" : mode.equals("tram") ? "Tram" : "Train";
+    }
+    static String homeSummary(JSONObject snapshot) {
+        JSONArray legs = snapshot.optJSONArray("legs"); Set<String> modes = new LinkedHashSet<>();
+        if (legs != null) for (int i=0;i<legs.length();i++) { JSONObject leg=legs.optJSONObject(i); if(leg!=null) modes.add(modeLabel(leg.optString("mode"))); }
+        return modes.isEmpty() ? "Checked route estimate" : String.join(" + ",modes);
+    }
     static long tflInstant(String value) {
         try { return OffsetDateTime.parse(value).toInstant().toEpochMilli(); } catch (Exception ignored) { }
         try {
@@ -61,17 +79,19 @@ final class WidgetData {
             long dep = tflInstant(journey.optString("startDateTime")), arr = tflInstant(journey.optString("arrivalDateTime"));
             JSONArray legs = journey.optJSONArray("legs");
             if (dep < now || arr <= now || arr <= dep || arr - now > 36 * 3600_000L || legs == null || legs.length() == 0 || legs.length() > 30) continue;
-            boolean valid = true, walkingKnown = true; List<String> services = new ArrayList<>(); int walks = 0;
+            boolean valid = true, walkingKnown = true; List<String> services = new ArrayList<>(); int walks = 0; JSONArray stages = new JSONArray();
             for (int j = 0; j < legs.length(); j++) {
                 JSONObject leg = legs.optJSONObject(j), mode = leg == null ? null : leg.optJSONObject("mode");
                 if (mode == null || mode.optString("id").isEmpty()) { valid = false; break; }
                 String modeId = mode.optString("id");
                 if (!Set.of("walking","bus","tube","overground","dlr","elizabeth-line","national-rail","tram").contains(modeId)) { valid = false; break; }
-                if (modeId.equals("walking")) { int duration = leg.optInt("duration", -1); if (duration < 0) walkingKnown = false; else walks += duration; }
+                int duration=leg.optInt("duration",-1);
+                stages.put(new JSONObject().put("mode",modeId).put("minutes",duration>=0 ? duration : JSONObject.NULL));
+                if (modeId.equals("walking")) { if (duration < 0) walkingKnown = false; else walks += duration; }
                 else { JSONObject instruction = leg.optJSONObject("instruction"); services.add(clean(instruction == null ? mode.optString("name", modeId) : instruction.optString("summary", mode.optString("name", modeId)))); }
             }
             if (valid && arr < best) {
-                best = arr; chosen = new JSONObject().put("departureAt", dep).put("arrivalAt", arr).put("services", services.size()).put("walkingMinutes", walkingKnown ? walks : JSONObject.NULL)
+                best = arr; chosen = new JSONObject().put("departureAt", dep).put("arrivalAt", arr).put("durationMinutes",minutes(arr-dep)).put("legs",stages).put("services", services.size()).put("walkingMinutes", walkingKnown ? walks : JSONObject.NULL)
                         .put("summary", services.isEmpty() ? "Walking route" : String.join(" \u00b7 ", services.subList(0, Math.min(2, services.size()))) + (services.size() > 2 ? " +" + (services.size()-2) + " more" : ""));
             }
         }

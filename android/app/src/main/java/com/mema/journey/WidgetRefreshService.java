@@ -20,7 +20,8 @@ public final class WidgetRefreshService extends JobService {
     static int jobId(int widget, boolean immediate) { return 1000 + widget * 2 + (immediate ? 1 : 0); }
     static void schedule(Context c, int id, boolean immediate) {
         WidgetKind kind = DeparturesWidget.kind(c,id);
-        if (!kind.refreshes || !new WidgetStore(c).configured(id,kind) || !DeparturesWidget.owns(c, id)) return;
+        WidgetStore store=new WidgetStore(c);
+        if ((!kind.refreshes && !(kind==WidgetKind.HOME && !store.read(id,"config").optBoolean("phone"))) || !store.configured(id,kind) || !DeparturesWidget.owns(c, id)) return;
         PersistableBundle extras = new PersistableBundle(); extras.putInt("widget", id);
         JobInfo.Builder builder = new JobInfo.Builder(jobId(id, immediate), new ComponentName(c, WidgetRefreshService.class))
                 .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).setExtras(extras);
@@ -30,12 +31,12 @@ public final class WidgetRefreshService extends JobService {
             new WidgetStore(c).prefs.edit().putString(id + ":error", "SCHEDULE_DEFERRED").apply(); DeparturesWidget.render(c, id);
         }
     }
-    static void cancel(Context c, int id) { JobScheduler scheduler = c.getSystemService(JobScheduler.class); scheduler.cancel(jobId(id, false)); scheduler.cancel(jobId(id, true)); }
+    static void cancel(Context c, int id) { JobScheduler scheduler = c.getSystemService(JobScheduler.class); scheduler.cancel(jobId(id, false)); scheduler.cancel(jobId(id, true)); WidgetExpiry.cancel(c,id); }
     @Override public boolean onStartJob(JobParameters params) {
         int id = params.getExtras().getInt("widget", -1);
         if (!DeparturesWidget.owns(this, id)) return false;
         WidgetStore store = new WidgetStore(this); WidgetKind kind = DeparturesWidget.kind(this,id); Station station = store.station(id, "station");
-        if (!kind.refreshes || !store.configured(id,kind)) return false;
+        if ((!kind.refreshes && !(kind==WidgetKind.HOME && !store.read(id,"config").optBoolean("phone"))) || !store.configured(id,kind)) return false;
         long now = System.currentTimeMillis(), attempt = store.prefs.getLong(id + ":attempt", 0);
         if (now >= attempt && now - attempt < 30_000) { DeparturesWidget.render(this, id); return false; }
         String config = store.read(id, "config").toString();
@@ -43,7 +44,7 @@ public final class WidgetRefreshService extends JobService {
         FutureTask<Void> task = new FutureTask<>(() -> {
             try {
                 TflClient client = new TflClient();
-                String snapshot = (kind == WidgetKind.LINE ? client.lineStatus(store.read(id,"config").optString("lineId")) : kind == WidgetKind.ROUTE ? client.journey(station,store.station(id,"destination")) : client.snapshot(station)).toString();
+                String snapshot = (kind == WidgetKind.LINE ? client.lineStatus(store.read(id,"config").optString("lineId")) : kind == WidgetKind.ROUTE || kind==WidgetKind.HOME ? client.journey(station,store.station(id,"destination")) : client.snapshot(station)).toString();
                 if (!Thread.currentThread().isInterrupted() && DeparturesWidget.owns(this, id) && store.read(id, "config").toString().equals(config))
                     store.prefs.edit().putString(id + ":snapshot", snapshot).remove(id + ":error").apply();
             } catch (Exception e) {

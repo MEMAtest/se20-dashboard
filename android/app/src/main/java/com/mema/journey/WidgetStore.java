@@ -32,6 +32,11 @@ final class WidgetStore {
         if (kind == WidgetKind.HOME) return station(id, "destination") != null && (config.optBoolean("phone") || station(id, "station") != null);
         return station(id, "station") != null && (kind != WidgetKind.ROUTE || station(id, "destination") != null);
     }
+    void homeLabel(int id,String label) {
+        if(label.length()>24 || !WidgetData.clean(label).equals(label.trim())) throw new IllegalArgumentException("Use a plain home label, up to 24 characters");
+        try { JSONObject config=read(id,"config"); config.put("homeLabel",label.trim()); prefs.edit().putString(id+":config",config.toString()).apply(); }
+        catch(org.json.JSONException e) { throw new IllegalArgumentException("Invalid home label",e); }
+    }
     void remove(int id) {
         SharedPreferences.Editor edit = prefs.edit();
         for (String key : prefs.getAll().keySet()) if (key.startsWith(id + ":")) edit.remove(key);

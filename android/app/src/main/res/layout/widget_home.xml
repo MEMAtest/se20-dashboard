@@ -1,8 +1,11 @@
-<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@id/compact_root" android:layout_width="match_parent" android:layout_height="match_parent" android:padding="12dp" android:background="@drawable/widget_home_background">
-    <ImageView android:id="@+id/home_arrow" android:layout_width="28dp" android:layout_height="match_parent" android:layout_alignParentEnd="true" android:src="@drawable/ic_arrow_white" android:contentDescription="Open home journey"/>
-    <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:layout_toStartOf="@id/home_arrow" android:orientation="vertical" android:gravity="center_vertical">
-        <TextView android:id="@id/compact_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="GO HOME" android:textSize="10sp" android:textColor="#C9DBFF" android:textStyle="bold" android:maxLines="1"/>
-        <TextView android:id="@id/compact_value" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Home station" android:textSize="18sp" android:textColor="#FFFFFF" android:textStyle="bold" android:maxLines="1" android:ellipsize="end"/>
-        <TextView android:id="@id/compact_subtitle" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="From phone, on tap" android:textSize="11sp" android:textColor="#DFE9FF" android:maxLines="1" android:ellipsize="end"/>
-    </LinearLayout>
-</RelativeLayout>
+<?xml version="1.0"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/compact_root" android:layout_width="match_parent" android:layout_height="match_parent" android:background="@drawable/widget_card" android:orientation="horizontal" android:gravity="center_vertical" android:padding="10dp">
+  <ImageView android:id="@+id/home_mark" android:layout_width="36dp" android:layout_height="36dp" android:src="@drawable/ic_home" android:importantForAccessibility="no" android:padding="8dp" android:background="@drawable/widget_circle"/>
+  <LinearLayout android:id="@+id/home_content" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" android:orientation="vertical" android:gravity="center_vertical" android:paddingStart="8dp">
+    <TextView android:id="@+id/compact_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Home" android:textSize="12sp" android:textColor="#4B536C" android:includeFontPadding="false" android:maxLines="1" android:ellipsize="end"/>
+    <TextView android:id="@+id/compact_value" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Check route" android:textSize="24sp" android:textColor="#11182C" android:includeFontPadding="false" android:maxLines="1" android:ellipsize="end" android:textStyle="bold"/>
+    <TextView android:id="@+id/compact_subtitle" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="From phone, on tap" android:textSize="10sp" android:textColor="#4B536C" android:includeFontPadding="false" android:maxLines="1" android:ellipsize="end"/>
+    <Chronometer android:id="@+id/compact_meta" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="No checked estimate" android:textSize="8sp" android:textColor="#59647D" android:includeFontPadding="false" android:maxLines="1" android:ellipsize="end"/>
+  </LinearLayout>
+  <ImageView android:id="@+id/home_arrow" android:layout_width="34dp" android:layout_height="34dp" android:src="@drawable/ic_arrow_white" android:padding="7dp" android:background="@drawable/widget_blue" android:contentDescription="Check home route" android:importantForAccessibility="yes"/>
+</LinearLayout>

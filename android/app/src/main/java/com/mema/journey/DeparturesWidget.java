@@ -91,5 +91,6 @@ public class DeparturesWidget extends AppWidgetProvider {
             view = new RemoteViews(sizes);
         }
         AppWidgetManager.getInstance(c).updateAppWidget(id,view);
+        WidgetExpiry.schedule(c,id,now);
     }
 }

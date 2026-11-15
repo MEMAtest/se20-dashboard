@@ -21,7 +21,7 @@ final class TflClient {
         if (Thread.currentThread().isInterrupted()) throw new SourceException("CANCELLED");
         HttpURLConnection c = (HttpURLConnection) new URL("https://api.tfl.gov.uk/" + path).openConnection();
         c.setConnectTimeout(3500); c.setReadTimeout(3500); c.setInstanceFollowRedirects(false);
-        c.setRequestProperty("Accept", "application/json"); c.setRequestProperty("User-Agent", "Journey-Android/0.2");
+        c.setRequestProperty("Accept", "application/json"); c.setRequestProperty("User-Agent", "Journey-Android/0.3");
         try {
             int status = c.getResponseCode();
             if (status != 200) throw new SourceException(status == 429 ? "RATE_LIMITED" : "SOURCE_UNAVAILABLE");
@@ -39,10 +39,32 @@ final class TflClient {
     }
     List<Station> search(String query) throws Exception {
         if (query.trim().isEmpty() || query.length() > 80) throw new SourceException("INVALID_SEARCH");
-        return Station.searchResults((JSONObject) get("StopPoint/Search?query=" + WidgetData.encode(query) + "&modes=tube,overground,dlr,elizabeth-line,tram,national-rail,bus&maxResults=8"));
+        List<Station> matches=Station.searchResults((JSONObject) get("StopPoint/Search?query=" + WidgetData.encode(query) + "&modes=tube,overground,dlr,elizabeth-line,tram,national-rail,bus&maxResults=8"));
+        List<Station> choices=new ArrayList<>(); int pairs=0;
+        for(Station station:matches) {
+            if(station.id.startsWith("490G")) {
+                if(pairs++>=3) continue;
+                JSONObject detail=(JSONObject)get("StopPoint/"+station.id); JSONArray children=detail.optJSONArray("children");
+                if(children!=null) for(int i=0;i<children.length() && choices.size()<8;i++) {
+                    JSONObject child=children.optJSONObject(i); if(child==null || !child.optString("stopType").equals("NaptanPublicBusCoachTram")) continue;
+                    String indicator=child.optString("indicator",child.optString("stopLetter")); if(indicator.isEmpty()) continue;
+                    choices.add(new Station(child.getString("id"),WidgetData.clean(child.optString("commonName")+" / "+indicator),child.getDouble("lat"),child.getDouble("lon"),""));
+                }
+            } else if(choices.size()<8) choices.add(station);
+        }
+        return choices;
+    }
+    static JSONObject resolveBoard(JSONObject detail,Station station) throws SourceException {
+        if(station.id.equals(detail.optString("id"))) {
+            if(detail.optString("stopType").equals("NaptanOnstreetBusCoachStopPair")) throw new SourceException("CHOOSE_BUS_DIRECTION");
+            return detail;
+        }
+        JSONArray children=detail.optJSONArray("children");
+        if(children!=null) for(int i=0;i<children.length();i++) { JSONObject child=children.optJSONObject(i); if(child!=null && station.id.equals(child.optString("id"))) return child; }
+        throw new SourceException("STOP_IDENTITY_MISMATCH");
     }
     JSONObject snapshot(Station station) throws Exception {
-        JSONObject detail = (JSONObject) get("StopPoint/" + station.id);
+        JSONObject detail = resolveBoard((JSONObject) get("StopPoint/" + station.id),station);
         Set<String> ids = new LinkedHashSet<>(), lines = new LinkedHashSet<>();
         collect(detail, ids, lines, 0);
         if (ids.isEmpty()) throw new SourceException("NO_PREDICTION_BOARD");
@@ -76,11 +98,15 @@ final class TflClient {
         }
         if (!statusVerified && alert.startsWith("TfL")) alert = "Service alerts unverified; TfL predictions only";
         if (failedBoards > 0) alert = "Partial departures: " + failedBoards + " board(s) unavailable. " + alert;
-        return new JSONObject().put("checkedAt", System.currentTimeMillis()).put("arrivals", arrivals).put("ids", new JSONArray(ids)).put("alert", alert);
+        return new JSONObject().put("checkedAt", System.currentTimeMillis()).put("arrivals", arrivals).put("ids", new JSONArray(ids)).put("alert", alert).put("partial",failedBoards>0).put("alertsVerified",statusVerified);
     }
     JSONObject journey(Station origin, Station destination) throws Exception {
         if (origin == null || destination == null) throw new SourceException("CHOOSE_STATIONS");
-        String from = WidgetData.encode(origin.lat + "," + origin.lon), to = WidgetData.encode(destination.lat + "," + destination.lon);
+        return journey(origin.lat,origin.lon,destination);
+    }
+    JSONObject journey(double latitude,double longitude,Station destination) throws Exception {
+        if (!Double.isFinite(latitude) || !Double.isFinite(longitude) || Math.abs(latitude)>90 || Math.abs(longitude)>180 || destination==null) throw new SourceException("CHOOSE_STATIONS");
+        String from = WidgetData.encode(latitude + "," + longitude), to = WidgetData.encode(destination.lat + "," + destination.lon);
         java.time.ZonedDateTime when = java.time.Instant.ofEpochMilli(System.currentTimeMillis() + 60_000).atZone(java.time.ZoneId.of("Europe/London"));
         String date = when.format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd")), time = when.format(java.time.format.DateTimeFormatter.ofPattern("HHmm"));
         JSONObject response = (JSONObject)get("Journey/JourneyResults/" + from + "/to/" + to + "?date=" + date + "&time=" + time + "&timeIs=Departing&journeyPreference=LeastTime&mode=tube,overground,dlr,elizabeth-line,tram,national-rail,bus,walking");

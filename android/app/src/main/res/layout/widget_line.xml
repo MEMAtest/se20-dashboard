@@ -1,9 +1,14 @@
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@id/compact_root" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="horizontal" android:padding="10dp" android:background="@drawable/widget_background">
-    <TextView android:id="@+id/line_colour" android:layout_width="4dp" android:layout_height="match_parent" android:background="#868F98" android:importantForAccessibility="no"/>
-    <LinearLayout android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" android:orientation="vertical" android:gravity="center_vertical" android:paddingStart="8dp">
-        <TextView android:id="@id/compact_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="LINE WATCH" android:textSize="13sp" android:textStyle="bold" android:textColor="#10253F" android:maxLines="1" android:ellipsize="end"/>
-        <TextView android:id="@id/compact_value" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Tap to check" android:textSize="13sp" android:textColor="#244268" android:maxLines="2" android:ellipsize="end"/>
-        <TextView android:id="@id/compact_meta" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="No update yet" android:textSize="10sp" android:textColor="#52657D" android:maxLines="1" android:ellipsize="end"/>
+<?xml version="1.0"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/compact_root" android:layout_width="match_parent" android:layout_height="match_parent" android:background="@drawable/widget_card" android:orientation="horizontal" android:gravity="center_vertical" android:padding="10dp">
+  <ImageView android:id="@+id/line_colour" android:layout_width="4dp" android:layout_height="match_parent" android:background="#9197A5" android:importantForAccessibility="no"/>
+  <LinearLayout android:id="@+id/line_content" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" android:orientation="vertical" android:gravity="center_vertical" android:paddingStart="9dp">
+    <TextView android:id="@+id/compact_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Line watch" android:textSize="17sp" android:textColor="#10172C" android:includeFontPadding="false" android:maxLines="1" android:ellipsize="end" android:textStyle="bold"/>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical">
+      <ImageView android:id="@+id/status_dot" android:layout_width="7dp" android:layout_height="7dp" android:src="@drawable/widget_status_dot" android:importantForAccessibility="no"/>
+      <TextView android:id="@+id/compact_value" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:layout_marginStart="5dp" android:text="Tap to check" android:textSize="12sp" android:textColor="#60677C" android:includeFontPadding="false" android:maxLines="1" android:ellipsize="end"/>
     </LinearLayout>
-    <ImageView android:id="@id/compact_refresh" android:layout_width="36dp" android:layout_height="match_parent" android:padding="8dp" android:src="@drawable/ic_refresh" android:contentDescription="Refresh line status"/>
+    <Chronometer android:id="@+id/compact_meta" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="No update yet" android:textSize="9sp" android:textColor="#59647D" android:includeFontPadding="false" android:maxLines="1" android:ellipsize="end" android:paddingTop="3dp"/>
+  </LinearLayout>
+  <ImageView android:id="@+id/compact_refresh" android:layout_width="32dp" android:layout_height="40dp" android:src="@drawable/ic_refresh_blue" android:padding="7dp" android:contentDescription="Refresh line status" android:importantForAccessibility="yes"/>
+  <ImageView android:id="@+id/line_open" android:layout_width="18dp" android:layout_height="32dp" android:src="@drawable/ic_chevron" android:importantForAccessibility="no"/>
 </LinearLayout>

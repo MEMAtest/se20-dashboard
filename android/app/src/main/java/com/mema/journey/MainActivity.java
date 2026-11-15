@@ -39,7 +39,7 @@ public final class MainActivity extends Activity {
         web = new WebView(this); WebSettings settings = web.getSettings(); settings.setJavaScriptEnabled(true); settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false); settings.setAllowContentAccess(false); settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setJavaScriptCanOpenWindowsAutomatically(false); settings.setSupportMultipleWindows(false); settings.setGeolocationEnabled(true);
-        settings.setSafeBrowsingEnabled(true); settings.setUserAgentString(settings.getUserAgentString() + " JourneyAndroid/0.2");
+        settings.setSafeBrowsingEnabled(true); settings.setUserAgentString(settings.getUserAgentString() + " JourneyAndroid/0.3");
         web.setWebViewClient(new WebViewClient() {
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) { loadFailed = false; }
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
