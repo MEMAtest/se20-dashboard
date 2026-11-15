@@ -1229,6 +1229,37 @@ input { font-family: inherit; }
 .tube-line-key { display: flex; overflow-x: auto; gap: 8px; padding: 8px 0 12px; }
 .tube-line-key button { display: flex; align-items: center; gap: 7px; flex-shrink: 0; min-height: 44px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--text); padding: 8px 12px; font: inherit; font-size: 12px; font-weight: 650; }
 .tube-line-key i { width: 14px; height: 5px; border-radius: 3px; background: var(--service-colour); }
+#screen-tube #tube-planner-details, #screen-tube .tube-route-form { border: 0; background: none; padding: 0; margin: 0 0 12px; box-shadow: none; }
+#screen-tube .tube-route-fields { grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 5px 10px; margin: 6px 0 8px; }
+#screen-tube .tube-route-fields label { font-size: 12px; font-weight: 700; }
+#screen-tube .tube-route-fields label:first-child { grid-row: 1; grid-column: 1; }
+#screen-tube .tube-route-fields select:nth-child(2) { grid-row: 2; grid-column: 1; }
+#screen-tube .tube-route-fields label:nth-child(3) { grid-row: 1; grid-column: 2; }
+#screen-tube .tube-route-fields select:nth-child(4) { grid-row: 2; grid-column: 2; }
+#screen-tube .tube-route-fields select { background: var(--card); font-size: 13px; min-height: 46px; }
+.tube-route-settings summary { font-size: 12px; color: var(--text-2); cursor: pointer; min-height: 32px; padding: 7px 0; }
+#tube-route-status { margin: 8px 0; font-size: 11px; }
+#quick-tube-map { height: clamp(360px, 62dvh, 640px); }
+#quick-tube-central { left: 12px; right: auto; }
+#quick-tube-route { position: absolute; top: 62px; right: 12px; z-index: 800; padding: 10px 14px; min-height: 42px; border: 0; border-radius: 10px; background: #153dec; color: white; font: inherit; font-size: 12px; font-weight: 700; }
+#quick-tube-route[hidden] { display: none; }
+#tube-map-expand { position: absolute; bottom: 12px; right: 12px; z-index: 800; min-height: 42px; padding: 10px; border: 1px solid #ccd4e2; border-radius: 10px; background: #fff; color: #164baf; font: inherit; font-size: 12px; font-weight: 700; box-shadow: var(--shadow); }
+.tube-page-map-canvas.full-screen { position: fixed; inset: 0; margin: 0; z-index: 3000; border: 0; border-radius: 0; background: #fff; }
+.tube-page-map-canvas.full-screen #quick-tube-map { height: 100dvh; }
+#quick-tube-map #journey-authored-map { background: #fff; }
+#journey-authored-map [data-station] { cursor: pointer; }
+#journey-authored-map.route-focused #diagram-routes { opacity: .3; }
+#journey-authored-map.route-focused [data-station], #journey-authored-map.route-focused [data-label] { opacity: .24; }
+#journey-authored-map.route-focused [data-on-route] { opacity: 1; }
+#quick-tube-map .tube-selected-label { background: #fff; border: 1px solid #dae0eb; border-radius: 10px; color: #17233b; padding: 8px 10px; box-shadow: 0 3px 14px #12213a22; white-space: normal; max-width: 150px; font: inherit; font-size: 14px; opacity: 1; }
+.tube-selected-label small, .tube-selected-label b { display: block; }
+.tube-selected-label small { color: #546686; font-size: 9px; font-weight: 800; letter-spacing: .9px; margin-bottom: 2px; }
+.tube-selection-summary { background: #163edc; color: white; border-radius: 14px; padding: 13px 16px; margin: 10px 0; }
+.tube-selection-summary[hidden] { display: none; }
+.tube-selection-summary b { display: block; font-size: 20px; }
+.tube-selection-summary span { display: block; margin-top: 3px; font-size: 12px; opacity: .9; }
+.tube-show-route { border: 1px solid var(--line); background: var(--card-alt); color: var(--blue); border-radius: 10px; min-height: 44px; padding: 10px 14px; font: inherit; font-size: 13px; font-weight: 650; margin: 8px 0; }
+.tube-show-route[aria-pressed="true"] { background: var(--blue); color: white; }
 .map-source, .ln-source { font-size: 12px; line-height: 1.5; opacity: .8; }
 .ln-source { margin: 4px 0 8px; }
 #tube-map-station { display: block; width: 100%; min-height: 44px; margin: 8px 0; padding: 10px; border: 1px solid #9aa6b5; border-radius: 10px; font: inherit; background: var(--card, #fff); color: var(--text, #17233b); }

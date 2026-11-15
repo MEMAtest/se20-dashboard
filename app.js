@@ -833,6 +833,16 @@ class PengeDash {
         document.getElementById('tube-page-plan')?.addEventListener('click', () => document.getElementById('tube-route-form').scrollIntoView({ behavior: 'smooth', block: 'start' }));
         document.getElementById('quick-tube-fit')?.addEventListener('click', () => { this._quickTubeMap?.setMode?.('tube'); this._quickTubeMap?.fitRoutes?.(); });
         document.getElementById('quick-tube-central')?.addEventListener('click', () => { this._quickTubeMap?.setMode?.('tube'); this._quickTubeMap?.showCentral?.(); });
+        document.getElementById('quick-tube-route')?.addEventListener('click', () => this._quickTubeMap?.fitRoute?.());
+        const tubeExpand = document.getElementById('tube-map-expand');
+        const expandTube = active => {
+            document.getElementById('tube-map-canvas')?.classList.toggle('full-screen', active);
+            tubeExpand?.setAttribute('aria-pressed', String(active));
+            if (tubeExpand) tubeExpand.textContent = active ? 'Close full screen' : 'Full screen';
+            this._quickTubeMap?.invalidateSize(); this._quickTubeMap?.fitRoute?.();
+        };
+        tubeExpand?.addEventListener('click', () => expandTube(tubeExpand.getAttribute('aria-pressed') !== 'true'));
+        document.addEventListener('keydown', event => { if (event.key === 'Escape') expandTube(false); });
         const tubeKey = document.getElementById('tube-page-lines');
         if (tubeKey) {
             const names = { 'hammersmith-city': 'Hammersmith & City', 'waterloo-city': 'Waterloo & City' };
@@ -916,7 +926,7 @@ class PengeDash {
         const bundle = window.JourneyTubeNetwork;
         if (!bundle) { status.textContent = 'Bundled Tube diagram unavailable. Use the official TfL map link.'; return; }
         document.getElementById('tube-topology-date').textContent = `TfL station connections saved ${new Date(bundle.retrievedAt).toLocaleDateString('en-GB', { timeZone: 'Europe/London' })}. Diagram only; check live status before travelling.`;
-        this._quickTubeMapReady = JourneyNetworkMap.mount({ element: document.getElementById('quick-tube-map'), status,
+        this._quickTubeMapReady = JourneyTubeMap.mount({ element: document.getElementById('quick-tube-map'), status,
             leaflet: window.L, initialData: bundle,
             stationSelect: document.getElementById('quick-tube-station'),
             routeFromSelect: document.getElementById('tube-route-from'), routeToSelect: document.getElementById('tube-route-to'),
@@ -925,10 +935,11 @@ class PengeDash {
                 this._tubeOrigins = new Map(stations.map(s => [s.id, s]));
                 this._stationHubRefs = this._stationHubRefs || new Map();
                 stations.forEach(s => this._stationHubRefs.set(s.id, s));
-                const from = document.getElementById('tube-route-from');
-                const prompt = document.createElement('option'); prompt.value = ''; prompt.textContent = 'Choose starting station';
-                from.append(prompt); from.value = '';
                 const submit = document.getElementById('tube-route-submit'); if (submit) submit.disabled = !stations.length;
+            },
+            onRouteClear: () => {
+                const summary = document.getElementById('tube-selection-summary'); if (summary) summary.hidden = true;
+                const fit = document.getElementById('quick-tube-route'); if (fit) fit.hidden = true;
             },
             onStation: station => this.openStationHub(station),
             onRouteTarget: station => {
@@ -939,7 +950,7 @@ class PengeDash {
             this._quickTubeMap = map;
             if (map) {
                 map.showCentral?.(); this._applyTubePrefill();
-                status.textContent = `All 11 Underground lines · ${this._tubeStations.size} stations. Zoom for names; tap a station for next trains.`;
+                status.textContent = 'Hand-positioned Tube diagram. Pinch or use + to read more stations; tap a station for next trains.';
             }
             return map;
         }).catch(() => { status.textContent = 'Tube diagram could not be loaded. Use the official TfL map link.'; });
@@ -1140,6 +1151,7 @@ class PengeDash {
             this._tubeRouteAbort?.abort();
             clearTimeout(this._tubeRouteExpiry);
             document.getElementById('tube-route-results').replaceChildren();
+            this._tubeRouteOptions = []; this._quickTubeMap?.clearRoute?.();
             document.getElementById('tube-route-status').textContent = 'Choose your origin and destination, then find the quickest connection.';
             const button = document.getElementById('tube-route-submit');
             button.disabled = !this._tubeStations?.size;
@@ -1185,6 +1197,7 @@ class PengeDash {
         const controller = this._tubeRouteAbort;
         const timeout = setTimeout(() => controller.abort(), 20000);
         results.replaceChildren(); button.disabled = true; button.setAttribute('aria-busy', 'true');
+        this._quickTubeMap?.clearRoute?.(); this._tubeRouteOptions = [];
         status.textContent = 'Finding the quickest Tube connection...';
         try {
             const destination = this._tubeStations?.get(document.getElementById('tube-route-to').value);
@@ -1221,7 +1234,7 @@ class PengeDash {
             const time = epoch => new Date(epoch).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' });
             const arrivalLabel = epoch => new Date(epoch).toLocaleString('en-GB', { timeZone: 'Europe/London',
                 weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-            status.textContent = `Checked ${time(checkedAt)} London time. Quickest of the returned Tube connections, including the wait before departure. Estimates, not guaranteed live connections.`;
+            status.textContent = `Checked ${time(checkedAt)} London time. Estimates, not guaranteed live connections.`;
             const escape = value => this.escapeHtml(String(value || ''));
             results.innerHTML = routes.map((route, index) => {
                 const steps = route.journey.legs.map(leg => {
@@ -1235,8 +1248,12 @@ class PengeDash {
                     <h3>${route.totalMinutes} min from now <span>Arrive ${arrivalLabel(route.arrival)} London</span></h3>
                     <p>${escape(originLabel)} &rarr; ${escape(destination.name)}</p>
                     <p>${route.changes} change${route.changes === 1 ? '' : 's'} &middot; ${route.walking == null ? 'Walking time unavailable' : `${route.walking} min walking`} &middot; ${route.leaveInMinutes ? `Leave in ${route.leaveInMinutes} min` : 'Leave now'}</p>
-                    <details${index === 0 ? ' open' : ''}><summary>Lines and change stations</summary><ol>${steps}</ol></details></article>`;
+                    <button type="button" class="tube-show-route" data-show-tube-route="${index}">Show ${index === 0 ? 'quickest route' : 'this alternative'} on map</button>
+                    <details><summary>Lines, change stations &amp; route updates</summary><ol>${steps}</ol></details></article>`;
             }).join('');
+            this._tubeRouteOptions = routes;
+            results.querySelectorAll?.('[data-show-tube-route]').forEach(b => b.addEventListener('click', () => this._showTubeRoute(+b.dataset.showTubeRoute)));
+            this._showTubeRoute(0);
             const actions = document.createElement('div'); actions.className = 'tube-result-actions';
             const originStation = this._tubeOrigins?.get(selected);
             if (originStation) {
@@ -1252,6 +1269,7 @@ class PengeDash {
             this._tubeRouteExpiry = setTimeout(() => {
                 if (generation !== this._tubeRouteGeneration) return;
                 results.replaceChildren(); status.textContent = 'These route estimates have expired. Find the quickest connection again for current options.';
+                this._tubeRouteOptions = []; this._quickTubeMap?.clearRoute?.();
             }, 120000);
         } catch (error) {
             if (generation !== this._tubeRouteGeneration) return;
@@ -1262,6 +1280,23 @@ class PengeDash {
             clearTimeout(timeout);
             if (generation === this._tubeRouteGeneration) { button.disabled = false; button.setAttribute('aria-busy', 'false'); }
         }
+    }
+
+    _showTubeRoute(index) {
+        const route = this._tubeRouteOptions?.[index];
+        if (!route || !this._quickTubeMap?.showJourney) return;
+        const result = this._quickTubeMap.showJourney(route.journey);
+        document.querySelectorAll('[data-show-tube-route]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.showTubeRoute === index)));
+        const summary = document.getElementById('tube-selection-summary');
+        if (summary) {
+            summary.replaceChildren(); summary.hidden = false;
+            const title = document.createElement('b'), detail = document.createElement('span');
+            title.textContent = `${route.totalMinutes} min · ${route.changes} change${route.changes === 1 ? '' : 's'}`;
+            detail.textContent = result.complete ? 'Your selected route is highlighted below. Times are estimates.' : 'Partial map highlight — use the full itinerary below.';
+            summary.append(title, detail);
+        }
+        const fit = document.getElementById('quick-tube-route'); if (fit) fit.hidden = !result.drawn;
+        document.getElementById('tube-map-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
     renderNearbyNow(detecting = false) {

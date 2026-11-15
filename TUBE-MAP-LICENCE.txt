@@ -1,0 +1,22 @@
+London Underground hand-positioned diagram
+
+Original author: Sameboat
+Original work: London Underground Overground DLR Crossrail map.svg
+Source: https://commons.wikimedia.org/wiki/File:London_Underground_Overground_DLR_Crossrail_map.svg
+Retrieved 15 November 2026; source revision dated 29 July 2025.
+Source SVG SHA-256: 25bfec37cc74a1073505f6de2d70e5b5d511f04c57503f5ac0997319cfd25615
+
+Artwork license: Creative Commons Attribution-ShareAlike 4.0 International
+https://creativecommons.org/licenses/by-sa/4.0/
+Full legal code: https://creativecommons.org/licenses/by-sa/4.0/legalcode
+
+Journey modifications: restricted artwork to current Underground station scope
+from the bundled TfL snapshot; removed non-Tube routes, promotional/fare material,
+external links and animation; added station metadata and interactive route
+highlighting. The derived artwork familiar-tube.svg remains CC BY-SA 4.0.
+Download the derivative at /familiar-tube.svg. Source adaptation script and
+original are retained in the public repository for reproducibility.
+
+This is an independent diagram, not official TfL artwork or a TfL endorsement.
+Station connectivity and live estimates/predictions are provided separately by
+Transport for London through its Unified API. Artwork is not a service guarantee.
