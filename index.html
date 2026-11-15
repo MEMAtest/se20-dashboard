@@ -17,7 +17,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css?journey=20261113b"
           integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
-    <link rel="stylesheet" href="styles.css?v=20261115g">
+    <link rel="stylesheet" href="styles.css?v=20261115h">
 </head>
 <body>
     <div class="app" id="app">
@@ -298,11 +298,24 @@
                     <form id="tube-route-form" class="tube-route-form" aria-label="Quickest Tube connection">
                         <h3 class="network-visually-hidden">Quickest Tube connection</h3>
                         <div class="tube-route-fields">
-                            <label for="tube-route-from">From</label>
-                            <select id="tube-route-from" disabled><option value="here">Phone location</option><option value="home">Saved Home</option></select>
-                            <label for="tube-route-to">To Tube station</label>
-                            <select id="tube-route-to" disabled><option value="">Loading stations...</option></select>
+                            <div class="tube-station-search" id="tube-from-search">
+                                <label for="tube-from-query">From</label>
+                                <div class="tube-search-box"><input id="tube-from-query" type="text" role="combobox" placeholder="Starting station" autocomplete="off" spellcheck="false" aria-autocomplete="list" aria-expanded="false" aria-controls="tube-from-suggestions" aria-describedby="tube-from-search-status" disabled><button type="button" data-clear-station aria-label="Clear starting station">×</button></div>
+                                <div id="tube-from-suggestions" class="tube-station-suggestions" role="listbox" aria-label="Starting station suggestions" hidden></div>
+                                <span id="tube-from-search-status" class="network-visually-hidden" role="status" aria-live="polite"></span>
+                                <select id="tube-route-from" hidden aria-hidden="true" tabindex="-1" disabled><option value=""></option></select>
+                            </div>
+                            <div class="tube-station-search" id="tube-to-search">
+                                <label for="tube-to-query">To</label>
+                                <div class="tube-search-box"><input id="tube-to-query" type="text" role="combobox" placeholder="Destination station" autocomplete="off" spellcheck="false" aria-autocomplete="list" aria-expanded="false" aria-controls="tube-to-suggestions" aria-describedby="tube-to-search-status" disabled><button type="button" data-clear-station aria-label="Clear destination station">×</button></div>
+                                <div id="tube-to-suggestions" class="tube-station-suggestions" role="listbox" aria-label="Destination station suggestions" hidden></div>
+                                <span id="tube-to-search-status" class="network-visually-hidden" role="status" aria-live="polite"></span>
+                                <select id="tube-route-to" hidden aria-hidden="true" tabindex="-1" disabled><option value=""></option></select>
+                            </div>
                         </div>
+                        <div class="tube-origin-shortcuts"><button id="tube-locate" type="button" disabled>◎ Locate me</button><button id="tube-use-home" type="button" disabled>⌂ Home</button></div>
+                        <p id="tube-origin-status" class="tube-location-status" role="status" aria-live="polite">Search a station, use your location or start from Home.</p>
+                        <div id="tube-nearby-options" class="tube-nearby-options" aria-label="Nearby starting stations"></div>
                         <details class="tube-route-settings"><summary>Route options</summary><label class="tube-route-option"><input id="tube-route-tube-only" type="checkbox" checked> Tube + walking only</label>
                         <p class="map-source">Untick to allow bus, tram and rail connections into the Tube. Times include walking, changes and waiting. Phone coordinates are sent to TfL only for this search; no location history is saved.</p></details>
                         <button id="tube-route-submit" type="submit" disabled>Find quickest connection</button>
@@ -322,8 +335,13 @@
                 </div>
                 <div id="tube-route-results" aria-label="Tube connection options"></div>
                 <details class="network-map-info"><summary>Find a station &amp; next trains</summary>
-                    <label for="quick-tube-station">Station departures &amp; information</label>
-                    <select id="quick-tube-station" class="tube-page-select" disabled><option>Preparing Tube stations…</option></select>
+                    <div class="tube-station-search" id="tube-info-search">
+                        <label for="tube-info-query">Station departures &amp; information</label>
+                        <div class="tube-search-box"><input id="tube-info-query" type="text" role="combobox" placeholder="Search any Tube station" autocomplete="off" spellcheck="false" aria-autocomplete="list" aria-expanded="false" aria-controls="tube-info-suggestions" aria-describedby="tube-info-search-status" disabled><button type="button" data-clear-station aria-label="Clear station information search">×</button></div>
+                        <div id="tube-info-suggestions" class="tube-station-suggestions" role="listbox" aria-label="Station information suggestions" hidden></div>
+                        <span id="tube-info-search-status" class="network-visually-hidden" role="status" aria-live="polite"></span>
+                        <select id="quick-tube-station" hidden aria-hidden="true" tabindex="-1" disabled><option>Preparing Tube stations…</option></select>
+                    </div>
                     <button id="tube-origin-departures" type="button" class="tube-departures-btn" disabled>Next trains at starting station</button>
                 </details>
                 <details class="network-map-info"><summary>Line colours &amp; service status</summary><div id="tube-page-lines" class="tube-line-key" role="group" aria-label="Tube line colours and status"></div></details>
@@ -461,12 +479,13 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js?journey=20261113b"
             integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-    <script src="config.js?v=20261115g"></script>
-    <script src="journey-guidance.js?v=20261115g"></script>
-    <script src="transit-data.js?v=20261115g"></script>
-    <script src="network-map.js?v=20261115g"></script>
-    <script src="tube-network.js?v=20261115g"></script>
-    <script src="tube-map.js?v=20261115g"></script>
-    <script src="app.js?v=20261115g"></script>
+    <script src="config.js?v=20261115h"></script>
+    <script src="journey-guidance.js?v=20261115h"></script>
+    <script src="transit-data.js?v=20261115h"></script>
+    <script src="network-map.js?v=20261115h"></script>
+    <script src="tube-network.js?v=20261115h"></script>
+    <script src="tube-map.js?v=20261115h"></script>
+    <script src="tube-search.js?v=20261115h"></script>
+    <script src="app.js?v=20261115h"></script>
 </body>
 </html>
