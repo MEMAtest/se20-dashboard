@@ -3,3 +3,8 @@ functions/
 node_modules/
 .wrangler/
 .deploy-assets/
+android/.gradle/
+android/**/build/
+android/local.properties
+android/*.jks
+android/*.p12

@@ -753,6 +753,19 @@
         return { ...point, accuracy, timestamp };
     }
 
+    function widgetJourneySelection(search) {
+        const query = new URLSearchParams(search);
+        if (query.get('widget') !== '1') return null;
+        const label = query.get('fromName') || '', latText = query.get('fromLat'), lonText = query.get('fromLon');
+        const origin = { label, lat: latText === null || latText.trim() === '' ? NaN : Number(latText), lon: lonText === null || lonText.trim() === '' ? NaN : Number(lonText) };
+        const safeLabel = value => value.length > 0 && value.length <= 120 && !/[\x00-\x1f\x7f<>]/.test(value);
+        if (!safeLabel(label) || !validJourneyCoordinates(origin)) throw new Error('Widget starting point is invalid. Select a station again.');
+        const to = query.get('to'), id = query.get('toId');
+        if ((to || id) && (!safeLabel(to || '') || !/^(?:\d{1,12}|(?:HUB|940G|910G|490)[A-Za-z0-9]{1,70})$/.test(id || '')))
+            throw new Error('Widget destination is invalid. Select a station again.');
+        return { origin, destination: to && id ? { label: to, id } : null };
+    }
+
     function journeyOverview(journey) {
         const legs = Array.isArray(journey?.legs) ? journey.legs : [];
         const walking = legs.filter(l => l.mode?.id === 'walking');
@@ -783,6 +796,7 @@
     return Object.freeze({
         validJourneyCoordinates,
         journeyPhoneFix,
+        widgetJourneySelection,
         journeyDepartureClock,
         journeyOverview,
         journeyMapLegs,
