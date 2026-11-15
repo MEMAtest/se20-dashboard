@@ -1207,6 +1207,28 @@ input { font-family: inherit; }
 #tube-map-frame { width: 100%; height: min(70dvh, 760px); min-height: 340px; border: 1px solid #9aa6b5; border-radius: 12px; background: white; margin: 16px 0; }
 .map-links { display: flex; flex-wrap: wrap; gap: 12px 20px; margin-top: 12px; }
 .map-links a { color: var(--blue, #335cff); text-decoration: underline; }
+.tube-page-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 6px 0 12px; }
+.tube-page-heading h2 { font-size: 28px; letter-spacing: -.8px; }
+.tube-eyebrow { font-size: 10px; font-weight: 750; letter-spacing: 1.6px; color: var(--blue); margin-bottom: 3px; }
+.tube-page-heading button, .tube-page-shortcuts button, .tube-result-actions button, .tube-departures-btn { min-height: 44px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 12px; color: var(--blue); background: var(--card); font: inherit; font-size: 12px; font-weight: 700; }
+.tube-page-shortcuts { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.tube-page-shortcuts a { font-size: 12px; color: var(--blue); }
+.tube-page-select { width: 100%; min-height: 46px; font: inherit; font-size: 13px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--text); }
+.tube-page-map-canvas { position: relative; margin: 12px 0 6px; border: 1px solid #aebbd0; border-radius: 18px; overflow: hidden; }
+#quick-tube-map { height: clamp(320px, 53dvh, 520px); background: #fbfcff; color: #162544; }
+#quick-tube-fit { position: absolute; top: 12px; right: 12px; z-index: 800; min-height: 42px; padding: 10px; border: 1px solid #ccd4e2; border-radius: 10px; background: #fff; color: #164baf; font: inherit; font-size: 12px; font-weight: 700; box-shadow: var(--shadow); }
+#quick-tube-central { position: absolute; bottom: 12px; right: 12px; z-index: 800; min-height: 42px; padding: 10px; border: 1px solid #ccd4e2; border-radius: 10px; background: #fff; color: #164baf; font: inherit; font-size: 12px; font-weight: 700; box-shadow: var(--shadow); }
+#quick-tube-map .schematic-label { color: #162544; background: rgba(251,252,255,.94); border: 0; box-shadow: none; padding: 1px 3px; font-family: inherit; font-size: 12px; font-weight: 650; line-height: 1.15; white-space: normal; max-width: 90px; }
+#quick-tube-map .schematic-label::before { display: none; }
+#quick-tube-map .leaflet-popup-content { color: #162544; }
+#quick-tube-map .leaflet-popup-content button { display: block; min-height: 44px; padding: 8px 12px; margin: 8px 0; border: 1px solid #b9c7dc; border-radius: 8px; background: #edf3ff; color: #1046ad; font: inherit; }
+.tube-result-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.tube-departures-btn { width: 100%; margin-top: 8px; }
+.tube-departures-btn:disabled { opacity: .55; }
+.tube-route-warning { background: #fff0d8; color: #664212; border-left: 3px solid #ee9b22; padding: 10px; margin-top: 8px; font-size: 12px; line-height: 1.5; }
+.tube-line-key { display: flex; overflow-x: auto; gap: 8px; padding: 8px 0 12px; }
+.tube-line-key button { display: flex; align-items: center; gap: 7px; flex-shrink: 0; min-height: 44px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--text); padding: 8px 12px; font: inherit; font-size: 12px; font-weight: 650; }
+.tube-line-key i { width: 14px; height: 5px; border-radius: 3px; background: var(--service-colour); }
 .map-source, .ln-source { font-size: 12px; line-height: 1.5; opacity: .8; }
 .ln-source { margin: 4px 0 8px; }
 #tube-map-station { display: block; width: 100%; min-height: 44px; margin: 8px 0; padding: 10px; border: 1px solid #9aa6b5; border-radius: 10px; font: inherit; background: var(--card, #fff); color: var(--text, #17233b); }

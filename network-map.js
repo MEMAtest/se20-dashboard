@@ -164,7 +164,7 @@
     }
     function schematicLabels(points, zoom, width, height) {
         const placed = [], visible = new Set();
-        const candidates = points.filter(p => (zoom >= -.75 || p.interchange && zoom >= -2)
+        const candidates = points.filter(p => (zoom >= -.75 || p.interchange && zoom >= -6)
             && p.x >= 0 && p.y >= 0 && p.x <= width && p.y <= height)
             .sort((a, b) => b.priority - a.priority || Math.hypot(a.x - width / 2, a.y - height / 2) - Math.hypot(b.x - width / 2, b.y - height / 2) || a.id.localeCompare(b.id));
         for (const p of candidates) {
@@ -174,7 +174,7 @@
             const box = { x, y, w, h };
             if (x < 3 || y < 3 || x + w > width - 3 || y + h > height - 3) continue;
             if (placed.some(b => x < b.x + b.w + 7 && x + w + 7 > b.x && y < b.y + b.h + 7 && y + h + 7 > b.y)) continue;
-            if (points.some(q => q.id !== p.id && q.x > x - 5 && q.x < x + w + 5 && q.y > y - 5 && q.y < y + h + 5)) continue;
+            if (zoom >= -2 && points.some(q => q.id !== p.id && q.x > x - 5 && q.x < x + w + 5 && q.y > y - 5 && q.y < y + h + 5)) continue;
             placed.push(box); visible.add(p.id);
         }
         return visible;
@@ -253,15 +253,22 @@
         });
         return { stations, edges, routes };
     }
-    async function mount({ element, status, stationSelect, routeFromSelect, routeToSelect, onStations, onNetworkStations, onRouteTarget, onPlanTarget, leaflet, onStation, multiMode = false }) {
+    async function mount({ element, status, stationSelect, routeFromSelect, routeToSelect, onStations, onNetworkStations, onRouteTarget, onPlanTarget, leaflet, onStation, multiMode = false, initialData = null }) {
         if (!leaflet) { status.textContent = 'The map library is unavailable. Open the official Tube map above.'; return null; }
-        const map = leaflet.map(element, { crs: leaflet.CRS?.Simple, minZoom: -4, maxZoom: 2, zoomSnap: .25, attributionControl: false });
+        const map = leaflet.map(element, { crs: leaflet.CRS?.Simple, minZoom: -6, maxZoom: 2, zoomSnap: .25, attributionControl: false });
         const rawSetView = map.setView.bind(map);
         rawSetView([-650, 1150], -1.25);
         const definitions = multiMode ? networkLines : lines.map(([id, color]) => [id, color, 'tube']);
         const bounds = [], datasets = [], layers = new Map(), markers = []; let loaded = 0;
         status.textContent = 'Loading schematic station connections from TfL...';
-        for (let index = 0; index < definitions.length; index += 3) {
+        if (initialData) {
+            if (multiMode || !Array.isArray(initialData.datasets) || initialData.datasets.length !== lines.length
+                || definitions.some(([id]) => initialData.datasets.filter(d => d.definition?.[0] === id && d.data?.lineId === id).length !== 1)) {
+                throw new Error('The bundled Tube network is incomplete.');
+            }
+            datasets.push(...initialData.datasets); loaded = datasets.length;
+        }
+        for (let index = 0; !initialData && index < definitions.length; index += 3) {
             await Promise.all(definitions.slice(index, index + 3).map(async ([id, color, mode]) => {
                 try {
                     const response = await fetch(`https://api.tfl.gov.uk/Line/${id}/Route/Sequence/all`, { signal: AbortSignal.timeout(10000) });
@@ -390,8 +397,10 @@
             const paths = [...layers.entries()].filter(([id, l]) => selectedLine ? selectedLine === id : selectedMode === 'all' || (selectedMode === 'favourites' ? favourites.includes(id) : l.mode === selectedMode)).flatMap(([, l]) => l.paths.flat());
             if (paths.length) map.fitBounds(paths, { padding: [18, 18] });
         };
-        // Public callers pass real-world coordinates; convert only through a verified station.
-        map.setView = (point) => {
+        map.showCentral = () => map.fitBounds([[-1450, -300], [-50, 2900]], { padding: [20, 20] });
+        // Do not override Leaflet.setView: fitBounds calls it with diagram coordinates.
+        // GPS callers must opt into the separate real-coordinate conversion.
+        map.focusLocation = (point) => {
             const available = definitions.filter(([id, , mode]) => layers.has(id) && (selectedLine ? id === selectedLine : selectedMode === 'all' || (selectedMode === 'favourites' ? favourites.includes(id) : selectedMode === mode))).map(([id]) => id);
             const visible = [...stations.values()].filter(s => s.lineIds.some(id => available.includes(id)));
             const nearest = visible.sort((a, b) => Math.hypot((a.lon - point[1]) * .62, a.lat - point[0]) - Math.hypot((b.lon - point[1]) * .62, b.lat - point[0]))[0];

@@ -17,7 +17,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css?journey=20261113b"
           integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
-    <link rel="stylesheet" href="styles.css?v=20261115c">
+    <link rel="stylesheet" href="styles.css?v=20261115d">
 </head>
 <body>
     <div class="app" id="app">
@@ -50,6 +50,7 @@
             <button class="top-tab" data-screen="nearby"><span class="tt-icon">📍</span> Nearby</button>
             <button class="top-tab" data-screen="buses"><span class="tt-icon">🚌</span> Buses</button>
             <button class="top-tab" data-screen="lines"><span class="tt-icon">🚆</span> Lines</button>
+            <button class="top-tab" data-screen="tube"><span class="tt-icon">◉</span> Tube map</button>
         </nav>
 
         <main class="screens" id="screens">
@@ -251,7 +252,7 @@
                 </div>
                 <div class="network-tabs" role="tablist" aria-label="Network information">
                     <button id="network-status-tab" role="tab" aria-selected="true" aria-controls="network-status-panel">List</button>
-                    <button id="network-map-tab" role="tab" aria-selected="false" aria-controls="network-map-panel" tabindex="-1">Tube map</button>
+                    <button id="network-map-tab" role="tab" aria-selected="false" aria-controls="network-map-panel" tabindex="-1">Wider network</button>
                 </div>
                 <div id="network-status-panel" role="tabpanel" aria-labelledby="network-status-tab">
                 <div id="network-alert-summary" class="network-alert-summary" role="status"></div>
@@ -287,7 +288,24 @@
                         <a href="https://tfl.gov.uk/transport-accessibility/download-accessibility-guides-and-maps" target="_blank" rel="noopener noreferrer">Step-free and accessible maps</a>
                     </div>
                     </details>
-                    <details id="tube-planner-details" class="network-planner-details"><summary>Quickest Tube connection</summary>
+                    <button type="button" id="network-open-tube" class="go-btn">Open dedicated Tube map &amp; routes</button>
+                </div>
+            </section>
+
+            <section class="screen" id="screen-tube" aria-labelledby="tube-page-title">
+                <div class="tube-page-heading"><div><p class="tube-eyebrow">LONDON UNDERGROUND</p><h2 id="tube-page-title">Tube map</h2></div><button type="button" id="tube-page-status">Line status ›</button></div>
+                <div class="tube-page-shortcuts"><button type="button" id="tube-page-plan">Find quickest route ↓</button><a href="https://content.tfl.gov.uk/standard-tube-map.pdf" target="_blank" rel="noopener noreferrer">Official TfL map ↗</a></div>
+                <label class="network-visually-hidden" for="quick-tube-station">Station departures &amp; information</label>
+                <select id="quick-tube-station" class="tube-page-select" disabled><option>Preparing Tube stations…</option></select>
+                <div class="tube-page-map-canvas">
+                    <div id="quick-tube-map" class="tube-schematic" role="region" aria-label="London Underground schematic map"></div>
+                    <button type="button" id="quick-tube-fit">Whole network</button>
+                    <button type="button" id="quick-tube-central">Central London</button>
+                </div>
+                <p id="quick-tube-map-status" class="map-source" role="status">Preparing bundled Tube diagram…</p>
+                <p id="tube-topology-date" class="map-source">Station connections are separate from live service status.</p>
+                <div id="tube-page-lines" class="tube-line-key" role="group" aria-label="Tube line colours and status"></div>
+                <section id="tube-planner-details" class="network-planner-details" aria-label="Quickest Tube connection">
                     <form id="tube-route-form" class="tube-route-form" aria-label="Quickest Tube connection">
                         <h3>Quickest Tube connection</h3>
                         <div class="tube-route-fields">
@@ -296,15 +314,16 @@
                             <label for="tube-route-to">To Tube station</label>
                             <select id="tube-route-to" disabled><option value="">Loading stations...</option></select>
                         </div>
-                        <label class="tube-route-option"><input id="tube-route-tube-only" type="checkbox"> Tube + walking only</label>
+                        <label class="tube-route-option"><input id="tube-route-tube-only" type="checkbox" checked> Tube + walking only</label>
                         <p class="map-source">Unticked: allow bus, tram and rail connections into the Tube. Times include walking, changes and the wait before departure. Phone coordinates are sent to TfL only for this search; no location history is saved.</p>
                         <button id="tube-route-submit" type="submit" disabled>Find quickest connection</button>
+                        <button id="tube-origin-departures" type="button" class="tube-departures-btn" disabled>Next trains at starting station</button>
                         <p id="tube-route-status" class="map-source" role="status" aria-live="polite">Choose your origin and destination, then find the quickest connection.</p>
                         <a href="https://tfl.gov.uk/plan-a-journey/" target="_blank" rel="noopener noreferrer">Check with TfL Journey Planner</a>
                     </form>
                     <div id="tube-route-results" aria-label="Tube connection options"></div>
-                    </details>
-                </div>
+                </section>
+                <details class="network-map-info"><summary>About this Tube map</summary><p>All 11 Underground lines, drawn from TfL's ordered station connections. A Journey schematic, not to scale or official TfL artwork. Zoom to see more station names; tap a station or use the station selector for verified next-train predictions. Live predictions are not a timetable or a guarantee. Overground, DLR, Elizabeth line, trams and National Rail remain in Lines &amp; network.</p></details>
             </section>
 
             <section class="screen" id="screen-line">
@@ -421,6 +440,10 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="16" rx="3"/><path d="M4 11h16M8 19l-2 2M16 19l2 2"/><circle cx="8.5" cy="15" r="0.6" fill="currentColor"/><circle cx="15.5" cy="15" r="0.6" fill="currentColor"/></svg>
                 <span>Lines</span>
             </button>
+            <button class="bn-btn" data-screen="tube">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><path d="M2 9h20v6H2z" fill="var(--card)"/></svg>
+                <span>Tube map</span>
+            </button>
             <button class="bn-btn" data-screen="saved">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
                 <span>Saved</span>
@@ -430,10 +453,11 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js?journey=20261113b"
             integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-    <script src="config.js?v=20261115c"></script>
-    <script src="journey-guidance.js?v=20261115c"></script>
-    <script src="transit-data.js?v=20261115c"></script>
-    <script src="network-map.js?v=20261115c"></script>
-    <script src="app.js?v=20261115c"></script>
+    <script src="config.js?v=20261115d"></script>
+    <script src="journey-guidance.js?v=20261115d"></script>
+    <script src="transit-data.js?v=20261115d"></script>
+    <script src="network-map.js?v=20261115d"></script>
+    <script src="tube-network.js?v=20261115d"></script>
+    <script src="app.js?v=20261115d"></script>
 </body>
 </html>

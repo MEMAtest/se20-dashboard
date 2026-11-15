@@ -102,9 +102,9 @@ function appHarness(fetcher) {
             replaceChildren() { this.innerHTML = ''; }, setAttribute(k, v) { this[k] = v; }, addEventListener(k, fn) { this.events[k] = fn; } };
     }
     const timers = new Map(); let count = 0;
-    const context = { console, Date, Map, URL, AbortController, Event, JourneyGuidance: G, CONFIG: {}, navigator: {},
+    const context = { console, Date, Map, URL, AbortController, Event, JourneyGuidance: G, JourneyNetworkMap: require('../network-map.js'), LINE_META: {}, CONFIG: {}, navigator: {},
         setTimeout: fn => { const id = ++count; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id),
-        document: { addEventListener() {}, getElementById: id => nodes[id], createElement: () => ({}) }, fetch: fetcher };
+        document: { addEventListener() {}, getElementById: id => nodes[id], createElement: () => ({ children: [], events: {}, append(node) { this.children.push(node); }, addEventListener(k, fn) { this.events[k] = fn; } }) }, fetch: fetcher };
     vm.runInNewContext(fs.readFileSync(require.resolve('../app.js'), 'utf8') + '\nthis.App = PengeDash;', context);
     const app = Object.create(context.App.prototype);
     app._tubeStations = new Map([['940GZZLUOXC', station('940GZZLUOXC')], ['940GZZLUKSX', station('940GZZLUKSX')]]);
@@ -184,6 +184,22 @@ test('routing form is labelled and is discoverable from Plan and map markers', (
     assert.match(html, /id="plan-tube-link"/); assert.match(html, /aria-label="Quickest Tube connection"/);
     for (const id of ['tube-route-from', 'tube-route-to', 'tube-route-tube-only', 'tube-route-submit', 'tube-route-status']) assert.ok(html.includes(`id="${id}"`));
     assert.match(fs.readFileSync(require.resolve('../network-map.js'), 'utf8'), /Quickest route here/);
+});
+
+test('real-shaped route updates are escaped, with exact origin departures and relevant Tube status actions', async () => {
+    const start = new Date(Date.now() + 60000).toISOString(), arrival = new Date(Date.now() + 600000).toISOString();
+    const leg = { ...tubeLeg('Jubilee'), departureTime: start,
+        disruptions: [{ description: '<b>Lift unavailable</b>' }], routeOptions: [{ lineIdentifier: { id: 'jubilee' } }] };
+    const { app, nodes } = appHarness(async () => ({ ok: true, json: async () => ({ journeys: [{ startDateTime: start, arrivalDateTime: arrival, duration: 9, legs: [leg] }] }) }));
+    const origin = { ...station('940GZZLUOXC'), name: 'Oxford Circus' };
+    app._tubeOrigins = new Map([[origin.id, origin]]); nodes['tube-route-from'].value = origin.id;
+    let openedStation, openedLine; app.openStationHub = station => { openedStation = station; }; app.openLineDetail = id => { openedLine = id; };
+    await app.findTubeConnection();
+    assert.match(nodes['tube-route-results'].innerHTML, /TfL route update: &lt;b&gt;Lift unavailable&lt;\/b&gt;/);
+    assert.match(nodes['tube-route-results'].innerHTML, /Depart .*London \(estimate\)/);
+    const actions = nodes['tube-route-results'].children[0].children;
+    assert.match(actions[0].textContent, /Next trains at Oxford Circus/); actions[0].events.click(); assert.equal(openedStation.id, origin.id);
+    assert.match(actions[1].textContent, /Jubilee status & delays/); actions[1].events.click(); assert.equal(openedLine, 'jubilee');
 });
 
 test('network loading populates both route selectors with verified stations and binds map routing', async () => {

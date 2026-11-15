@@ -43,7 +43,7 @@ test('a late phone fix cannot override an explicit Home selection', async () => 
 test('Tube-map Home centring does not wait for an unrelated hung global refresh', async () => {
     const { app } = harness(); let centre;
     app.refreshAll = () => new Promise(() => {});
-    app._tubeMap = { setView: value => { centre = value; } };
+    app._tubeMap = { focusLocation: value => { centre = value; } };
     await Promise.race([app.centerOnHome({ network: true }), new Promise((_, reject) => setTimeout(() => reject(new Error('Home blocked by provider refresh')), 100))]);
     assert.equal(centre[0], app.savedHome.lat); assert.equal(centre[1], app.savedHome.lon);
 });
