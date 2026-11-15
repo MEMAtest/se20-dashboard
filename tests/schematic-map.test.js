@@ -100,5 +100,6 @@ test('mobile label selection avoids collisions, keeps interchanges first and rev
         { id: 'c', x: 270, y: 250, name: 'Temple', interchange: false, priority: 1, direction: 'bottom' }
     ];
     assert.deepEqual([...N.schematicLabels(points, -1.25, 390, 640)], ['a']);
+    assert.deepEqual([...N.schematicLabels(points, -4, 390, 640)], ['a']);
     assert.deepEqual([...N.schematicLabels(points, 0, 390, 640)], ['a', 'c']);
 });
