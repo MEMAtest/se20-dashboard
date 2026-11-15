@@ -933,6 +933,8 @@ class PengeDash {
             onStations: stations => { this._tubeStations = new Map(stations.map(s => [s.id, s])); },
             onNetworkStations: stations => {
                 this._tubeOrigins = new Map(stations.map(s => [s.id, s]));
+                this._tubeSearchFrom?.update(stations); this._tubeSearchTo?.update(stations); this._tubeSearchInfo?.update(stations);
+                for (const id of ['tube-locate','tube-use-home']) { const shortcut=document.getElementById(id);if(shortcut)shortcut.disabled=!stations.length; }
                 this._stationHubRefs = this._stationHubRefs || new Map();
                 stations.forEach(s => this._stationHubRefs.set(s.id, s));
                 const submit = document.getElementById('tube-route-submit'); if (submit) submit.disabled = !stations.length;
@@ -943,7 +945,7 @@ class PengeDash {
             },
             onStation: station => this.openStationHub(station),
             onRouteTarget: station => {
-                const to = document.getElementById('tube-route-to'); to.value = station.id; to.dispatchEvent(new Event('change'));
+                const to = document.getElementById('tube-route-to'); to.value = station.id; to.dispatchEvent(new Event('change',{bubbles:true}));
                 document.getElementById('tube-route-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
             }
         }).then(map => {
@@ -1161,6 +1163,63 @@ class PengeDash {
         };
         form.addEventListener('change', invalidate);
         form.addEventListener('submit', event => { event.preventDefault(); this.findTubeConnection(); });
+        this.setupTubeSearch();
+    }
+
+    setupTubeSearch() {
+        if (typeof JourneyTubeSearch === 'undefined' || !document.getElementById('tube-from-query')) return;
+        const labelFor = value => value === 'here' ? this._tubeLocationLabel || 'Your current location'
+            : value === 'home' ? this.homeLabel() : value === 'selected-origin' ? this._tubeCustomOrigin?.name : '';
+        for (const side of ['from','to']) {
+            const picker=JourneyTubeSearch.mount({root:document.getElementById(`tube-${side}-search`),input:document.getElementById(`tube-${side}-query`),
+                list:document.getElementById(`tube-${side}-suggestions`),status:document.getElementById(`tube-${side}-search-status`),
+                select:document.getElementById(`tube-route-${side}`),labelFor});
+            this[side==='from'?'_tubeSearchFrom':'_tubeSearchTo']=picker;
+        }
+        document.getElementById('tube-locate').addEventListener('click',()=>this._locateTubeOrigin());
+        this._tubeSearchInfo=JourneyTubeSearch.mount({root:document.getElementById('tube-info-search'),input:document.getElementById('tube-info-query'),
+            list:document.getElementById('tube-info-suggestions'),status:document.getElementById('tube-info-search-status'),
+            select:document.getElementById('quick-tube-station'),labelFor:()=>''});
+        document.getElementById('tube-use-home').addEventListener('click',()=>{
+            const from=document.getElementById('tube-route-from');from.value='home';from.dispatchEvent(new Event('change',{bubbles:true}));
+        });
+        document.getElementById('tube-route-form').addEventListener('change',()=>{
+            this._tubeLocationGeneration=(this._tubeLocationGeneration||0)+1;
+            const choice=document.getElementById('tube-route-from').value;
+            if(choice!=='here') {
+                this._tubeLocatedPosition=null;
+                document.getElementById('tube-nearby-options').replaceChildren();
+                document.getElementById('tube-origin-status').textContent=choice==='home' ? `${this.homeLabel()} selected. Not your phone location.`
+                    : choice ? 'Starting point selected. Location will not be used.' : 'Choose a station suggestion, Locate me or Home.';
+            }
+        });
+    }
+
+    async _locateTubeOrigin() {
+        const button=document.getElementById('tube-locate'),status=document.getElementById('tube-origin-status');
+        // Clear an old origin before requesting a fix; never fall back to Home.
+        const from=document.getElementById('tube-route-from');from.value='';from.dispatchEvent(new Event('change',{bubbles:true}));
+        const generation=this._tubeLocationGeneration=(this._tubeLocationGeneration||0)+1;
+        button.disabled=true;button.setAttribute('aria-busy','true');status.textContent='Locating you. Your browser may ask for permission…';
+        try {
+            const position=await this._acquirePosition();
+            if(generation!==this._tubeLocationGeneration)return;
+            const fix=JourneyTubeSearch.locationFix(position),nearest=JourneyTubeSearch.nearby([...this._tubeStations.values()],fix);
+            this._tubeLocatedPosition=position;
+            this._tubeLocationLabel=nearest[0]?.distance<3000 ? `Your location near ${nearest[0].name}` : 'Your current location';
+            from.value='here';from.dispatchEvent(new Event('change',{bubbles:true}));
+            const distance=m=>m<1000 ? `${Math.round(m/10)*10} m` : `${(m/1000).toFixed(1)} km`;
+            status.textContent=`${this._tubeLocationLabel} · accuracy ±${Math.ceil(fix.accuracy)} m. Routes start at your actual position, including walking. Location is sent to TfL only when you find a route.`;
+            for(const station of nearest.filter(s=>s.distance<=5000)) {
+                const b=document.createElement('button');b.type='button';b.textContent=`Start at ${station.name} · ${distance(station.distance)} away`;
+                b.addEventListener('click',()=>{from.value=station.id;from.dispatchEvent(new Event('change',{bubbles:true}));});
+                document.getElementById('tube-nearby-options').append(b);
+            }
+        } catch(error) {
+            if(generation!==this._tubeLocationGeneration)return;
+            status.textContent=error.code===1 ? 'Location permission denied. Search your starting station or choose Home. No fallback was used.'
+                : error.code===3 ? 'Location timed out. Retry Locate me, or search your starting station.' : error.message || 'Location unavailable. Search your starting station instead.';
+        } finally {button.disabled=false;button.setAttribute('aria-busy','false');}
     }
 
     _applyTubePrefill() {
@@ -1183,6 +1242,7 @@ class PengeDash {
         const chosen = destination && [...this._tubeStations.values()].find(s => s.id === destination.id || s.routingId === destination.id || s.icsId === destination.id);
         to.value = chosen?.id || '';
         document.getElementById('tube-route-form').dispatchEvent(new Event('change'));
+        this._tubeSearchFrom?.sync(); this._tubeSearchTo?.sync();
         this._tubePrefill = null;
     }
 
@@ -1206,11 +1266,22 @@ class PengeDash {
             let origin, originLabel;
             if (selected === 'here') {
                 status.textContent = 'Getting this phone\'s location...';
-                const position = await this._acquirePosition();
+                const held=this._tubeLocatedPosition;
+                const position = held && Date.now()-held.timestamp<=120000 ? held : await this._acquirePosition();
+                if (typeof JourneyTubeSearch !== 'undefined') {
+                    const fix=JourneyTubeSearch.locationFix(position);
+                    if (generation !== this._tubeRouteGeneration) return;
+                    if(position!==held) {
+                        this._tubeLocatedPosition=position;this._tubeLocationLabel='Your current location';this._tubeSearchFrom?.sync();
+                        const hint=document.getElementById('tube-origin-status');
+                        if(hint)hint.textContent=`Fresh location obtained · accuracy ±${Math.ceil(fix.accuracy)} m. Walking access is included.`;
+                        document.getElementById('tube-nearby-options')?.replaceChildren();
+                    }
+                }
                 if (!Number.isFinite(position.timestamp) || Date.now() - position.timestamp > 120000 || position.timestamp > Date.now() + 10000) {
                     throw new Error('Your phone returned an old location. Retry or select Saved Home.');
                 }
-                origin = { lat: position.coords.latitude, lon: position.coords.longitude }; originLabel = 'Phone location';
+                origin = { lat: position.coords.latitude, lon: position.coords.longitude }; originLabel = this._tubeLocationLabel || 'Phone location';
             } else if (selected === 'home') {
                 origin = this.savedHome || CONFIG.DEFAULT_HOME; originLabel = this.homeLabel();
             } else {
