@@ -1251,7 +1251,7 @@ input { font-family: inherit; }
 #journey-authored-map.route-focused #diagram-routes { opacity: .3; }
 #journey-authored-map.route-focused [data-station], #journey-authored-map.route-focused [data-label] { opacity: .24; }
 #journey-authored-map.route-focused [data-on-route] { opacity: 1; }
-#quick-tube-map .tube-selected-label { background: #fff; border: 1px solid #dae0eb; border-radius: 10px; color: #17233b; padding: 8px 10px; box-shadow: 0 3px 14px #12213a22; white-space: normal; max-width: 150px; font: inherit; font-size: 14px; opacity: 1; }
+#quick-tube-map .tube-selected-label { background: #fff; border: 1px solid #dae0eb; border-radius: 10px; color: #17233b; padding: 8px 10px; box-shadow: 0 3px 14px #12213a22; white-space: normal; width: 140px; max-width: 150px; box-sizing: border-box; font: inherit; font-size: 14px; opacity: 1; }
 .tube-selected-label small, .tube-selected-label b { display: block; }
 .tube-selected-label small { color: #546686; font-size: 9px; font-weight: 800; letter-spacing: .9px; margin-bottom: 2px; }
 .tube-selection-summary { background: #163edc; color: white; border-radius: 14px; padding: 13px 16px; margin: 10px 0; }
