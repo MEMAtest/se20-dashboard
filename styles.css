@@ -1241,6 +1241,7 @@ input { font-family: inherit; }
 .tube-station-suggestions[hidden] { display: none; }
 .tube-station-suggestions button { display: block; width: 100%; text-align: left; min-height: 46px; padding: 12px; border: 0; border-radius: 9px; background: transparent; color: var(--text); font: inherit; font-size: 15px; }
 .tube-station-suggestions button:hover, .tube-station-suggestions [aria-selected="true"] { background: var(--blue); color: white; }
+.tube-search-empty { display: block; color: var(--text-2); font-size: 12px; line-height: 1.5; margin: 6px 0; }
 .tube-origin-shortcuts { display: flex; gap: 9px; }
 .tube-origin-shortcuts button { flex: 1; min-height: 44px; padding: 10px; font: inherit; font-size: 13px; font-weight: 700; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--text); }
 .tube-origin-shortcuts button:disabled { opacity: .6; }
