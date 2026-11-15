@@ -759,11 +759,19 @@
         const label = query.get('fromName') || '', latText = query.get('fromLat'), lonText = query.get('fromLon');
         const origin = { label, lat: latText === null || latText.trim() === '' ? NaN : Number(latText), lon: lonText === null || lonText.trim() === '' ? NaN : Number(lonText) };
         const safeLabel = value => value.length > 0 && value.length <= 120 && !/[\x00-\x1f\x7f<>]/.test(value);
-        if (!safeLabel(label) || !validJourneyCoordinates(origin)) throw new Error('Widget starting point is invalid. Select a station again.');
+        if (query.has('line')) {
+            const lineId = query.get('line');
+            if (!['windrush','victoria','jubilee','northern','elizabeth','bakerloo','central','circle','district','hammersmith-city','metropolitan','piccadilly','waterloo-city','dlr','tram','liberty','lioness','mildmay','suffragette','weaver'].includes(lineId) || ['from','fromLat','fromLon','fromName','to','toId'].some(k => query.has(k)))
+                throw new Error('Widget line is invalid. Select a line again.');
+            return { kind: 'line', lineId };
+        }
+        const phone = query.get('from') === 'phone';
+        if (phone ? ['fromLat','fromLon','fromName'].some(k => query.has(k)) : !safeLabel(label) || !validJourneyCoordinates(origin)) throw new Error('Widget starting point is invalid. Select a station again.');
         const to = query.get('to'), id = query.get('toId');
         if ((to || id) && (!safeLabel(to || '') || !/^(?:\d{1,12}|(?:HUB|940G|910G|490)[A-Za-z0-9]{1,70})$/.test(id || '')))
             throw new Error('Widget destination is invalid. Select a station again.');
-        return { origin, destination: to && id ? { label: to, id } : null };
+        if (phone && !(to && id)) throw new Error('Widget home destination is missing. Configure your home station.');
+        return { kind: phone ? 'phone' : 'station', origin: phone ? null : origin, destination: to && id ? { label: to, id } : null };
     }
 
     function journeyOverview(journey) {

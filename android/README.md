@@ -4,10 +4,20 @@ Small Java/framework Android application (Android 8 / API 26 or newer), with no 
 
 ## Use
 
-1. Install the signed early-access APK from the `android-v0.1.0` GitHub release on your Android phone. The APK is not a Play Store listing. Review Android's installer prompts yourself; do not disable Play Protect.
-2. Open Journey and tap **Add widget**, then accept your launcher's placement prompt. Alternatively, long-press the home screen, choose Widgets, then Journey.
-3. Search and select an exact departure station/stop. Optionally select an exact shortcut destination, such as your home station. Typed text alone cannot be saved as a selected station.
-4. Tap **Save widget**. Use **Refresh** before travel. Tap **Edit** to reconfigure. Tap the destination button to open Journey with your chosen endpoints, then confirm a route or use Quickest Tube connection.
+1. Install the signed early-access APK from the `android-v0.2.0` GitHub release. Install over 0.1.0 to retain widget settings; the signing identity is unchanged. It is not a Play Store listing. Review Android's prompts; do not disable Play Protect.
+2. Open Journey and tap **Add widget**, choose a type, then accept your launcher's placement prompt. Or long-press the home screen, choose Widgets, then Journey.
+3. Choose exact station search results, or a line for Line watch. Go home requires a home station; My journey requires both endpoints. Typed text alone is not a selected station.
+4. Tap **Save widget**. Long-press to reconfigure. Next up's body refreshes, its station title opens Journey. My journey's refresh checks times; its body opens the selected route (in the flat layout the clocks refresh and the title opens). Line watch opens that exact line; wider layouts also have refresh. Go home opens the planner; tap Find route before phone location is requested.
+
+| Widget | Starting size | Purpose |
+| --- | --- | --- |
+| Next up | 2 x 2 | Next verified TfL departure at your exact station, including its direction |
+| Go home | 2 x 1 | Phone-to-home-station shortcut, or an optional fixed start; no background work |
+| My journey | 4 x 2 | Earliest arrival among returned TfL route estimates; leave/arrive clocks and service summary |
+| Line watch | 2 x 1 | One chosen line's checked status; opens full details |
+| Departures board | 4 x 4 | Optional original larger board, preserved for existing users |
+
+Cell dimensions vary by launcher. Native responsive layouts adapt to available bounds, including a flat route view and compact large-text variants. These are snapshots, not continuously live navigation. A line's generic compact Disruption label opens the provider's precise status. Widget previews contain placeholders, not live predictions.
 
 Widget settings are per widget, stored locally and separate from browser favourites/Home. Native WebView storage is also separate from Chrome's PWA storage. No existing Home, favourites or listening data is imported or overwritten. A saved destination is a selected station, not automatic discovery of your home address. The widget never requests location. The full app requests foreground location only when its location feature is used; there is no background-location permission or location history service.
 
@@ -29,9 +39,11 @@ cd android
 ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
 ```
 
-The nine JVM tests cover source filtering, deduplication, ordering, London clocks, endpoint encoding, selected stations, entrance exclusion and honest no-data states. The Node suite covers widget URL validation, no automatic provider request/GPS lookup, Home preservation and invalid-link rejection.
+JVM tests cover source filtering, deduplication, London/DST clocks, earliest returned arrival, exact line identity, adverse statuses, endpoint encoding, entrance exclusion and honest no-data states. Node tests cover phone/line/station widget URLs, deferred exact-line opening, no automatic widget GPS lookup, Home preservation and invalid-link rejection.
 
 `DeviceChecks` is a separate instrumentation test APK, not part of the release app. With a named, task-owned emulator, install the debug app and its test APK, then run `com.mema.journey.debug.test/com.mema.journey.DeviceChecks`. `-e live true` explicitly enables a bounded real TfL check; optional `-e station london-bridge -e render true` renders actual native RemoteViews into a test-only PNG. This is not a launcher-placement, button-tap, physical-phone GPS or unattended-scheduler acceptance test. Do not silently turn these checks into recurring runs.
+
+`-e family true` runs 24 native fixture renders: four compact types at minimum, standard and wide bounds, each at 1.0x and 1.3x text, plus failure/expired-state checks. It checks vertical text bounds and writes a labelled contact sheet. With explicit `-e live true`, it additionally performs one bounded departure, route and exact-line read. Fixtures are not live predictions; the instrumentation is not physical-launcher acceptance.
 
 ## Signing and distribution
 

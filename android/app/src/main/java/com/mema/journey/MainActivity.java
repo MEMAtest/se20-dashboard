@@ -39,7 +39,7 @@ public final class MainActivity extends Activity {
         web = new WebView(this); WebSettings settings = web.getSettings(); settings.setJavaScriptEnabled(true); settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false); settings.setAllowContentAccess(false); settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setJavaScriptCanOpenWindowsAutomatically(false); settings.setSupportMultipleWindows(false); settings.setGeolocationEnabled(true);
-        settings.setSafeBrowsingEnabled(true); settings.setUserAgentString(settings.getUserAgentString() + " JourneyAndroid/0.1");
+        settings.setSafeBrowsingEnabled(true); settings.setUserAgentString(settings.getUserAgentString() + " JourneyAndroid/0.2");
         web.setWebViewClient(new WebViewClient() {
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) { loadFailed = false; }
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -65,12 +65,20 @@ public final class MainActivity extends Activity {
     private String startUrl() {
         int id = getIntent().getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1);
         if (!DeparturesWidget.owns(this, id)) return WidgetData.APP_URL;
-        WidgetStore store = new WidgetStore(this); return WidgetData.link(store.station(id, "station"), store.station(id, "destination"));
+        WidgetStore store = new WidgetStore(this); WidgetKind kind = DeparturesWidget.kind(this, id);
+        if (kind == WidgetKind.LINE) return WidgetData.lineLink(store.read(id, "config").optString("lineId"));
+        if (kind == WidgetKind.HOME && store.read(id, "config").optBoolean("phone")) return WidgetData.homeLink(store.station(id, "destination"));
+        return WidgetData.link(store.station(id, "station"), store.station(id, "destination"));
     }
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); web.loadUrl(startUrl()); }
     private void pinWidget() {
         AppWidgetManager manager = getSystemService(AppWidgetManager.class);
-        if (manager.isRequestPinAppWidgetSupported()) manager.requestPinAppWidget(new ComponentName(this, DeparturesWidget.class), null, null);
+        if (manager.isRequestPinAppWidgetSupported()) {
+            Class<?>[] types = {NextUpWidget.class, HomeWidget.class, JourneyWidget.class, LineWatchWidget.class, DeparturesWidget.class};
+            WidgetKind[] kinds = WidgetKind.values(); String[] choices = new String[kinds.length];
+            for (int i = 0; i < kinds.length; i++) choices[i] = kinds[i].title + " / " + kinds[i].size;
+            new android.app.AlertDialog.Builder(this).setTitle("Choose your widget").setItems(choices, (dialog, which) -> manager.requestPinAppWidget(new ComponentName(this, types[which]), null, null)).show();
+        }
         else Toast.makeText(this, "Long-press your home screen, choose Widgets, then Journey.", Toast.LENGTH_LONG).show();
     }
     private void external(Uri uri) {

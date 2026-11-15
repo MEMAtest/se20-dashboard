@@ -1,0 +1,5 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@id/compact_root" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="8dp" android:background="@drawable/widget_soft_background" android:gravity="center_vertical">
+    <TextView android:id="@id/compact_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="MY JOURNEY" android:textSize="12sp" android:textStyle="bold" android:textColor="#10253F" android:maxLines="1" android:ellipsize="end"/>
+    <TextView android:id="@id/compact_value" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Tap to refresh route" android:textSize="18sp" android:textStyle="bold" android:textColor="#073BC6" android:maxLines="1"/>
+    <TextView android:id="@id/compact_meta" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Snapshot, not a live countdown" android:textSize="10sp" android:textColor="#52657D" android:maxLines="1" android:ellipsize="end"/>
+</LinearLayout>

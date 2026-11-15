@@ -68,4 +68,37 @@ public class WidgetDataTest {
         String text = WidgetData.departuresText(new JSONArray().put(row("940GTEST", "2026-11-15T09:02:00Z", "2026-11-15T08:59:50Z", "a")), Set.of("940GTEST"), now);
         assertTrue(text.startsWith("09:02")); assertFalse(text.contains("min"));
     }
+    @Test public void ambiguousLocalClocksAndStaleSnapshotsStayUnverified() throws Exception {
+        assertEquals(0,WidgetData.tflInstant("2026-10-25T01:30:00"));
+        assertEquals(0,WidgetData.tflInstant("2026-03-29T01:30:00"));
+        assertEquals(now,WidgetData.tflInstant("2026-11-15T09:00:00"));
+        assertTrue(WidgetData.fresh(new JSONObject().put("checkedAt",now),now));
+        assertFalse(WidgetData.fresh(new JSONObject().put("checkedAt",now-181000),now));
+        assertFalse(WidgetData.fresh(new JSONObject().put("checkedAt",now+31000),now));
+    }
+    @Test public void routesSelectEarliestReturnedArrivalAndRejectUnverifiedOrPastResults() throws Exception {
+        JSONObject leg = new JSONObject().put("mode",new JSONObject().put("id","tube")).put("instruction",new JSONObject().put("summary","Jubilee to Westminster"));
+        JSONObject journey = new JSONObject().put("startDateTime","2026-11-15T09:03:00Z").put("arrivalDateTime","2026-11-15T09:20:00Z").put("legs",new JSONArray().put(leg));
+        JSONObject later = new JSONObject(journey.toString()).put("arrivalDateTime","2026-11-15T09:40:00Z");
+        JSONObject result = WidgetData.routeSnapshot(new JSONObject().put("journeys",new JSONArray().put(later).put(journey)),now);
+        assertEquals("09:20",WidgetData.clock(result.getLong("arrivalAt"))); assertEquals("Jubilee to Westminster",result.getString("summary"));
+        assertThrows(IllegalArgumentException.class,() -> WidgetData.routeSnapshot(new JSONObject().put("journeys",new JSONArray().put(new JSONObject(journey.toString()).put("startDateTime","bad"))),now));
+        assertThrows(IllegalArgumentException.class,() -> WidgetData.routeSnapshot(new JSONObject(),now));
+    }
+    @Test public void lineWatchRequiresExactIdentityAndDoesNotHideAnAdverseStatus() throws Exception {
+        JSONArray statuses = new JSONArray().put(new JSONObject().put("statusSeverity",10).put("statusSeverityDescription","Good Service")).put(new JSONObject().put("statusSeverity",5).put("statusSeverityDescription","Part Closure"));
+        JSONArray response = new JSONArray().put(new JSONObject().put("id","windrush").put("lineStatuses",statuses));
+        assertEquals("Part Closure",WidgetData.lineSnapshot(response,"windrush",now).getString("status"));
+        assertFalse(WidgetData.lineSnapshot(response,"windrush",now).getBoolean("good"));
+        assertThrows(IllegalArgumentException.class,() -> WidgetData.lineSnapshot(response,"victoria",now));
+        assertThrows(IllegalArgumentException.class,() -> WidgetData.lineSnapshot(response,"../evil",now));
+    }
+    @Test public void fourCompactKindsHaveDistinctPurposesAndHomeNeverRefreshesInBackground() {
+        assertEquals(5,WidgetKind.values().length); assertFalse(WidgetKind.HOME.refreshes);
+        assertEquals(WidgetKind.LINE,WidgetKind.provider("com.mema.journey.LineWatchWidget"));
+        Station home = new Station("910GANERLEY","Anerley",51.412153,-.065886,"");
+        assertTrue(WidgetData.homeLink(home).contains("from=phone&to=Anerley&toId=910GANERLEY"));
+        assertEquals(WidgetData.APP_URL,WidgetData.lineLink("bad"));
+        assertTrue(WidgetData.lineLink("windrush").endsWith("?widget=1&line=windrush"));
+    }
 }

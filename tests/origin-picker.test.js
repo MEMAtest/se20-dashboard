@@ -56,6 +56,30 @@ test('invalid widget links clear old endpoints instead of falling back to Home o
     assert.equal(element('destination-input').value, ''); assert.match(element('origin-status').textContent, /invalid/);
 });
 
+test('home widget does not request a position or mutate saved Home until Find route', () => {
+    let calls = 0; const { app, element } = harness(() => { calls++; throw Error('unexpected request'); });
+    app.getCurrentLocation = () => { throw Error('unexpected location'); };
+    const home = JSON.stringify(app.savedHome);
+    app._applyWidgetLink('?widget=1&from=phone&to=Anerley&toId=910GANERLEY');
+    assert.equal(calls,0); assert.equal(app.journeyOrigin,'here'); assert.equal(app.selectedOrigin,null);
+    assert.equal(app._selectedDestination.id,'910GANERLEY'); assert.equal(element('from-text').textContent,'Phone location');
+    assert.equal(JSON.stringify(app.savedHome),home);
+    assert.match(element('origin-status').textContent,/Tap Find route/);
+});
+
+test('line widget defers exact line details until available, without guessing another line', () => {
+    const { app } = harness(); const opened = []; app.openLineDetail = id => opened.push(id);
+    app._applyWidgetLink('?widget=1&line=windrush'); assert.equal(opened.length,0);
+    app.lineDetails = { victoria: {} }; app._openPendingWidgetLine(); assert.equal(opened.length,0);
+    app.lineDetails.windrush = {}; app._openPendingWidgetLine(); assert.deepEqual(opened,['windrush']);
+    app._openPendingWidgetLine(); assert.equal(opened.length,1);
+});
+
+test('widget phone and line links refuse ambiguous or injected combinations', () => {
+    for (const q of ['?widget=1&from=phone','?widget=1&line=evil','?widget=1&line=windrush&to=Victoria',
+        '?widget=1&from=phone&fromLat=51&to=Victoria&toId=1000248']) assert.throws(() => G.widgetJourneySelection(q));
+});
+
 test('widget selection validation rejects malformed coordinates, markup, IDs and missing destination fields', () => {
     const base = '?widget=1&fromLat=51.5&fromLon=-.1&fromName=London';
     assert.equal(G.widgetJourneySelection('?to=Victoria'), null);

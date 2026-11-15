@@ -18,6 +18,7 @@ public final class DeviceChecks extends Instrumentation {
     @Override public void onStart() {
         Bundle result = new Bundle(); int id = 987654;
         try {
+            if ("true".equals(args.getString("family"))) { WidgetFamilyChecks.run(this,result,"true".equals(args.getString("live"))); finish(0,result); return; }
             Context c = getTargetContext(); WidgetStore store = new WidgetStore(c);
             Station a = new Station("910GANERLEY", "Anerley Rail Station", 51.412153, -.065886, "");
             Station b = new Station("HUBVIC", "Victoria", 51.496, -.144, "1000248");

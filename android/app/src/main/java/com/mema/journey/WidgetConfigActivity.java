@@ -11,6 +11,9 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.CheckBox;
+import android.widget.Spinner;
+import android.widget.ArrayAdapter;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -22,18 +25,33 @@ public final class WidgetConfigActivity extends Activity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private LinearLayout results;
     private TextView status;
+    private WidgetKind kind;
+    private CheckBox phone;
+    private Spinner line;
     @Override public void onCreate(Bundle state) {
         super.onCreate(state); setResult(RESULT_CANCELED);
         widgetId = getIntent().getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1);
         if (!DeparturesWidget.owns(this, widgetId)) { finish(); return; }
+        kind = DeparturesWidget.kind(this, widgetId);
         LinearLayout root = NativeUi.column(this); ScrollView scroll = new ScrollView(this);
         LinearLayout body = new LinearLayout(this); body.setOrientation(LinearLayout.VERTICAL); int p = NativeUi.dp(this, 20); body.setPadding(p, p, p, p);
         body.addView(NativeUi.text(this, "JOURNEY / YOUR HOME SCREEN", 12, 0xff0057d9));
-        body.addView(NativeUi.text(this, "A station at a glance", 28, 0xff10253f));
-        body.addView(NativeUi.text(this, "Choose an exact station or bus stop. Widgets use TfL predictions, not every National Rail service. These settings are separate from browser favourites.", 14, 0xff52657d));
+        body.addView(NativeUi.text(this, kind.title + " / " + kind.size, 28, 0xff10253f));
+        body.addView(NativeUi.text(this, kind == WidgetKind.HOME ? "Choose your home station. This is a route shortcut, not a live arrival estimate. It does not change Home in your browser." : "Choose exact stations or a line. TfL predictions do not include every National Rail service. Settings stay separate from browser favourites.", 14, 0xff52657d));
+        if (kind == WidgetKind.LINE) {
+            line = new Spinner(this); String[] names = new String[WidgetData.LINES.length];
+            String saved = new WidgetStore(this).read(widgetId,"config").optString("lineId"); int choice = 0;
+            for (int i = 0; i < names.length; i++) { names[i] = WidgetData.LINES[i][1]; if (WidgetData.LINES[i][0].equals(saved)) choice = i; }
+            line.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, names)); line.setSelection(choice); line.setContentDescription("Line to watch"); body.addView(line);
+        }
+        if (kind == WidgetKind.HOME) {
+            phone = new CheckBox(this); phone.setText("Start from my phone location, only when I find a route");
+            phone.setChecked(new WidgetStore(this).read(widgetId,"config").optBoolean("phone", true)); body.addView(phone);
+        }
         for (int slot = 0; slot < 2; slot++) {
+            if (kind == WidgetKind.LINE || (kind == WidgetKind.NEXT && slot == 1)) continue;
             final int which = slot;
-            body.addView(NativeUi.text(this, slot == 0 ? "Departure station / stop" : "Shortcut destination (optional)", 15, 0xff10253f));
+            body.addView(NativeUi.text(this, slot == 0 ? (kind == WidgetKind.HOME ? "Fixed start (only if phone location is unchecked)" : "Departure station / stop") : kind == WidgetKind.HOME ? "Home station (required)" : kind == WidgetKind.ROUTE ? "Destination (required)" : "Shortcut destination (optional)", 15, 0xff10253f));
             EditText input = new EditText(this); input.setSingleLine(true); input.setHint(slot == 0 ? "e.g. Anerley or London Bridge" : "e.g. Victoria, or your home station"); input.setContentDescription(slot == 0 ? "Departure station search" : "Destination station search"); inputs[slot] = input; body.addView(input);
             input.addTextChangedListener(new TextWatcher() {
                 public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
@@ -47,7 +65,7 @@ public final class WidgetConfigActivity extends Activity {
         status = NativeUi.text(this, "Select a search result before saving. No background location is used.", 14, 0xff52657d); body.addView(status);
         results = new LinearLayout(this); results.setOrientation(LinearLayout.VERTICAL); body.addView(results);
         Button save = new Button(this); save.setText("Save widget"); save.setOnClickListener(v -> save()); body.addView(save);
-        body.addView(NativeUi.text(this, "Refresh on demand. Android may delay the roughly 30-minute background updates to save battery. Times are absolute London times, never a continuously live countdown. Tap the destination to open Journey, then confirm your route.", 12, 0xff52657d));
+        body.addView(NativeUi.text(this, kind == WidgetKind.HOME ? "No background location or refresh jobs. Tap the widget, then Find route in Journey to request your position." : "Refresh before travel. Android may delay background updates. Clocks are absolute London times, not a continuously live countdown. Route estimates include walks and transfers. Long-press the widget to reconfigure.", 12, 0xff52657d));
         scroll.addView(body); root.addView(scroll); setContentView(root);
     }
     private void search(int which) {
@@ -71,10 +89,11 @@ public final class WidgetConfigActivity extends Activity {
         });
     }
     private void save() {
-        if (selected[0] == null || (!inputs[1].getText().toString().trim().isEmpty() && selected[1] == null)) { status.setText("Choose exact search results. Typed text alone is not a selected station."); return; }
+        boolean usePhone = kind == WidgetKind.HOME && phone.isChecked();
+        if (kind != WidgetKind.LINE && ((!usePhone && selected[0] == null) || ((kind == WidgetKind.HOME || kind == WidgetKind.ROUTE) && selected[1] == null) || (inputs[1] != null && !inputs[1].getText().toString().trim().isEmpty() && selected[1] == null))) { status.setText("Choose exact search results. Typed text alone is not a selected station."); return; }
         if (!DeparturesWidget.owns(this, widgetId)) { finish(); return; }
         WidgetRefreshService.cancel(this, widgetId);
-        new WidgetStore(this).configure(widgetId, selected[0], selected[1]); DeparturesWidget.render(this, widgetId);
+        new WidgetStore(this).configure(widgetId, kind, usePhone ? null : selected[0], selected[1], usePhone, kind == WidgetKind.LINE ? WidgetData.LINES[line.getSelectedItemPosition()][0] : ""); DeparturesWidget.render(this, widgetId);
         WidgetRefreshService.schedule(this, widgetId, false); WidgetRefreshService.schedule(this, widgetId, true);
         setResult(RESULT_OK, new Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)); finish();
     }

@@ -14,9 +14,18 @@ import org.json.JSONObject;
 import java.util.HashSet;
 import java.util.Set;
 
-public final class DeparturesWidget extends AppWidgetProvider {
+public class DeparturesWidget extends AppWidgetProvider {
     static final String REFRESH = "com.mema.journey.REFRESH";
-    static int[] ids(Context c) { return AppWidgetManager.getInstance(c).getAppWidgetIds(new ComponentName(c, DeparturesWidget.class)); }
+    static final java.util.List<Class<? extends DeparturesWidget>> PROVIDERS = java.util.Arrays.asList(NextUpWidget.class, HomeWidget.class, JourneyWidget.class, LineWatchWidget.class, DeparturesWidget.class);
+    static int[] ids(Context c) {
+        java.util.List<Integer> ids = new java.util.ArrayList<>();
+        for (Class<?> type : PROVIDERS) for (int id : AppWidgetManager.getInstance(c).getAppWidgetIds(new ComponentName(c, type))) ids.add(id);
+        int[] result = new int[ids.size()]; for (int i = 0; i < result.length; i++) result[i] = ids.get(i); return result;
+    }
+    static WidgetKind kind(Context c, int id) {
+        android.appwidget.AppWidgetProviderInfo info = AppWidgetManager.getInstance(c).getAppWidgetInfo(id);
+        return info == null ? WidgetKind.BOARD : WidgetKind.provider(info.provider.getClassName());
+    }
     static boolean owns(Context c, int id) { for (int value : ids(c)) if (value == id) return true; return false; }
     @Override public void onUpdate(Context c, AppWidgetManager manager, int[] ids) {
         for (int id : ids) { render(c, id); WidgetRefreshService.schedule(c, id, false); WidgetRefreshService.schedule(c, id, true); }
@@ -38,7 +47,17 @@ public final class DeparturesWidget extends AppWidgetProvider {
                 .setData(Uri.parse("journey-widget://" + type.getSimpleName() + "/" + id));
         return PendingIntent.getActivity(c, id, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
+    static PendingIntent refresh(Context c, int id) {
+        android.appwidget.AppWidgetProviderInfo info = AppWidgetManager.getInstance(c).getAppWidgetInfo(id);
+        Intent intent = new Intent().setComponent(info == null ? new ComponentName(c, DeparturesWidget.class) : info.provider).setAction(REFRESH)
+                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID,id).setData(Uri.parse("journey-widget://refresh/" + id));
+        return PendingIntent.getBroadcast(c,id,intent,PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
     static RemoteViews views(Context c, int id, long now) {
+        Bundle options = AppWidgetManager.getInstance(c).getAppWidgetOptions(id);
+        return WidgetRenderer.create(c,id,kind(c,id),options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH,180),options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT,170),now);
+    }
+    static RemoteViews boardViews(Context c, int id, long now) {
         WidgetStore store = new WidgetStore(c); Station station = store.station(id, "station"), destination = store.station(id, "destination");
         RemoteViews v = new RemoteViews(c.getPackageName(), R.layout.departures_widget);
         v.setTextViewText(R.id.widget_station, station == null ? "Choose your station" : station.name);
@@ -63,5 +82,14 @@ public final class DeparturesWidget extends AppWidgetProvider {
         v.setOnClickPendingIntent(R.id.widget_refresh, PendingIntent.getBroadcast(c, id, refresh, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
         return v;
     }
-    static void render(Context c, int id) { AppWidgetManager.getInstance(c).updateAppWidget(id, views(c, id, System.currentTimeMillis())); }
+    static void render(Context c, int id) {
+        WidgetKind kind = kind(c,id); long now = System.currentTimeMillis(); RemoteViews view = views(c,id,now);
+        if (android.os.Build.VERSION.SDK_INT >= 31 && kind != WidgetKind.BOARD) {
+            java.util.Map<android.util.SizeF,RemoteViews> sizes = new java.util.LinkedHashMap<>();
+            int[][] bounds = kind == WidgetKind.NEXT ? new int[][]{{110,110},{170,170},{300,170}} : kind == WidgetKind.ROUTE ? new int[][]{{250,110},{300,170},{300,220}} : new int[][]{{110,56},{180,90},{300,90}};
+            for (int[] b : bounds) sizes.put(new android.util.SizeF(b[0],b[1]),WidgetRenderer.create(c,id,kind,b[0],b[1],now));
+            view = new RemoteViews(sizes);
+        }
+        AppWidgetManager.getInstance(c).updateAppWidget(id,view);
+    }
 }

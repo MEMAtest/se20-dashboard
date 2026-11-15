@@ -6,7 +6,8 @@ const read = name => fs.readFileSync(require('node:path').join(__dirname, '..', 
 test('native release has no background location or exported refresh receiver', () => {
     const manifest = read('android/app/src/main/AndroidManifest.xml');
     assert.doesNotMatch(manifest, /ACCESS_BACKGROUND_LOCATION|FOREGROUND_SERVICE|SCHEDULE_EXACT_ALARM/);
-    assert.match(manifest, /\.DeparturesWidget" android:exported="false"/);
+    for (const name of ['DeparturesWidget','NextUpWidget','HomeWidget','JourneyWidget','LineWatchWidget'])
+        assert.match(manifest, new RegExp(`\\.${name}"[^>]*android:exported="false"`));
     assert.match(manifest, /android:permission="android.permission.BIND_JOB_SERVICE"/);
     assert.match(manifest, /android:usesCleartextTraffic="false"/);
 });
