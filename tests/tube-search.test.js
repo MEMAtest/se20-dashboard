@@ -51,7 +51,9 @@ test('combobox requires confirmation, supports keyboard, clears stale IDs and sy
     input.events.keydown(key('Enter'));assert.equal(input.value,'North Greenwich');assert.equal(select.value,stations.find(s=>s.name==='North Greenwich').id);
     assert.equal(list.hidden,true);
     input.value='Victoria';input.events.input();assert.equal(select.value,'');list.children[0].events.click();assert.equal(input.value,'Victoria');
+    input.value='not a real station';input.events.input();assert.equal(status.attrs.class,'tube-search-empty');assert.equal(select.value,'');
     select.value='home';select.dispatchEvent(new Event('change'));assert.equal(input.value,'Saved Home');
+    assert.equal(status.attrs.class,'network-visually-hidden');
     clear.events.click();assert.equal(select.value,'');assert.equal(input.value,'');
     input.events.keydown(key('Escape'));assert.equal(list.hidden,true);
 });

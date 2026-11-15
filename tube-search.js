@@ -25,15 +25,16 @@
     }
     function mount({root,input,list,status,select,labelFor}) {
         let stations=[],results=[],active=-1,editing=false;
+        const announce=(text,visible=false)=>{status.textContent=text;status.setAttribute('class',visible?'tube-search-empty':'network-visually-hidden');};
         const close=()=>{list.hidden=true;input.setAttribute('aria-expanded','false');input.removeAttribute('aria-activedescendant');active=-1;};
         function sync() {
             if (editing) return;
             input.value=labelFor(select.value) || stations.find(s=>s.id===select.value)?.name || '';
-            status.textContent=input.value ? `${input.value} selected.` : '';
+            announce(input.value ? `${input.value} selected.` : '');
         }
         function choose(station) {
             select.value=station.id; select.dispatchEvent(new Event('change',{bubbles:true})); sync();close();input.focus();
-            status.textContent=`${station.name} selected.`;
+            announce(`${station.name} selected.`);
         }
         function highlight(index) {
             active=index;
@@ -48,7 +49,7 @@
                 option.addEventListener('click',()=>choose(station));list.append(option);
             }
             list.hidden=!results.length;input.setAttribute('aria-expanded',String(!!results.length));
-            status.textContent=results.length ? `${results.length} station suggestions. Choose one or use arrow keys and Enter.` : 'No matching Tube station. Try another station name.';
+            announce(results.length ? `${results.length} station suggestions. Choose one or use arrow keys and Enter.` : 'No matching Tube station. Try another station name.',!results.length);
         }
         input.addEventListener('input',()=>{
             editing=true;select.value='';select.dispatchEvent(new Event('change',{bubbles:true}));editing=false;render();
@@ -58,7 +59,7 @@
             if(event.key==='Escape'){close();return;}
             if(['ArrowDown','ArrowUp'].includes(event.key)) {
                 event.preventDefault();if(list.hidden)render();if(results.length)highlight(active<0 ? (event.key==='ArrowDown'?0:results.length-1) : (active+(event.key==='ArrowDown'?1:-1)+results.length)%results.length);
-            } else if(event.key==='Enter' && !list.hidden) {event.preventDefault();if(active>=0)choose(results[active]);else status.textContent='Choose a suggested station to confirm it.';}
+            } else if(event.key==='Enter' && !list.hidden) {event.preventDefault();if(active>=0)choose(results[active]);else announce('Choose a suggested station to confirm it.',true);}
             else if(event.key==='Tab')close();
         });
         select.addEventListener('change',sync);
