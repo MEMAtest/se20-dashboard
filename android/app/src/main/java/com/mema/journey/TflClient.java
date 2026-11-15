@@ -59,7 +59,7 @@ final class TflClient {
         if (!lines.isEmpty()) {
             try {
                 JSONArray statuses = (JSONArray) get("Line/" + String.join(",", lines) + "/Status");
-                List<String> warnings = new ArrayList<>();
+                Set<String> warnings = new LinkedHashSet<>();
                 for (int i = 0; i < statuses.length(); i++) {
                     JSONObject line = statuses.getJSONObject(i); JSONArray values = line.optJSONArray("lineStatuses");
                     if (values != null) for (int j = 0; j < values.length(); j++) {
@@ -68,7 +68,10 @@ final class TflClient {
                     }
                 }
                 statusVerified = statuses.length() > 0;
-                if (!warnings.isEmpty()) alert = String.join("; ", warnings);
+                if (!warnings.isEmpty()) {
+                    List<String> display = new ArrayList<>(warnings);
+                    alert = String.join("; ", display.subList(0, Math.min(2, display.size()))) + (display.size() > 2 ? " (+" + (display.size() - 2) + " more; open Journey)" : "");
+                }
             } catch (Exception e) { alert = "Service alerts unavailable; check before travel"; }
         }
         if (!statusVerified && alert.startsWith("TfL")) alert = "Service alerts unverified; TfL predictions only";
@@ -81,7 +84,7 @@ final class TflClient {
         String type = stop.optString("stopType");
         boolean board = type.matches("Naptan(?:MetroStation|RailStation)") || (depth == 0 && type.equals("NaptanPublicBusCoachTram"));
         if (id.matches("(?:940G|910G|490)[A-Za-z0-9]{1,70}") && board && ids.size() < 4) ids.add(id);
-        JSONArray served = stop.optJSONArray("lines");
+        JSONArray served = board ? stop.optJSONArray("lines") : null;
         if (served != null) for (int i = 0; i < served.length() && lines.size() < 8; i++) {
             JSONObject line = served.optJSONObject(i); String name = line == null ? "" : line.optString("id");
             if (name.matches("[a-z0-9-]{1,60}")) lines.add(name);

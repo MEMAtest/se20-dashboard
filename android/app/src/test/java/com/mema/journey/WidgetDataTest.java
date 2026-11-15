@@ -59,9 +59,10 @@ public class WidgetDataTest {
     @Test public void stopTreeRetainsOnlyBoundedValidEndpoints() throws Exception {
         Set<String> stops = new LinkedHashSet<>(), lines = new LinkedHashSet<>();
         JSONArray children = new JSONArray().put(new JSONObject().put("id", "4900ANERLEY1").put("stopType", "NaptanRailEntrance"));
-        for (int i = 0; i < 20; i++) children.put(new JSONObject().put("id", "940GSTOP" + i).put("stopType", "NaptanMetroStation"));
-        TflClient.collect(new JSONObject().put("id", "HUBTEST").put("children", children).put("lines", new JSONArray().put(new JSONObject().put("id", "jubilee"))), stops, lines, 0);
+        for (int i = 0; i < 20; i++) children.put(new JSONObject().put("id", "940GSTOP" + i).put("stopType", "NaptanMetroStation").put("lines", new JSONArray().put(new JSONObject().put("id", "jubilee"))));
+        TflClient.collect(new JSONObject().put("id", "HUBTEST").put("children", children).put("lines", new JSONArray().put(new JSONObject().put("id", "133"))), stops, lines, 0);
         assertEquals(4, stops.size()); assertFalse(stops.contains("HUBTEST")); assertFalse(stops.contains("4900ANERLEY1")); assertTrue(lines.contains("jubilee"));
+        assertFalse(lines.contains("133"));
     }
     @Test public void clockTextIsNotAFrozenLiveCountdown() throws Exception {
         String text = WidgetData.departuresText(new JSONArray().put(row("940GTEST", "2026-11-15T09:02:00Z", "2026-11-15T08:59:50Z", "a")), Set.of("940GTEST"), now);
