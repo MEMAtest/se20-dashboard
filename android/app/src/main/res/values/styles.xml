@@ -7,8 +7,8 @@
         <item name="android:windowBackground">#F3F7FC</item>
     </style>
     <string name="widget_description">Departures snapshot, service alerts and a saved journey. Refresh before travel.</string>
-    <string name="next_description">Next departure at your chosen station, without a large board. Tap to refresh.</string>
-    <string name="home_description">Plan to your home station from your phone location, only when you tap.</string>
-    <string name="route_description">A saved route with checked departure, arrival and changes. Refresh before travel.</string>
+    <string name="next_description">Next prediction, transport badge, ticking countdown and source age. Refresh before travel.</string>
+    <string name="home_description">Check a home estimate after an explicit phone-location request, or from a fixed station. No background tracking.</string>
+    <string name="route_description">Leave countdown, arrival estimate and verified transport legs. Refresh before travel.</string>
     <string name="line_description">One important line, one glance. Timestamped service status and refresh.</string>
 </resources>

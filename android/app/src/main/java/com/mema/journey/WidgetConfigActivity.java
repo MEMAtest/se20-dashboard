@@ -28,6 +28,7 @@ public final class WidgetConfigActivity extends Activity {
     private WidgetKind kind;
     private CheckBox phone;
     private Spinner line;
+    private EditText homeLabel;
     @Override public void onCreate(Bundle state) {
         super.onCreate(state); setResult(RESULT_CANCELED);
         widgetId = getIntent().getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1);
@@ -37,7 +38,7 @@ public final class WidgetConfigActivity extends Activity {
         LinearLayout body = new LinearLayout(this); body.setOrientation(LinearLayout.VERTICAL); int p = NativeUi.dp(this, 20); body.setPadding(p, p, p, p);
         body.addView(NativeUi.text(this, "JOURNEY / YOUR HOME SCREEN", 12, 0xff0057d9));
         body.addView(NativeUi.text(this, kind.title + " / " + kind.size, 28, 0xff10253f));
-        body.addView(NativeUi.text(this, kind == WidgetKind.HOME ? "Choose your home station. This is a route shortcut, not a live arrival estimate. It does not change Home in your browser." : "Choose exact stations or a line. TfL predictions do not include every National Rail service. Settings stay separate from browser favourites.", 14, 0xff52657d));
+        body.addView(NativeUi.text(this, kind == WidgetKind.HOME ? "Choose your home station. Tap the widget to check a real route estimate. Phone position is used only after your explicit request, never tracked in the background. Browser Home is unchanged." : "Choose exact stations or a line. TfL predictions do not include every National Rail service. Settings stay separate from browser favourites.", 14, 0xff52657d));
         if (kind == WidgetKind.LINE) {
             line = new Spinner(this); String[] names = new String[WidgetData.LINES.length];
             String saved = new WidgetStore(this).read(widgetId,"config").optString("lineId"); int choice = 0;
@@ -47,6 +48,8 @@ public final class WidgetConfigActivity extends Activity {
         if (kind == WidgetKind.HOME) {
             phone = new CheckBox(this); phone.setText("Start from my phone location, only when I find a route");
             phone.setChecked(new WidgetStore(this).read(widgetId,"config").optBoolean("phone", true)); body.addView(phone);
+            homeLabel=new EditText(this); homeLabel.setSingleLine(true); homeLabel.setHint("Home label, e.g. SE20 (optional)"); homeLabel.setContentDescription("Home widget label");
+            homeLabel.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(24)}); homeLabel.setText(new WidgetStore(this).read(widgetId,"config").optString("homeLabel")); body.addView(homeLabel);
         }
         for (int slot = 0; slot < 2; slot++) {
             if (kind == WidgetKind.LINE || (kind == WidgetKind.NEXT && slot == 1)) continue;
@@ -65,7 +68,7 @@ public final class WidgetConfigActivity extends Activity {
         status = NativeUi.text(this, "Select a search result before saving. No background location is used.", 14, 0xff52657d); body.addView(status);
         results = new LinearLayout(this); results.setOrientation(LinearLayout.VERTICAL); body.addView(results);
         Button save = new Button(this); save.setText("Save widget"); save.setOnClickListener(v -> save()); body.addView(save);
-        body.addView(NativeUi.text(this, kind == WidgetKind.HOME ? "No background location or refresh jobs. Tap the widget, then Find route in Journey to request your position." : "Refresh before travel. Android may delay background updates. Clocks are absolute London times, not a continuously live countdown. Route estimates include walks and transfers. Long-press the widget to reconfigure.", 12, 0xff52657d));
+        body.addView(NativeUi.text(this, kind == WidgetKind.HOME ? "Phone mode has no background location or network jobs. A fixed starting station can update in the background. Tap the widget to check an estimate or open the full planner." : "Countdowns tick locally from a dated prediction, not a new live check. Android can delay source refresh and expiry alarms. Refresh before travel; estimates include walks and transfers. Long-press to reconfigure.", 12, 0xff52657d));
         scroll.addView(body); root.addView(scroll); setContentView(root);
     }
     private void search(int which) {
@@ -93,7 +96,9 @@ public final class WidgetConfigActivity extends Activity {
         if (kind != WidgetKind.LINE && ((!usePhone && selected[0] == null) || ((kind == WidgetKind.HOME || kind == WidgetKind.ROUTE) && selected[1] == null) || (inputs[1] != null && !inputs[1].getText().toString().trim().isEmpty() && selected[1] == null))) { status.setText("Choose exact search results. Typed text alone is not a selected station."); return; }
         if (!DeparturesWidget.owns(this, widgetId)) { finish(); return; }
         WidgetRefreshService.cancel(this, widgetId);
-        new WidgetStore(this).configure(widgetId, kind, usePhone ? null : selected[0], selected[1], usePhone, kind == WidgetKind.LINE ? WidgetData.LINES[line.getSelectedItemPosition()][0] : ""); DeparturesWidget.render(this, widgetId);
+        WidgetStore store=new WidgetStore(this); store.configure(widgetId, kind, usePhone ? null : selected[0], selected[1], usePhone, kind == WidgetKind.LINE ? WidgetData.LINES[line.getSelectedItemPosition()][0] : "");
+        if(kind==WidgetKind.HOME) store.homeLabel(widgetId,WidgetData.clean(homeLabel.getText().toString()));
+        DeparturesWidget.render(this, widgetId);
         WidgetRefreshService.schedule(this, widgetId, false); WidgetRefreshService.schedule(this, widgetId, true);
         setResult(RESULT_OK, new Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)); finish();
     }

@@ -101,4 +101,38 @@ public class WidgetDataTest {
         assertEquals(WidgetData.APP_URL,WidgetData.lineLink("bad"));
         assertTrue(WidgetData.lineLink("windrush").endsWith("?widget=1&line=windrush"));
     }
+    @Test public void expiryBoundaryAndPhoneAccuracyNeverBecomeInventedFreshness() throws Exception {
+        assertFalse(WidgetData.fresh(new JSONObject().put("checkedAt",now-180000),now));
+        assertTrue(WidgetData.validPhoneFix(51.5,-.1,30,119999));
+        assertFalse(WidgetData.validPhoneFix(51.5,-.1,501,0));
+        assertFalse(WidgetData.validPhoneFix(51.5,-.1,20,-1));
+        assertFalse(WidgetData.validPhoneFix(51.5,-.1,20,120001));
+        assertFalse(WidgetData.validPhoneFix(Double.NaN,-.1,20,0));
+        assertEquals(4,WidgetData.minutes(180001)); assertEquals(3,WidgetData.minutes(180000));
+    }
+    @Test public void trueRouteLegsAndUnknownDurationsAreRetainedWithoutFakeWalkTrainWalk() throws Exception {
+        JSONObject walk=new JSONObject().put("mode",new JSONObject().put("id","walking")).put("duration",5);
+        JSONObject tube=new JSONObject().put("mode",new JSONObject().put("id","tube"));
+        JSONObject route=new JSONObject().put("startDateTime","2026-11-15T09:06:00Z").put("arrivalDateTime","2026-11-15T09:36:00Z").put("legs",new JSONArray().put(walk).put(tube));
+        JSONObject snapshot=WidgetData.routeSnapshot(new JSONObject().put("journeys",new JSONArray().put(route)),now);
+        assertEquals(2,snapshot.getJSONArray("legs").length()); assertEquals("tube",snapshot.getJSONArray("legs").getJSONObject(1).getString("mode"));
+        assertTrue(snapshot.getJSONArray("legs").getJSONObject(1).isNull("minutes")); assertEquals(30,snapshot.getInt("durationMinutes"));
+        assertEquals("Walk + Tube",WidgetData.homeSummary(snapshot));
+        route.put("legs",new JSONArray().put(new JSONObject().put("mode",new JSONObject().put("id","car"))));
+        assertThrows(IllegalArgumentException.class,() -> WidgetData.routeSnapshot(new JSONObject().put("journeys",new JSONArray().put(route)),now));
+    }
+    @Test public void identicalTimesOnDifferentBusRoutesAreNotDeduplicatedTogether() throws Exception {
+        JSONObject a=row("4900TEST","2026-11-15T09:04:00Z","2026-11-15T08:59:50Z","").put("modeName","bus").put("lineName","176");
+        JSONObject b=new JSONObject(a.toString()).put("lineName","197");
+        assertEquals(2,WidgetData.allDepartures(new JSONArray().put(a).put(b),Set.of("4900TEST"),now).size());
+    }
+    @Test public void busParentResponseResolvesOnlyTheExplicitDirectionAndRejectsPairs() throws Exception {
+        JSONObject east=new JSONObject().put("id","490010905E").put("stopType","NaptanPublicBusCoachTram");
+        JSONObject west=new JSONObject().put("id","490010905D").put("stopType","NaptanPublicBusCoachTram");
+        JSONObject pair=new JSONObject().put("id","490G00010905").put("stopType","NaptanOnstreetBusCoachStopPair").put("children",new JSONArray().put(west).put(east));
+        Station station=new Station("490010905E","Stop E",51.41,-.05,"");
+        assertEquals("490010905E",TflClient.resolveBoard(pair,station).getString("id"));
+        assertThrows(TflClient.SourceException.class,() -> TflClient.resolveBoard(pair,new Station("4900OTHER","Other",51.4,-.05,"")));
+        assertThrows(TflClient.SourceException.class,() -> TflClient.resolveBoard(pair,new Station("490G00010905","Pair",51.4,-.05,"")));
+    }
 }

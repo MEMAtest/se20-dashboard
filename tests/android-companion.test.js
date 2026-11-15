@@ -25,3 +25,23 @@ test('native builds and keys are excluded from the static website staging allowl
     assert.match(read('.gitignore'), /android\/\*\*\/build\//);
     assert.match(read('android/gradle/wrapper/gradle-wrapper.properties'), /distributionSha256Sum=[a-f0-9]{64}/);
 });
+
+test('Home checks are internal, foreground-only, and expiry performs no provider polling', () => {
+    const manifest=read('android/app/src/main/AndroidManifest.xml');
+    assert.match(manifest,/\.HomeEstimateActivity" android:exported="false"/);
+    assert.match(manifest,/\.WidgetExpiry" android:exported="false"/);
+    const home=read('android/app/src/main/java/com/mema/journey/HomeEstimateActivity.java');
+    assert.match(home,/setOnClickListener\(v -> startCheck\(\)\)/);
+    assert.match(home,/onStop\(\)/); assert.match(home,/removeUpdates\(listener\)/);
+    assert.doesNotMatch(home,/ACCESS_BACKGROUND_LOCATION|\.put\("(?:latitude|longitude|lat|lon)"/);
+    const expiry=read('android/app/src/main/java/com/mema/journey/WidgetExpiry.java');
+    assert.match(expiry,/AlarmManager\.ELAPSED_REALTIME/);
+    assert.doesNotMatch(expiry,/setExact|WAKEUP|new TflClient|\.journey\(|\.snapshot\(/);
+});
+
+test('reference widget counters use native monotonic clocks, with ticking source age and no fake leg tiles', () => {
+    const renderer=read('android/app/src/main/java/com/mema/journey/WidgetRenderer.java');
+    assert.match(renderer,/SystemClock\.elapsedRealtime\(\)/); assert.match(renderer,/setChronometerCountDown/);
+    assert.match(renderer,/\/ age %s/); assert.match(renderer,/legs=valid \? snapshot\.optJSONArray\("legs"\)/);
+    for(const name of ['widget_next','widget_route']) assert.match(read(`android/app/src/main/res/layout/${name}.xml`),/<Chronometer/);
+});
