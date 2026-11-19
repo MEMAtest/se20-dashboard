@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="journey-release" content="__JOURNEY_RELEASE__">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -17,10 +18,11 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css?journey=20261113b"
           integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
-    <link rel="stylesheet" href="styles.css?v=20261115i">
+    <link rel="stylesheet" href="styles.css?v=__JOURNEY_RELEASE__">
 </head>
 <body>
     <div class="app" id="app">
+        <div id="app-update-notice" class="app-update-notice" role="status" aria-live="polite" hidden><span id="app-update-message"></span><button id="app-update-button" type="button" hidden>Retry check</button></div>
         <!-- Offline banner -->
         <div class="offline-banner" id="offline-banner" role="alert" aria-live="assertive" style="display:none;">
             <span class="offline-icon" aria-hidden="true">📡</span>
@@ -371,6 +373,7 @@
 
             <!-- ============ SAVED ============ -->
             <section class="screen" id="screen-saved">
+                <p id="app-version" class="map-source" role="status">Checking web version…</p>
                 <div class="card">
                     <h2 class="card-title">Four useful Android widgets</h2>
                     <p>Next up (2×2), Go home (2×1), My journey (4×2) and Line watch (2×1), with bold countdowns, transport icons and checked route estimates. Home uses phone location only after you ask. Refresh dated predictions before travel.</p>
@@ -479,13 +482,14 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js?journey=20261113b"
             integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-    <script src="config.js?v=20261115i"></script>
-    <script src="journey-guidance.js?v=20261115i"></script>
-    <script src="transit-data.js?v=20261115i"></script>
-    <script src="network-map.js?v=20261115i"></script>
-    <script src="tube-network.js?v=20261115i"></script>
-    <script src="tube-map.js?v=20261115i"></script>
-    <script src="tube-search.js?v=20261115i"></script>
-    <script src="app.js?v=20261115i"></script>
+    <script src="config.js?v=__JOURNEY_RELEASE__"></script>
+    <script src="journey-guidance.js?v=__JOURNEY_RELEASE__"></script>
+    <script src="transit-data.js?v=__JOURNEY_RELEASE__"></script>
+    <script src="network-map.js?v=__JOURNEY_RELEASE__"></script>
+    <script src="tube-network.js?v=__JOURNEY_RELEASE__"></script>
+    <script src="tube-map.js?v=__JOURNEY_RELEASE__"></script>
+    <script src="tube-search.js?v=__JOURNEY_RELEASE__"></script>
+    <script src="app-updates.js?v=__JOURNEY_RELEASE__"></script>
+    <script src="app.js?v=__JOURNEY_RELEASE__"></script>
 </body>
 </html>

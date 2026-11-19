@@ -1,23 +1,25 @@
 // Penge Dash SE20 - Service Worker
-const CACHE_VERSION = 'v62';
-importScripts('/transit-data.js?v=20261115i');
+const RELEASE_VERSION = '__JOURNEY_RELEASE__';
+const CACHE_VERSION = `web-${RELEASE_VERSION}`;
+importScripts('/transit-data.js?v=__JOURNEY_RELEASE__');
 const TILE_CACHE = 'penge-dash-tiles-v1';
 const MAX_TILES = 300;
 const CACHE_NAME = `penge-dash-${CACHE_VERSION}`;
 const STATIC_ASSETS = [
     '/',
     '/index.html',
-    '/styles.css?v=20261115i',
-    '/app.js?v=20261115i',
-    '/journey-guidance.js?v=20261115i',
-    '/transit-data.js?v=20261115i',
-    '/network-map.js?v=20261115i',
-    '/tube-network.js?v=20261115i',
-    '/tube-map.js?v=20261115i',
-    '/tube-search.js?v=20261115i',
-    '/familiar-tube.svg?v=20261115i',
+    '/styles.css?v=__JOURNEY_RELEASE__',
+    '/app.js?v=__JOURNEY_RELEASE__',
+    '/app-updates.js?v=__JOURNEY_RELEASE__',
+    '/journey-guidance.js?v=__JOURNEY_RELEASE__',
+    '/transit-data.js?v=__JOURNEY_RELEASE__',
+    '/network-map.js?v=__JOURNEY_RELEASE__',
+    '/tube-network.js?v=__JOURNEY_RELEASE__',
+    '/tube-map.js?v=__JOURNEY_RELEASE__',
+    '/tube-search.js?v=__JOURNEY_RELEASE__',
+    '/familiar-tube.svg?v=__JOURNEY_RELEASE__',
     '/TUBE-MAP-LICENCE.txt',
-    '/config.js?v=20261115i',
+    '/config.js?v=__JOURNEY_RELEASE__',
     '/manifest.json',
     '/icon-192.png',
     '/icon-512.png',
@@ -46,15 +48,31 @@ self.addEventListener('install', event => {
 // Activate - clean old caches
 self.addEventListener('activate', event => {
     event.waitUntil(
-        caches.keys().then(keys => {
-            return Promise.all(
-                keys.filter(key => key !== CACHE_NAME && key !== TILE_CACHE)
-                    .map(key => {
-                        console.log('[SW] Deleting old cache:', key);
-                        return caches.delete(key);
-                    })
-            );
-        }).then(() => self.clients.claim())
+        self.clients.claim().then(async () => {
+            const retained=new Set([CACHE_NAME,TILE_CACHE]);let legacyPending=false;
+            const windows=await self.clients.matchAll({type:'window',includeUncontrolled:true});
+            await Promise.all(windows.filter(client=>{try{const page=new URL(client.url);return page.origin===self.location.origin&&['/','/index.html'].includes(page.pathname);}catch{return false;}}).map(client=>new Promise(resolve=>{
+                const channel=new MessageChannel();
+                const done=()=>{clearTimeout(timer);channel.port1.close();resolve();};
+                const timer=setTimeout(async()=>{
+                    channel.port1.close();
+                    // One-time bridge for older installed web shells without an update listener.
+                    try{await client.navigate(client.url);}catch{legacyPending=true;}
+                    resolve();
+                },3000);
+                channel.port1.onmessage=event=>{
+                    if(event.data?.type==='JOURNEY_UPDATE_HANDLED') {
+                        if(typeof event.data.version==='string'&&/^[a-z0-9][a-z0-9._-]{0,63}$/.test(event.data.version))retained.add(`penge-dash-web-${event.data.version}`);
+                        else legacyPending=true;
+                        done();
+                    }
+                };
+                try{client.postMessage({type:'JOURNEY_RELEASE_READY',version:RELEASE_VERSION},[channel.port2]);}catch{done();}
+            })));
+            const keys=await caches.keys();
+            if(legacyPending){const previous=keys.filter(k=>k.startsWith('penge-dash-')&&!retained.has(k)).at(-1);if(previous)retained.add(previous);}
+            await Promise.all(keys.filter(key=>key.startsWith('penge-dash-')&&!retained.has(key)).map(key=>caches.delete(key)));
+        })
     );
 });
 
@@ -64,6 +82,22 @@ self.addEventListener('fetch', event => {
     if (event.request.method !== 'GET') return;
 
     const url = new URL(event.request.url);
+
+    if(url.origin===self.location?.origin&&(url.pathname==='/app-release.json'||url.pathname==='/sw.js')) {
+        event.respondWith(fetch(event.request,{cache:'no-store'}));return;
+    }
+    if(event.request.mode==='navigate'&&url.origin===self.location?.origin&&['/','/index.html'].includes(url.pathname)) {
+        event.respondWith((async()=>{
+            try {
+                const response=await fetch(event.request,{cache:'no-store'});
+                if(!response.ok)throw new Error('navigation unavailable');
+                const cache=await caches.open(CACHE_NAME);await cache.put('/index.html',response.clone());return response;
+            } catch {
+                const cache=await caches.open(CACHE_NAME);
+                return await cache.match('/index.html') || new Response('Journey is offline and has no saved app shell.',{status:503,headers:{'Content-Type':'text/plain'}});
+            }
+        })());return;
+    }
 
     // OSM map tiles — cache-first with a capped tile cache (immutable, fail-soft offline)
     if (url.hostname.includes('tile.openstreetmap.org')) {
@@ -91,7 +125,10 @@ self.addEventListener('fetch', event => {
     if (url.hostname.includes('unpkg.com')) {
         event.respondWith(
             compatibleCacheMatch(event.request).then(cached => {
-                if (cached) return cached;
+                if (cached) {
+                    // Keep the pinned map dependency with the new shell before retiring its older cache.
+                    return caches.open(CACHE_NAME).then(async cache=>{try{await cache.put(event.request,cached.clone());}catch{}return cached;});
+                }
                 return fetch(event.request).then(response => {
                     const clone = response.clone();
                     caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
@@ -170,12 +207,7 @@ self.addEventListener('fetch', event => {
         compatibleCacheMatch(event.request)
             .then(cached => {
                 if (cached) {
-                    // Return cached, but also fetch in background to update
-                    fetch(event.request).then(response => {
-                        caches.open(CACHE_NAME).then(cache => {
-                            cache.put(event.request, response);
-                        });
-                    }).catch(() => {});
+                    // Versioned URLs are immutable within a release; never overwrite them with another build.
                     return cached;
                 }
 
@@ -191,6 +223,7 @@ self.addEventListener('fetch', event => {
 
 // Handle messages from main thread
 self.addEventListener('message', event => {
+    if(event.data?.type==='JOURNEY_VERSION')event.ports?.[0]?.postMessage({version:RELEASE_VERSION});
     if (event.data === 'skipWaiting') {
         self.skipWaiting();
     }
