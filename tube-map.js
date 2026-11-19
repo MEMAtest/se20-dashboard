@@ -87,7 +87,7 @@
     }
     async function mount({ element, status, stationSelect, routeFromSelect, routeToSelect, onStations, onNetworkStations, onStation, onRouteTarget, onRouteClear, initialData, leaflet }) {
         if (!leaflet?.svgOverlay) throw new Error('Map library unavailable');
-        const response = await fetch('familiar-tube.svg?v=20261115i');
+        const response = await fetch('familiar-tube.svg?v=__JOURNEY_RELEASE__');
         if (!response.ok) throw new Error('Authored diagram unavailable');
         const text = await response.text();
         if (text.length > 300000) throw new Error('Invalid diagram size');

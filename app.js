@@ -312,6 +312,7 @@ class PengeDash {
         this.savedHome = { ...this.home };
         try {
             localStorage.setItem('pengedash-home', JSON.stringify(this.home));
+            window.dispatchEvent(new Event('journey:settings-saved'));
         } catch (e) { /* ignore quota */ }
     }
 
@@ -952,6 +953,7 @@ class PengeDash {
             this._quickTubeMap = map;
             if (map) {
                 map.showCentral?.(); this._applyTubePrefill();
+                window.dispatchEvent(new Event('journey:tube-ready'));
                 status.textContent = 'Hand-positioned Tube diagram. Pinch or use + to read more stations; tap a station for next trains.';
             }
             return map;
@@ -5945,11 +5947,4 @@ document.addEventListener('DOMContentLoaded', () => {
     window.pengeDash = new PengeDash();
 });
 
-// Service Worker registration for PWA
-if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-        navigator.serviceWorker.register('sw.js')
-            .then(reg => console.log('SW registered'))
-            .catch(err => console.log('SW registration failed:', err));
-    });
-}
+// Web release checks and service-worker lifecycle live in app-updates.js.

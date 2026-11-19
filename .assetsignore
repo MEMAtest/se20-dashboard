@@ -3,6 +3,8 @@
 !index.html
 !styles.css
 !app.js
+!app-updates.js
+!app-release.json
 !config.js
 !journey-guidance.js
 !transit-data.js
