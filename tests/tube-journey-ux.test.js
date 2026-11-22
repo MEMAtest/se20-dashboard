@@ -41,6 +41,8 @@ test('result itinerary appears before the map, with explicit endpoints, follow a
     for(const text of ['START','FINISH','Follow this journey','Save route','Your route, step by step'])assert.ok(source.includes(text));
     assert.match(source,/_showTubeRoute\(0, \{ scroll: false \}\)/);
     assert.match(source,/originLabel: fromLabel/);
+    assert.equal((source.match(/returnScreen: this\._journeyReturnScreen, originLabel: this\._journeyDetailOrigin/g)||[]).length,2);
+    assert.match(source,/this\._lastDestination = destination;/);
 });
 test('zoomed Tube station names and nodes expose start, navigate, trains and persistent save actions',()=>{
     const map=read('tube-map.js');for(const text of ['Start here','Navigate here','Next trains & station','Save station'])assert.ok(map.includes(text));

@@ -282,7 +282,8 @@ class PengeDash {
         if (back) back.addEventListener('click', () => this.showScreen(this._journeyReturnScreen === 'tube' ? 'tube' : 'plan'));
         const liveBack = document.getElementById('journey-live-back');
         if (liveBack) liveBack.addEventListener('click', () => this.showScreen('journey', {
-            state: { journeyIndex: this._journeyLiveIndex, resultSetId: this._resultSetId, destination: this._lastDestination }
+            state: { journeyIndex: this._journeyLiveIndex, resultSetId: this._resultSetId, destination: this._lastDestination,
+                returnScreen: this._journeyReturnScreen, originLabel: this._journeyDetailOrigin }
         }));
     }
 
@@ -4519,6 +4520,8 @@ class PengeDash {
             this._isNearHome(this.currentLocation.lat, this.currentLocation.lon);
         this._journeyReturnScreen = returnScreen === 'tube' ? 'tube' : 'plan';
         const fromLabel = originLabel || this._activeOriginLabel || (this.journeyOrigin === 'here' && !atHome ? 'Here' : (this.home.label || 'Home'));
+        this._journeyDetailOrigin = fromLabel;
+        this._lastDestination = destination;
         const overview = JourneyGuidance.journeyOverview(journey);
         const londonTime = value => Number.isFinite(value) ? new Date(value).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' }) : 'Unavailable';
         const arrStr = londonTime(overview.arrival);
@@ -5252,7 +5255,8 @@ class PengeDash {
         // check instead of falling through to .live-empty as a substitute
         // for correctness (see the popstate handler in setupNav).
         this.showScreen('journey-live', {
-            state: { journeyIndex: this._journeyLiveIndex, resultSetId: this._resultSetId, destination: this._lastDestination }
+            state: { journeyIndex: this._journeyLiveIndex, resultSetId: this._resultSetId, destination: this._lastDestination,
+                returnScreen: this._journeyReturnScreen, originLabel: this._journeyDetailOrigin }
         });
     }
 
