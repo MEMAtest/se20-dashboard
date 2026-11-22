@@ -85,7 +85,7 @@
         }
         return result;
     }
-    async function mount({ element, status, stationSelect, routeFromSelect, routeToSelect, onStations, onNetworkStations, onStation, onRouteTarget, onRouteClear, initialData, leaflet }) {
+    async function mount({ element, status, stationSelect, routeFromSelect, routeToSelect, onStations, onNetworkStations, onStation, onRouteTarget, onRouteClear, onSaveStation, isSavedStation, initialData, leaflet }) {
         if (!leaflet?.svgOverlay) throw new Error('Map library unavailable');
         const response = await fetch('familiar-tube.svg?v=__JOURNEY_RELEASE__');
         if (!response.ok) throw new Error('Authored diagram unavailable');
@@ -98,6 +98,11 @@
             if (/^on/i.test(attr.name) || /href$/i.test(attr.name) && !attr.value.startsWith('#')) throw new Error('Unsafe diagram reference');
         }
         const metadata = JSON.parse(svg.querySelector('#journey-layout').textContent), ref = reference(initialData);
+        for (const label of svg.querySelectorAll('[data-label]')) {
+            const station = ref.stations.get(label.getAttribute('data-label')); if (!station) continue;
+            label.style.pointerEvents = 'all'; label.style.cursor = 'pointer';
+            label.setAttribute('role','button'); label.setAttribute('tabindex','0'); label.setAttribute('aria-label',`${station.name} station menu`);
+        }
         const positions = metadata.positions;
         if ([...ref.stations.keys()].some(id => !Array.isArray(positions[id]) || !positions[id].length || positions[id].some(p => p.length !== 2 || p.some(v => !Number.isFinite(v))))) throw new Error('Incomplete diagram station positions');
         const map = leaflet.map(element, { crs: leaflet.CRS.Simple, minZoom: -3, maxZoom: 2, zoomSnap: .25, attributionControl: false });
@@ -162,13 +167,16 @@
             activeBounds = bounds; frameRoute();
             for (const stop of plan.stops) {
                 const point = pointsFor(stop.id, stop.line);
-                const marker = leaflet.circleMarker([-point[1], point[0]], { radius: plan.keys.some(k => k.id === stop.id) ? 6 : 3, color: '#14213b', fillColor: '#fff', fillOpacity: 1, weight: 2 }).addTo(overlay);
+                const marker = leaflet.circleMarker([-point[1], point[0]], { radius: plan.keys.some(k => k.id === stop.id) ? 6 : 3, color: '#14213b', fillColor: '#fff', fillOpacity: 1, weight: 2, bubblingMouseEvents: false }).addTo(overlay);
                 marker.on('click', () => openStation(stop.id));
                 const key = plan.keys.find(k => k.id === stop.id);
                 if (key) {
                     const label = document.createElement('div'), role = document.createElement('small'), name = document.createElement('b');
                     role.textContent = key.role === 'from' ? 'START' : key.role === 'to' ? 'DESTINATION' : 'CHANGE'; name.textContent = stop.name; label.append(role, name);
-                    marker.bindTooltip(label, { permanent: true, opacity: 1, direction: 'top', className: 'tube-selected-label' });
+                    marker.bindTooltip(label, { permanent: false, opacity: 1, direction: 'top', className: 'tube-selected-label' });
+                    const index = plan.keys.findIndex(k => k.id === key.id) + 1;
+                    leaflet.marker(marker.getLatLng(), { icon: leaflet.divIcon({className:'tube-route-waypoint',html:String(index),iconSize:[26,26],iconAnchor:[13,13]}), title:`${index}. ${stop.name}`, bubblingMouseEvents:false })
+                        .addTo(overlay).on('click',()=>openStation(stop.id));
                     keyLabels.push({key,marker});
                 } else marker.bindTooltip(stop.name, { className: 'tube-selected-label' });
             }
@@ -196,15 +204,21 @@
         function openStation(id) {
             const station = ref.stations.get(id); if (!station) return;
             const content = document.createElement('div'), name = document.createElement('b'); name.textContent = station.name; content.append(name);
-            for (const [label, action] of [['Next trains & station', () => onStation(station)], ['Set starting station', () => {
+            for (const [label, action] of [['Next trains & station', () => onStation(station)], ['Start here', () => {
                 routeFromSelect.value = id; routeFromSelect.dispatchEvent(new Event('change', { bubbles: true })); map.closePopup();
-            }], ['Route to this station', () => onRouteTarget(station)]]) {
+            }], ['Navigate here', () => onRouteTarget(station)]]) {
                 const button = document.createElement('button'); button.type = 'button'; button.textContent = label; button.addEventListener('click', action); content.append(button);
+            }
+            if (onSaveStation) {
+                const save = document.createElement('button'); save.type = 'button';
+                const update = () => {const saved=!!isSavedStation?.(station);save.textContent=saved?'Remove saved station':'Save station';save.setAttribute('aria-pressed',String(saved));}; update();
+                save.addEventListener('click',()=>{try {onSaveStation(station);update();} catch {save.textContent='Could not save station. Try again.';}}); content.append(save);
             }
             const p = positions[id][0]; leaflet.popup().setLatLng([-p[1],p[0]]).setContent(content).openOn(map);
         }
-        svg.addEventListener('click', event => { const id = event.target.closest('[data-station]')?.getAttribute('data-station'); if (id) openStation(id); });
-        svg.addEventListener('keydown', event => { if (['Enter',' '].includes(event.key)) { event.preventDefault(); const id=event.target.closest('[data-station]')?.getAttribute('data-station'); if(id)openStation(id); } });
+        const stationId = target => {const node=target.closest('[data-station],[data-label]');return node?.getAttribute('data-station')||node?.getAttribute('data-label');};
+        svg.addEventListener('click', event => { const id = stationId(event.target); if (id) { event.stopPropagation(); openStation(id); } });
+        svg.addEventListener('keydown', event => { if (['Enter',' '].includes(event.key)) { event.preventDefault(); const id=stationId(event.target); if(id)openStation(id); } });
         const stations = [...ref.stations.values()].sort((a,b) => a.name.localeCompare(b.name));
         for (const select of [stationSelect, routeFromSelect, routeToSelect]) {
             select.replaceChildren();

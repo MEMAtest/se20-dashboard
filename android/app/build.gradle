@@ -7,8 +7,8 @@ android {
         applicationId 'com.mema.journey'
         minSdk 26
         targetSdk 36
-        versionCode 3
-        versionName '0.3.0'
+        versionCode 4
+        versionName '0.3.1'
         testInstrumentationRunner 'com.mema.journey.DeviceChecks'
     }
     signingConfigs {
@@ -26,6 +26,7 @@ android {
         debug { applicationIdSuffix '.debug'; versionNameSuffix '-debug' }
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    buildFeatures { buildConfig true }
     testOptions { unitTests.returnDefaultValues = true }
 }
 dependencies { testImplementation 'junit:junit:4.13.2'; testImplementation 'org.json:json:20250517' }

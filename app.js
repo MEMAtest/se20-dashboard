@@ -166,7 +166,7 @@ class PengeDash {
                 this.openStationHub(this._stationHubRefs.get(state.stationId));
             } else if (journey) {
                 // Restore the detail view from the journeys already in memory — no re-fetch.
-                this.showJourneyDetail(journey, state.destination);
+                this.showJourneyDetail(journey, state.destination, { returnScreen: state.returnScreen, originLabel: state.originLabel });
                 if (state.screen === 'journey-live') this.startLiveJourney();
             } else {
                 // Can't safely resolve this entry (stale/out-of-range/no cache) — never
@@ -251,6 +251,7 @@ class PengeDash {
         }
         if (name === 'buses') this.renderBusesScreen();
         if (name === 'tube') this._openTubePage();
+        if (name === 'saved') this.renderSavedTubeRoutes();
         // Re-render from whatever guidance is already in memory (set by
         // showJourneyDetail/_activateJourneyDetail) — covers both the normal
         // Start-journey entry and a native-Forward replay landing back here.
@@ -278,10 +279,11 @@ class PengeDash {
         });
         go('nearby-alerts-link', 'alerts');
         const back = document.getElementById('journey-back');
-        if (back) back.addEventListener('click', () => this.showScreen('plan'));
+        if (back) back.addEventListener('click', () => this.showScreen(this._journeyReturnScreen === 'tube' ? 'tube' : 'plan'));
         const liveBack = document.getElementById('journey-live-back');
         if (liveBack) liveBack.addEventListener('click', () => this.showScreen('journey', {
-            state: { journeyIndex: this._journeyLiveIndex, resultSetId: this._resultSetId, destination: this._lastDestination }
+            state: { journeyIndex: this._journeyLiveIndex, resultSetId: this._resultSetId, destination: this._lastDestination,
+                returnScreen: this._journeyReturnScreen, originLabel: this._journeyDetailOrigin }
         }));
     }
 
@@ -677,6 +679,20 @@ class PengeDash {
         return mode === 'overground' ? '🚆' : mode === 'dlr' ? '🚈'
             : mode === 'tube' ? '🚇' : mode === 'elizabeth' ? '🚆' : mode === 'tram' ? '🚊' : '🚉';
     }
+    _mapIcon(kind) {
+        const shapes = {
+            home: '<path d="m3 11 9-8 9 8M5 10v11h5v-6h4v6h5V10"/>',
+            here: '<circle cx="12" cy="12" r="4"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/>',
+            bus: '<rect x="5" y="3" width="14" height="16" rx="4"/><path d="M5 11h14M8 19v2m8-2v2M8 15h1m6 0h1"/>',
+            rail: '<rect x="5" y="3" width="14" height="15" rx="4"/><path d="M5 10h14M8 18l-2 3m10-3 2 3M8 14h1m6 0h1"/>',
+            tube: '<circle cx="12" cy="12" r="8"/><path d="M2 10h20v4H2z"/>',
+            tram: '<rect x="5" y="5" width="14" height="13" rx="3"/><path d="M8 2h8m-4 0v3M5 11h14M8 18l-2 3m10-3 2 3"/>'
+        };
+        const mode = Object.hasOwn(shapes, kind) ? kind : 'rail';
+        return L.divIcon({ className: `map-pin map-pin--${mode}`,
+            html: `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${shapes[mode]}</svg>`,
+            iconSize: [34, 34], iconAnchor: [17, 17], popupAnchor: [0, -20] });
+    }
     // TfL only provides live arrivals for these modes (National Rail is not covered)
     _hasLiveArrivals(st) {
         return (st.modes || []).some(m => ['tube', 'overground', 'dlr', 'elizabeth-line', 'tram'].includes(m));
@@ -945,6 +961,8 @@ class PengeDash {
                 const fit = document.getElementById('quick-tube-route'); if (fit) fit.hidden = true;
             },
             onStation: station => this.openStationHub(station),
+            isSavedStation: station => this.isFavStation(station.id),
+            onSaveStation: station => this.toggleFavStation({ ...station, modes: ['tube'], isBus: false }),
             onRouteTarget: station => {
                 const to = document.getElementById('tube-route-to'); to.value = station.id; to.dispatchEvent(new Event('change',{bubbles:true}));
                 document.getElementById('tube-route-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1128,7 +1146,8 @@ class PengeDash {
             };
             document.getElementById('hub-map').onclick = onMap; document.getElementById('hub-on-map').onclick = onMap;
             document.getElementById('hub-star').onclick = () => {
-                this.toggleFavStation({ ...ref, modes: profile.modes, isBus: false });
+                try { this.toggleFavStation({ ...ref, modes: profile.modes, isBus: false }); }
+                catch (error) { this._toast(error.message); return; }
                 const button = document.getElementById('hub-star'), saved = this.isFavStation(ref.id);
                 button.textContent = saved ? '★' : '☆'; button.setAttribute('aria-pressed', String(saved)); button.setAttribute('aria-label', `${saved ? 'Unsave' : 'Save'} station`);
                 this._renderNetworkLines();
@@ -1308,25 +1327,38 @@ class PengeDash {
             const arrivalLabel = epoch => new Date(epoch).toLocaleString('en-GB', { timeZone: 'Europe/London',
                 weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
             status.textContent = `Checked ${time(checkedAt)} London time. Estimates, not guaranteed live connections.`;
+            this._tubeSelection = { from: selected === 'selected-origin' ? origin?.id : selected,
+                fromName: originLabel, to: destination.id, toName: destination.name, tubeOnly };
             const escape = value => this.escapeHtml(String(value || ''));
             results.innerHTML = routes.map((route, index) => {
                 const steps = route.journey.legs.map(leg => {
                     const from = leg.departurePoint?.commonName || '', to = leg.arrivalPoint?.commonName || '';
                     const instruction = leg.instruction?.summary || leg.mode?.name || leg.mode?.id;
                     const depart = JourneyGuidance.tflJourneyInstant(leg.departureTime);
-                    const warnings = (Array.isArray(leg.disruptions) ? leg.disruptions : []).slice(0, 8).map(d => d.description).filter(d => typeof d === 'string' && d.length < 3000);
-                    return `<li><strong>${escape(instruction)}</strong><span>${escape(from)} &rarr; ${escape(to)}</span><span>${Number.isFinite(leg.duration) ? `${Math.ceil(leg.duration)} min` : 'Time unavailable'}${Number.isFinite(depart) ? ` · Depart ${time(depart)} London (estimate)` : ''}</span>${warnings.map(w => `<p class="tube-route-warning">TfL route update: ${escape(w)}</p>`).join('')}</li>`;
+                    const warnings = [...new Set((Array.isArray(leg.disruptions) ? leg.disruptions : []).slice(0, 8).map(d => d.description).filter(d => typeof d === 'string' && d.length < 3000))];
+                    return `<li><strong>${escape(instruction)}</strong><span class="tube-step-endpoints">${escape(from)} &rarr; ${escape(to)}</span><span>${Number.isFinite(leg.duration) ? `${Math.ceil(leg.duration)} min` : 'Time unavailable'}${Number.isFinite(depart) ? ` · Depart ${time(depart)} London (estimate)` : ''}</span>${warnings.map(w => `<details class="tube-route-warning"><summary>TfL route update: ${escape(w.split(' - ')[0].slice(0,160))}</summary><p>${escape(w)}</p></details>`).join('')}</li>`;
                 }).join('');
                 return `<article class="tube-route-card"><p class="tube-route-label">${index === 0 ? 'Quickest returned connection' : 'Alternative connection'}</p>
                     <h3>${route.totalMinutes} min from now <span>Arrive ${arrivalLabel(route.arrival)} London</span></h3>
-                    <p>${escape(originLabel)} &rarr; ${escape(destination.name)}</p>
+                    <p class="tube-result-endpoints"><span><small>START</small><b>${escape(originLabel)}</b></span><span aria-hidden="true">&rarr;</span><span><small>FINISH</small><b>${escape(destination.name)}</b></span></p>
                     <p>${route.changes} change${route.changes === 1 ? '' : 's'} &middot; ${route.walking == null ? 'Walking time unavailable' : `${route.walking} min walking`} &middot; ${route.leaveInMinutes ? `Leave in ${route.leaveInMinutes} min` : 'Leave now'}</p>
-                    <button type="button" class="tube-show-route" data-show-tube-route="${index}">Show ${index === 0 ? 'quickest route' : 'this alternative'} on map</button>
-                    <details><summary>Lines, change stations &amp; route updates</summary><ol>${steps}</ol></details></article>`;
+                    <div class="tube-result-buttons"><button type="button" class="tube-follow-route" data-follow-tube-route="${index}">Follow this journey</button><button type="button" class="tube-show-route" data-show-tube-route="${index}">Show on map</button><button type="button" data-save-tube-route="${index}">Save route</button></div>
+                    <p class="map-source">Follow uses the timetable and manual steps, not GPS or vehicle tracking. Check station boards.</p>
+                    <h4>Your route, step by step</h4><ol class="tube-itinerary">${steps}</ol></article>`;
             }).join('');
             this._tubeRouteOptions = routes;
             results.querySelectorAll?.('[data-show-tube-route]').forEach(b => b.addEventListener('click', () => this._showTubeRoute(+b.dataset.showTubeRoute)));
-            this._showTubeRoute(0);
+            results.querySelectorAll?.('[data-follow-tube-route]').forEach(b => b.addEventListener('click', () => {
+                const route = this._tubeRouteOptions?.[+b.dataset.followTubeRoute]; if (!route) return;
+                this._lastJourneys = this._tubeRouteOptions.map(r => r.journey); this._resultSetId = (this._resultSetId || 0) + 1;
+                this.showJourneyDetail(route.journey, destination.name, { returnScreen: 'tube', originLabel });
+            }));
+            results.querySelectorAll?.('[data-save-tube-route]').forEach(b => b.addEventListener('click', () => {
+                try { this._saveTubeSelection(this._tubeSelection); b.textContent = 'Saved in Saved'; }
+                catch (error) { b.textContent = 'Not saved'; this._toast(error.message); }
+            }));
+            this._showTubeRoute(0, { scroll: false });
+            results.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
             const actions = document.createElement('div'); actions.className = 'tube-result-actions';
             const originStation = this._tubeOrigins?.get(selected);
             if (originStation) {
@@ -1355,7 +1387,7 @@ class PengeDash {
         }
     }
 
-    _showTubeRoute(index) {
+    _showTubeRoute(index, { scroll = true } = {}) {
         const route = this._tubeRouteOptions?.[index];
         if (!route || !this._quickTubeMap?.showJourney) return;
         const result = this._quickTubeMap.showJourney(route.journey);
@@ -1364,12 +1396,63 @@ class PengeDash {
         if (summary) {
             summary.replaceChildren(); summary.hidden = false;
             const title = document.createElement('b'), detail = document.createElement('span');
-            title.textContent = `${route.totalMinutes} min · ${route.changes} change${route.changes === 1 ? '' : 's'}`;
-            detail.textContent = result.complete ? 'Your selected route is highlighted below. Times are estimates.' : 'Partial map highlight — use the full itinerary below.';
+            title.textContent = this._tubeSelection ? `${this._tubeSelection.fromName} → ${this._tubeSelection.toName}` : 'Your selected route';
+            detail.textContent = `${route.totalMinutes} min · ${route.changes} change${route.changes === 1 ? '' : 's'}. ${result.complete ? 'Highlighted below; follow the itinerary for each step.' : 'Partial map highlight; follow the full itinerary.'}`;
             summary.append(title, detail);
         }
         const fit = document.getElementById('quick-tube-route'); if (fit) fit.hidden = !result.drawn;
-        document.getElementById('tube-map-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (scroll) document.getElementById('tube-map-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    _readSavedTubeRoutes() {
+        try {
+            const raw = localStorage.getItem('journey-saved-tube-routes');
+            if (!raw || raw.length > 20000) return [];
+            const routes = JSON.parse(raw);
+            return Array.isArray(routes) ? routes.filter(r => r && typeof r.from === 'string' && typeof r.to === 'string'
+                && /^(?:here|home|[A-Z0-9]{5,32})$/.test(r.from) && /^[A-Z0-9]{5,32}$/.test(r.to)
+                && typeof r.fromName === 'string' && r.fromName.length <= 160 && typeof r.toName === 'string'
+                && r.toName.length <= 160 && typeof r.tubeOnly === 'boolean').slice(0, 12) : [];
+        } catch { return []; }
+    }
+
+    _saveTubeSelection(selection) {
+        if (!selection || !['here','home'].includes(selection.from) && !this._tubeOrigins?.has(selection.from)
+            && !this._tubeStations?.has(selection.from)) throw new Error('Choose a named station, Home or current location before saving this route.');
+        if (!this._tubeStations?.has(selection.to)) throw new Error('Choose an exact destination station before saving.');
+        const saved = { from: selection.from, fromName: String(selection.fromName).slice(0,160), to: selection.to,
+            toName: String(selection.toName).slice(0,160), tubeOnly: !!selection.tubeOnly };
+        const routes = this._readSavedTubeRoutes().filter(r => r.from !== saved.from || r.to !== saved.to || r.tubeOnly !== saved.tubeOnly);
+        try { localStorage.setItem('journey-saved-tube-routes', JSON.stringify([saved, ...routes].slice(0,12))); }
+        catch { throw new Error('Could not save this route on this device. Check available storage.'); }
+        this.renderSavedTubeRoutes();
+    }
+
+    renderSavedTubeRoutes() {
+        const list = document.getElementById('saved-tube-routes'); if (!list) return;
+        const routes = this._readSavedTubeRoutes();
+        list.innerHTML = routes.length ? routes.map((r,i) => `<div class="saved-item"><button type="button" class="saved-item-go" data-open-tube-saved="${i}">${this.escapeHtml(r.fromName)} &rarr; ${this.escapeHtml(r.toName)}</button><button type="button" class="saved-item-x" data-remove-tube-saved="${i}" aria-label="Remove saved Tube route">&times;</button></div>`).join('')
+            : '<p class="saved-empty">Save a Tube route after searching. Reopening checks fresh times, not old predictions.</p>';
+        list.querySelectorAll('[data-open-tube-saved]').forEach(b => b.addEventListener('click', () => this._openSavedTubeRoute(+b.dataset.openTubeSaved)));
+        list.querySelectorAll('[data-remove-tube-saved]').forEach(b => b.addEventListener('click', () => {
+            const updated = this._readSavedTubeRoutes(); updated.splice(+b.dataset.removeTubeSaved,1);
+            try { localStorage.setItem('journey-saved-tube-routes', JSON.stringify(updated)); this.renderSavedTubeRoutes(); }
+            catch { this._toast('Could not remove this saved route.'); }
+        }));
+    }
+
+    async _openSavedTubeRoute(index) {
+        const route = this._readSavedTubeRoutes()[index]; if (!route) return;
+        this.showScreen('tube'); await this._quickTubeMapReady;
+        if (!this._tubeStations?.has(route.to) || !['here','home'].includes(route.from) && !this._tubeOrigins?.has(route.from)) {
+            this._toast('A saved station is not available in the current map. Choose the endpoints again.'); return;
+        }
+        document.getElementById('tube-route-from').value = route.from;
+        document.getElementById('tube-route-to').value = route.to;
+        document.getElementById('tube-route-tube-only').checked = route.tubeOnly;
+        document.getElementById('tube-route-form').dispatchEvent(new Event('change', {bubbles:true}));
+        this._tubeSearchFrom?.sync(); this._tubeSearchTo?.sync();
+        document.getElementById('tube-route-status').textContent = 'Saved endpoints loaded. Find quickest connection to check current times.';
     }
 
     renderNearbyNow(detecting = false) {
@@ -2070,6 +2153,17 @@ class PengeDash {
 
     isFavStation(id) {
         return (this.favStations || []).some(s => s.id === id);
+    }
+
+    toggleFavStation(stop) {
+        if (!stop || typeof stop.id !== 'string' || !/^[A-Za-z0-9:_-]{1,64}$/.test(stop.id) || typeof stop.name !== 'string') throw new Error('Choose an exact station before saving.');
+        const removing = this.isFavStation(stop.id);
+        const next = (this.favStations || []).filter(s => s.id !== stop.id);
+        if (!removing) next.unshift({id:stop.id,name:stop.name.slice(0,160),modes:Array.isArray(stop.modes)?stop.modes.slice(0,10):[],isBus:!!stop.isBus,lat:stop.lat,lon:stop.lon});
+        try { localStorage.setItem('pengedash-fav-stations', JSON.stringify(next.slice(0,8))); }
+        catch { throw new Error('Could not save this station on this device. Check available storage.'); }
+        this.favStations = next.slice(0,8); this.renderFavStations();
+        return !removing;
     }
 
     toggleModalFav() {
@@ -4414,7 +4508,7 @@ class PengeDash {
         else this.map.setView(f.center, 14);
     }
 
-    showJourneyDetail(journey, destination) {
+    showJourneyDetail(journey, destination, { returnScreen = 'plan', originLabel } = {}) {
         const content = document.getElementById('journey-detail-content');
         if (!content) return;
         this._clearJourneyDetailRefresh();
@@ -4424,7 +4518,10 @@ class PengeDash {
 
         const atHome = this.journeyOrigin === 'here' && this.currentLocation &&
             this._isNearHome(this.currentLocation.lat, this.currentLocation.lon);
-        const fromLabel = this._activeOriginLabel || (this.journeyOrigin === 'here' && !atHome ? 'Here' : (this.home.label || 'Home'));
+        this._journeyReturnScreen = returnScreen === 'tube' ? 'tube' : 'plan';
+        const fromLabel = originLabel || this._activeOriginLabel || (this.journeyOrigin === 'here' && !atHome ? 'Here' : (this.home.label || 'Home'));
+        this._journeyDetailOrigin = fromLabel;
+        this._lastDestination = destination;
         const overview = JourneyGuidance.journeyOverview(journey);
         const londonTime = value => Number.isFinite(value) ? new Date(value).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' }) : 'Unavailable';
         const arrStr = londonTime(overview.arrival);
@@ -4507,7 +4604,7 @@ class PengeDash {
         // journey in that case).
         const journeyIndex = this._lastJourneys ? this._lastJourneys.indexOf(journey) : -1;
         this._journeyLiveIndex = journeyIndex;   // remembered so "End journey" can rebuild the same Back state
-        this.showScreen('journey', { state: { journeyIndex, resultSetId: this._resultSetId, destination } });
+        this.showScreen('journey', { state: { journeyIndex, resultSetId: this._resultSetId, destination, returnScreen: this._journeyReturnScreen, originLabel: fromLabel } });
         this._activateJourneyDetail(guidance);
     }
 
@@ -5158,7 +5255,8 @@ class PengeDash {
         // check instead of falling through to .live-empty as a substitute
         // for correctness (see the popstate handler in setupNav).
         this.showScreen('journey-live', {
-            state: { journeyIndex: this._journeyLiveIndex, resultSetId: this._resultSetId, destination: this._lastDestination }
+            state: { journeyIndex: this._journeyLiveIndex, resultSetId: this._resultSetId, destination: this._lastDestination,
+                returnScreen: this._journeyReturnScreen, originLabel: this._journeyDetailOrigin }
         });
     }
 
@@ -5686,24 +5784,23 @@ class PengeDash {
 
         // Centre pin — "you are here" on a live GPS position, else the home base
         const onCurrent = !!this.home.isCurrentLocation;
-        const centreEmoji = onCurrent ? '📍' : '🏠';
-        const centreIcon = L.divIcon({ className: 'map-pin', html: `<span>${centreEmoji}</span>`, iconSize: [28, 28] });
-        L.marker(center, { icon: centreIcon }).addTo(this.markersLayer)
-            .bindPopup(`${centreEmoji} ${this.escapeHtml(this.home.label || (onCurrent ? 'You are here' : 'Home'))}`);
+        const centreLabel = this.home.label || (onCurrent ? 'You are here' : 'Home');
+        L.marker(center, { icon: this._mapIcon(onCurrent ? 'here' : 'home'), title: centreLabel, zIndexOffset: 1000 }).addTo(this.markersLayer)
+            .bindPopup(this.escapeHtml(centreLabel));
+        const centreText = document.getElementById('nearby-map-centre');
+        if (centreText) centreText.textContent = onCurrent ? 'Your location' : this.home.label || 'Home';
 
         const bounds = [center];
-        const mk = (mlat, mlon, emoji, label, onClick) => {
+        const mk = (mlat, mlon, mode, label, onClick) => {
             if (mlat == null || mlon == null || !Number.isFinite(+mlat) || !Number.isFinite(+mlon)) return;
-            const icon = L.divIcon({ className: 'map-pin', html: `<span>${emoji}</span>`, iconSize: [26, 26] });
-            const m = L.marker([mlat, mlon], { icon }).addTo(this.markersLayer).bindPopup(this.escapeHtml(label));
+            const m = L.marker([mlat, mlon], { icon: this._mapIcon(mode), title: label }).addTo(this.markersLayer).bindPopup(this.escapeHtml(label));
             if (onClick) m.on('click', onClick);
             bounds.push([+mlat, +mlon]);
         };
         (this.nearbyStations || []).forEach(s => {
-            const emoji = this._modeEmoji(this._stationMode(s));
-            mk(s.lat, s.lon, emoji, s.name, () => this.openStopModal(s.id, s.name, false));
+            mk(s.lat, s.lon, this._stationMode(s), s.name, () => this.openStopModal(s.id, s.name, false));
         });
-        (this.nearbyBusStops || []).forEach(b => mk(b.lat, b.lon, '🚌', b.name, () => this.openStopModal(b.id, b.name, true)));
+        (this.nearbyBusStops || []).forEach(b => mk(b.lat, b.lon, 'bus', b.name, () => this.openStopModal(b.id, b.name, true)));
 
         // Frame the local area: fit to the centre + nearby markers (never the whole
         // world). With no markers, just centre at a sensible walking zoom.

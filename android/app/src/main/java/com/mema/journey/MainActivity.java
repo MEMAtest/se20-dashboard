@@ -3,7 +3,6 @@ package com.mema.journey;
 import android.Manifest;
 import android.app.Activity;
 import android.appwidget.AppWidgetManager;
-import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -33,13 +32,12 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         LinearLayout root = NativeUi.column(this), bar = new LinearLayout(this); bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
         TextView title = NativeUi.text(this, "  Journey", 20, 0xff10253f); bar.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
-        Button widget = new Button(this); widget.setText("Add widget"); widget.setTextSize(12); widget.setOnClickListener(v -> pinWidget()); bar.addView(widget);
         Button browser = new Button(this); browser.setText("Browser"); browser.setTextSize(12); browser.setOnClickListener(v -> external(Uri.parse(WidgetData.APP_URL))); bar.addView(browser); root.addView(bar);
         message = NativeUi.text(this, "", 12, 0xff815500); message.setVisibility(android.view.View.GONE); root.addView(message);
         web = new WebView(this); WebSettings settings = web.getSettings(); settings.setJavaScriptEnabled(true); settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false); settings.setAllowContentAccess(false); settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setJavaScriptCanOpenWindowsAutomatically(false); settings.setSupportMultipleWindows(false); settings.setGeolocationEnabled(true);
-        settings.setSafeBrowsingEnabled(true); settings.setUserAgentString(settings.getUserAgentString() + " JourneyAndroid/0.3");
+        settings.setSafeBrowsingEnabled(true); settings.setUserAgentString(settings.getUserAgentString() + " JourneyAndroid/" + BuildConfig.VERSION_NAME);
         web.setWebViewClient(new WebViewClient() {
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) { loadFailed = false; }
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -71,16 +69,6 @@ public final class MainActivity extends Activity {
         return WidgetData.link(store.station(id, "station"), store.station(id, "destination"));
     }
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); web.loadUrl(startUrl()); }
-    private void pinWidget() {
-        AppWidgetManager manager = getSystemService(AppWidgetManager.class);
-        if (manager.isRequestPinAppWidgetSupported()) {
-            Class<?>[] types = {NextUpWidget.class, HomeWidget.class, JourneyWidget.class, LineWatchWidget.class, DeparturesWidget.class};
-            WidgetKind[] kinds = WidgetKind.values(); String[] choices = new String[kinds.length];
-            for (int i = 0; i < kinds.length; i++) choices[i] = kinds[i].title + " / " + kinds[i].size;
-            new android.app.AlertDialog.Builder(this).setTitle("Choose your widget").setItems(choices, (dialog, which) -> manager.requestPinAppWidget(new ComponentName(this, types[which]), null, null)).show();
-        }
-        else Toast.makeText(this, "Long-press your home screen, choose Widgets, then Journey.", Toast.LENGTH_LONG).show();
-    }
     private void external(Uri uri) {
         if (uri == null || !("https".equals(uri.getScheme()) || "http".equals(uri.getScheme()))) return;
         try { startActivity(new Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE)); } catch (android.content.ActivityNotFoundException ignored) { Toast.makeText(this, "No browser is available.", Toast.LENGTH_LONG).show(); }

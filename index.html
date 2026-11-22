@@ -189,7 +189,11 @@
                     <div class="autocomplete-dropdown" id="station-search-dropdown"></div>
                 </div>
 
-                <div class="card map-card" id="map-card"><div id="map"></div></div>
+                <div class="card map-card" id="map-card">
+                    <div class="nearby-map-heading"><div><span>YOUR LOCAL NETWORK</span><h3 id="nearby-map-centre">Home</h3></div><span class="map-scale-hint">Walking scale</span></div>
+                    <div id="map" role="region" aria-label="Geographic map of nearby transport"></div>
+                    <div class="nearby-map-key" aria-label="Map legend"><span><i class="map-key-home"></i>Home / you</span><span><i class="map-key-rail"></i>Stations</span><span><i class="map-key-bus"></i>Bus stops</span><span class="map-key-walk">Rings: 5 &amp; 10 min walk</span></div>
+                </div>
 
                 <!-- Saved (favourite) stations -->
                 <div class="section-head" id="fav-stations-head" style="display:none;">
@@ -324,6 +328,7 @@
                         <p id="tube-route-status" class="map-source" role="status" aria-live="polite">Choose your origin and destination, then find the quickest connection.</p>
                     </form>
                 </section>
+                <div id="tube-route-results" aria-label="Tube connection options"></div>
                 <div id="tube-map-section">
                     <div id="tube-selection-summary" class="tube-selection-summary" hidden></div>
                     <div class="tube-page-map-canvas" id="tube-map-canvas">
@@ -335,7 +340,6 @@
                     </div>
                     <p id="quick-tube-map-status" class="map-source" role="status">Preparing Tube diagram…</p>
                 </div>
-                <div id="tube-route-results" aria-label="Tube connection options"></div>
                 <details class="network-map-info"><summary>Find a station &amp; next trains</summary>
                     <div class="tube-station-search" id="tube-info-search">
                         <label for="tube-info-query">Station departures &amp; information</label>
@@ -393,6 +397,8 @@
 
                 <div class="section-head"><h3>Saved places</h3></div>
                 <div class="saved-list" id="saved-places-list"></div>
+                <h3>Saved Tube routes</h3>
+                <div class="saved-list" id="saved-tube-routes"></div>
 
                 <div class="section-head"><h3>Recent journeys</h3></div>
                 <div class="saved-list" id="saved-recents-list"></div>
