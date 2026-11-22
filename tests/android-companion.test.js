@@ -3,6 +3,14 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const read = name => fs.readFileSync(require('node:path').join(__dirname, '..', name), 'utf8');
 
+test('native header leaves widget placement to the launcher without removing widget providers', () => {
+    const source = read('android/app/src/main/java/com/mema/journey/MainActivity.java');
+    assert.doesNotMatch(source, /setText\("Add widget"\)|pinWidget\(|requestPinAppWidget/);
+    assert.match(source, /BuildConfig.VERSION_NAME/);
+    for (const name of ['NextUpWidget','HomeWidget','JourneyWidget','LineWatchWidget'])
+        assert.match(read('android/app/src/main/AndroidManifest.xml'), new RegExp(`\\.${name}`));
+});
+
 test('native release has no background location or exported refresh receiver', () => {
     const manifest = read('android/app/src/main/AndroidManifest.xml');
     assert.doesNotMatch(manifest, /ACCESS_BACKGROUND_LOCATION|FOREGROUND_SERVICE|SCHEDULE_EXACT_ALARM/);

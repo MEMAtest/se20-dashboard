@@ -5,7 +5,7 @@ Native Android app and home-screen departures widget for Android 8 or newer. The
 ## Install on your Android phone
 
 1. Download `Journey-Android-0.1.0.apk` from this release and open it on your Android phone. Review the normal Android installer prompts yourself. This is a directly installed APK, not a Play Store release; do not turn off Play Protect.
-2. Open Journey and tap **Add widget**, or long-press your home screen and choose **Widgets > Journey**.
+2. Long-press your home screen and choose **Widgets > Journey**. The app header no longer contains an Add widget button.
 3. Choose an exact departure station/stop and optionally a destination (such as your home station), then **Save widget**.
 4. Tap **Refresh** before travel. Tap the destination to open the selected journey, then confirm your route. **Edit** changes this widget's settings.
 

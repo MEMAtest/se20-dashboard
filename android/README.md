@@ -4,8 +4,8 @@ Small Java/framework Android application (Android 8 / API 26 or newer), with no 
 
 ## Use
 
-1. Install the signed early-access APK from the `android-v0.3.0` GitHub release. Install over 0.1.0/0.2.0 to retain widget settings; the signing identity is unchanged. It is not a Play Store listing. Review Android's prompts; do not disable Play Protect.
-2. Open Journey and tap **Add widget**, choose a type, then accept your launcher's placement prompt. Or long-press the home screen, choose Widgets, then Journey.
+1. Install the signed early-access APK from the latest GitHub release. Install over the previous version to retain widget settings; the signing identity is unchanged. It is not a Play Store listing. Review Android's prompts; do not disable Play Protect.
+2. Long-press the home screen, choose **Widgets**, then **Journey** and your widget type. Widget setup lives in the launcher, not the Journey header.
 3. Choose exact station search results, or a line for Line watch. Go home requires a home station; My journey requires both endpoints. Typed text alone is not a selected station.
 4. Tap **Save widget**. Long-press to reconfigure. Next up opens Journey; its footer refreshes the source. My journey opens the selected endpoints, and its refresh checks times. Line watch opens the exact line; wider layouts also have refresh. Go home opens an explicit check screen: tap **Use phone location & update**, or update from a configured fixed station. It never requests location on its own.
 

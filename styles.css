@@ -382,16 +382,44 @@ input { font-family: inherit; }
 .tube-route-card summary { min-height: 44px; padding: 12px 0; cursor: pointer; font-weight: 600; }
 .tube-route-card ol { padding-left: 22px; }
 .tube-route-card li { padding: 8px 0; }
-#map { height: 250px; width: 100%; }
+.tube-result-endpoints { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; padding: 16px 0; border-block: 1px solid var(--line); }
+.tube-result-endpoints > span { min-width: 0; }.tube-result-endpoints small { display: block; font-size: 10px; color: var(--text-2); font-weight: 700; letter-spacing: .12em; margin-bottom: 5px; }
+.tube-result-endpoints b { display: block; font-size: 19px; line-height: 1.25; overflow-wrap: anywhere; }
+.tube-result-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.tube-result-buttons button { flex: 1 1 100px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--text); min-height: 46px; padding: 10px; font: inherit; font-size: 13px; font-weight: 700; }
+.tube-result-buttons .tube-follow-route { flex-basis: 100%; background: var(--blue); color: #fff; border-color: var(--blue); }
+.tube-itinerary { counter-reset: tube-step; list-style: none; padding: 0 !important; margin: 12px 0; }
+.tube-itinerary li { counter-increment: tube-step; position: relative; margin-left: 14px; padding: 8px 0 22px 30px !important; border-left: 2px solid var(--line); }
+.tube-itinerary li::before { content: counter(tube-step); position: absolute; left: -14px; top: 5px; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--blue); color: #fff; font-weight: 700; font-size: 12px; }
+.tube-itinerary li:last-child { border-left-color: transparent; }
+.tube-itinerary .tube-step-endpoints { color: var(--text); margin: 6px 0; font-size: 14px; }
+.tube-route-waypoint { border-radius: 50%; background: #173a78; border: 3px solid #fff; box-shadow: 0 2px 8px #173a7840; color: white; display: grid; place-items: center; font: 700 12px/1 sans-serif; }
+#map { height: clamp(320px, 48vh, 440px); width: 100%; background: #e9eef3; }
+.nearby-map-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 18px 14px; }
+.nearby-map-heading div > span { font-size: 10px; font-weight: 800; letter-spacing: .14em; color: var(--text-2); }
+.nearby-map-heading h3 { margin: 5px 0 0; font-size: 21px; letter-spacing: -.04em; }
+.map-scale-hint { border: 1px solid var(--line); border-radius: 20px; padding: 7px 10px; font-size: 11px; color: var(--text-2); white-space: nowrap; }
+.nearby-map-key { display: flex; gap: 10px 14px; flex-wrap: wrap; align-items: center; padding: 13px 16px; font-size: 11px; color: var(--text-2); }
+.nearby-map-key > span { display: inline-flex; align-items: center; gap: 6px; }
+.nearby-map-key i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+.map-key-home { background: #2768ed; }.map-key-rail { background: #14334f; }.map-key-bus { background: #c3463f; }
+.nearby-map-key .map-key-walk { margin-left: auto; }
 .leaflet-popup-content { font-family: inherit; font-size: 13px; font-weight: 600; }
 .leaflet-control-zoom a { border-radius: 8px !important; }
-/* Filter the whole tile pane, not each tile: per-tile filters render every
-   256px edge separately and show as bright seams across the dark map. */
-[data-theme="dark"] .leaflet-tile-pane { filter: brightness(0.82) contrast(1.05) hue-rotate(180deg) invert(1); }
-.map-pin { text-align: center; font-size: 16px; line-height: 26px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.4)); }
+/* Keep geography legible in either theme; don't invert roads, water and parks. */
+#map .leaflet-tile-pane { filter: saturate(.48) brightness(1.04) contrast(.92); }
+#map .leaflet-control-zoom { border: 1px solid #dbe3ed; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 18px #15335220; }
+#map .leaflet-control-zoom a { width: 42px; height: 42px; line-height: 42px; border-radius: 0 !important; color: #173958; background: #fff; }
+#map .leaflet-popup-content-wrapper, #map .leaflet-popup-tip { background: var(--card); color: var(--text); }
+.map-pin { display: grid; place-items: center; border: 2px solid white; border-radius: 12px; background: #14334f; color: #fff; box-shadow: 0 3px 9px #15335245; }
+.map-pin svg { width: 20px; height: 20px; pointer-events: none; }
+.map-pin--bus { background: #c3463f; border-radius: 50%; }
+.map-pin--tube { background: #fff; color: #dc3349; }
+.map-pin--tram { background: #14805c; }
+.map-pin--home, .map-pin--here { border-radius: 50%; background: #2768ed; box-shadow: 0 0 0 6px #2768ed24, 0 4px 12px #17395850; }
 .map-locate-btn {
     width: 40px; height: 40px; border-radius: 50%;
-    background: var(--card); color: var(--blue); border: 1px solid var(--line);
+    background: #fff; color: #2458c4; border: 1px solid #dbe3ed;
     font-size: 20px; line-height: 1; cursor: pointer; box-shadow: var(--shadow);
     display: flex; align-items: center; justify-content: center; margin: 0 10px 10px 0;
 }
